@@ -304,6 +304,9 @@
   --frost-alpha-inline: 50%; /* 输入框 */
   --frost-alpha-veil: 18%; /* 壁纸环境层 */
   --frost-alpha-usage: 58%; /* 首页用量：次级信息，比项目侧栏轻一档 */
+  /* 261121 Red 会话侧栏两个胶囊（上下文 / 计划）共用的中间档：原先上方用 shell 72%、
+     下方用 tint 自带 alpha 再乘 68%（实际约 31%），落差明显。折中到同一档，调一次两边同步。 */
+  --frost-alpha-capsule: 60%; /* 上下文胶囊 + 计划胶囊 */
 
   /* 掺色：让磨砂底不是一块纯灰。内层先把主色掺进底色，外层再整体透明化。
      ⚠️ 与 --frost-strength 耦合：强度调大掺色会跟着更显。参照的 DSH Aqua 插件明确
@@ -487,6 +490,15 @@
   );
   backdrop-filter: blur(var(--frost-blur-chrome));
   -webkit-backdrop-filter: blur(var(--frost-blur-chrome));
+}
+/* 261121 Red 上下文胶囊（审查栏折叠态）壁纸模式从外壳 72% 降到胶囊中间档，
+   与下方计划胶囊同款深底、同档位，消除两个胶囊一深一淡的落差；文件树仍走外壳档。 */
+[data-app-frost] #review-panel.session-side-panel__capsule {
+  background-color: color-mix(
+    in srgb,
+    var(--v2-background-bg-deep) calc(var(--frost-alpha-capsule) * var(--frost-strength)),
+    transparent
+  );
 }
 
 /* 260812 Red home 侧边栏毛玻璃：主界面壁纸铺底时，侧边栏改半透明+模糊透出壁纸，

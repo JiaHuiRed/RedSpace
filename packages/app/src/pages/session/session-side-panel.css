@@ -497,11 +497,17 @@
   pointer-events: auto;
 }
 
-/* 261121 Red 壁纸模式下跟上下文胶囊同一套玻璃：半透明底 + 背景模糊 + 迎光边。 */
+/* 261121 Red 壁纸模式下跟上下文胶囊同一套玻璃：深底 + 胶囊中间档 + 背景模糊 + 迎光边。
+   原先用 tint 自带 alpha 再乘 68%（实际约 31%），比上下文胶囊外壳档淡一大截；
+   现与上下文胶囊共用 --frost-alpha-capsule 中间档，两者深浅一致，调一次两边同步。 */
 [data-app-frost] .session-side-panel__plan-capsule {
   border-color: var(--v2-border-border-base);
   border-radius: var(--radius-pane);
-  background-color: color-mix(in srgb, var(--frost-tint-aside) var(--frost-alpha-aside), transparent);
+  background-color: color-mix(
+    in srgb,
+    var(--v2-background-bg-deep) calc(var(--frost-alpha-capsule) * var(--frost-strength)),
+    transparent
+  );
   backdrop-filter: blur(var(--frost-blur-chrome));
   -webkit-backdrop-filter: blur(var(--frost-blur-chrome));
   box-shadow:
