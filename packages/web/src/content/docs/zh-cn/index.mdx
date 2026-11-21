@@ -4,8 +4,6 @@ description: 开始使用 RedCode。
 ---
 
 import { Tabs, TabItem } from "@astrojs/starlight/components"
-import config from "../../../../config.mjs"
-export const console = config.console
 
 [**RedCode**](/) 是一个开源的 AI 编码代理。它提供终端界面、桌面应用和 IDE 扩展等多种使用方式。
 
@@ -134,26 +132,7 @@ curl -fsSL https://redcode.dev/install | bash
 
 通过 RedCode，你可以配置 API 密钥来使用任意 LLM 提供商。
 
-如果你刚开始接触 LLM 提供商，我们推荐使用 [RedCode Zen](/docs/zen)。这是一组经过 RedCode 团队测试和验证的精选模型。
-
-1. 在 TUI 中运行 `/connect` 命令，选择 redcode，然后前往 [redcode.dev/auth](https://redcode.dev/auth)。
-
-   ```txt
-   /connect
-   ```
-
-2. 登录并添加账单信息，然后复制你的 API 密钥。
-
-3. 粘贴你的 API 密钥。
-
-   ```txt
-   ┌ API key
-   │
-   │
-   └ enter
-   ```
-
-你也可以选择其他提供商。[了解更多](/docs/providers#directory)。
+从[提供商目录](/docs/providers#directory)中选择一个提供商并配置其 API 密钥。
 
 ---
 

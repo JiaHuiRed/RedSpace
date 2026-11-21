@@ -126,7 +126,7 @@ export default defineConfig({
             "ja-JP": "使い方",
             "zh-CN": "使用",
           },
-          items: ["go", "tui", "cli", "web", "ide", "zen", "share", "github", "gitlab"],
+          items: ["tui", "cli", "web", "ide", "share", "github", "gitlab"],
         },
 
         {

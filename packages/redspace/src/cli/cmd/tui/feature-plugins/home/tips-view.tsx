@@ -288,7 +288,6 @@ const TIPS: Tip[] = [
     shortcuts.commandList()
       ? `通过命令面板（${shortcutText(shortcuts.commandList())}）切换聊天中的用户名显示`
       : "通过命令面板切换聊天中的用户名显示",
-  "使用 {highlight}/connect{/highlight} 连接 RedCode Zen 获取精选测试过的模型",
   "将项目的 {highlight}AGENTS.md{/highlight} 提交到 Git 方便团队共享",
   "使用 {highlight}/review{/highlight} 审查未提交的更改、分支或 PR",
   (shortcuts) => `使用 ${commandText("/help", shortcuts.helpShow())} 打开帮助对话框`,

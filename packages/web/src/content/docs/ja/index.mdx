@@ -4,8 +4,6 @@ description: RedCode を始めましょう。
 ---
 
 import { Tabs, TabItem } from "@astrojs/starlight/components"
-import config from "../../../../config.mjs"
-export const console = config.console
 
 [**RedCode**](/) は、オープンソースの AI コーディングエージェントです。これは、ターミナルベースのインターフェイス、デスクトップアプリ、または IDE 拡張機能として利用できます。
 
@@ -134,27 +132,7 @@ Bun を使用して Windows に RedCode をインストールするためのサ�
 
 RedCode を使用すると、API キーを構成することで任意の LLM プロバイダーを使用できます。
 
-LLM プロバイダーを初めて使用する場合は、[RedCode Zen](/docs/zen) をお勧めします。
-これは、RedCode チームによってテストおよび検証されたモデルの厳選されたリストです。
-
-1. TUI で `/connect` コマンドを実行し、redcode を選択して、[redcode.dev/auth](https://redcode.dev/auth) で認証します。
-
-   ```txt
-   /connect
-   ```
-
-2. サインインし、お支払いの詳細を追加し、API キーをコピーします。
-
-3. API キーを貼り付けます。
-
-   ```txt
-   ┌ API key
-   │
-   │
-   └ enter
-   ```
-
-あるいは、他のプロバイダーのいずれかを選択することもできます。 [詳細はこちら](/docs/providers#directory)。
+[プロバイダーディレクトリ](/docs/providers#directory) からプロバイダーを選択し、API キーを設定してください。
 
 ---
 

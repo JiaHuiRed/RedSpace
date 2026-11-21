@@ -6,8 +6,6 @@ import { isRecord } from "@/util/record"
 
 export type Err = ReturnType<NamedError["toObject"]>
 
-export const GO_UPSELL_MESSAGE = "免费额度已用尽，订阅 Go 可继续使用"
-export const GO_UPSELL_URL = "https://redcode.dev/go"
 export type RetryReason = "free_tier_limit" | "account_rate_limit" | (string & {})
 
 export type Retryable = {
@@ -85,7 +83,7 @@ export function delay(attempt: number, error?: MessageV2.APIError) {
   return cap(Math.min(RETRY_INITIAL_DELAY * Math.pow(RETRY_BACKOFF_FACTOR, attempt - 1), RETRY_MAX_DELAY_NO_HEADERS))
 }
 
-export function retryable(error: unknown, provider: string) {
+export function retryable(error: unknown, provider: string): Retryable | undefined {
   // context overflow errors should not be retried
   if (MessageV2.ContextOverflowError.isInstance(error)) return undefined
   // 261014 Red 传输层看门狗掐断的两类超时都可重试。
@@ -102,21 +100,10 @@ export function retryable(error: unknown, provider: string) {
     // even when the provider SDK doesn't explicitly mark them as retryable.
     if (!error.data.isRetryable && !(status !== undefined && status >= 500)) return undefined
     if (error.data.responseBody?.includes("FreeUsageLimitError")) {
-      return {
-        message: GO_UPSELL_MESSAGE,
-        action: {
-          reason: "free_tier_limit",
-          provider,
-          title: "免费额度已用尽",
-          message: "订阅 RedCode Go 可获得稳定访问，起价 $5/月。",
-          label: "去订阅",
-          link: GO_UPSELL_URL,
-        },
-      }
+      return { message: "免费额度已用尽" }
     }
     if (error.data.responseBody?.includes("GoUsageLimitError")) {
       const body = parseJSON(error.data.responseBody)
-      const workspace = str(body?.metadata?.workspace)
       const limitName = str(body?.metadata?.limitName)
       const retryAfter = num(error.data.responseHeaders?.["retry-after"])
       const resetIn = iife(() => {
@@ -132,20 +119,8 @@ export function retryable(error: unknown, provider: string) {
         return minutes > 0 ? unit(minutes, "分钟") : "不到 1 分钟"
       })
 
-      const message = `${limitName ? `${limitName} 额度` : "额度"}已用尽，将在 ${resetIn}后重置。如需现在继续使用该模型，请启用账户余额用量。`
-
-      const link = `https://redcode.dev/workspace/${workspace}/go`
-      return {
-        message: `${message} - ${link}`,
-        action: {
-          reason: "account_rate_limit",
-          provider,
-          title: "Go 额度已用尽",
-          message,
-          label: "打开设置",
-          link,
-        },
-      }
+      const message = `${limitName ? `${limitName} 额度` : "额度"}已用尽，将在 ${resetIn}后重置。`
+      return { message }
     }
     return { message: error.data.message.includes("Overloaded") ? "供应商负载过高" : error.data.message }
   }

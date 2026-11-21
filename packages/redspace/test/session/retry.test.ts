@@ -357,7 +357,7 @@ describe("session.retry.retryable", () => {
     expect(retryable).toEqual({ message: "响应解压失败：传输数据已损坏，可直接重发这条消息。" })
   })
 
-  test("maps free limits to Go upsell action", () => {
+  test("maps free limits to a neutral retry message", () => {
     const error = Schema.decodeUnknownSync(MessageV2.APIError.Schema)(
       new MessageV2.APIError({
         message: "Free usage exceeded",
@@ -370,20 +370,10 @@ describe("session.retry.retryable", () => {
       }).toObject(),
     )
 
-    expect(SessionRetry.retryable(error, "redcode")).toEqual({
-      message: SessionRetry.GO_UPSELL_MESSAGE,
-      action: {
-        reason: "free_tier_limit",
-        provider: "redcode",
-        title: "免费额度已用尽",
-        message: "订阅 RedCode Go 可获得稳定访问，起价 $5/月。",
-        label: "去订阅",
-        link: SessionRetry.GO_UPSELL_URL,
-      },
-    })
+    expect(SessionRetry.retryable(error, "redcode")).toEqual({ message: "免费额度已用尽" })
   })
 
-  test("maps Go subscription limits to workspace PAYG upsell", () => {
+  test("maps Go subscription limits to a neutral message with reset time", () => {
     const error = Schema.decodeUnknownSync(MessageV2.APIError.Schema)(
       new MessageV2.APIError({
         message: "Subscription quota exceeded. You can continue using free models.",
@@ -407,16 +397,7 @@ describe("session.retry.retryable", () => {
     )
 
     expect(SessionRetry.retryable(error, "redcode-go")).toEqual({
-      message:
-        "5 hour 额度已用尽，将在 5 小时 23 分钟后重置。如需现在继续使用该模型，请启用账户余额用量。 - https://redcode.dev/workspace/wrk_01K6XGM22R6FM8JVABE9XDQXGH/go",
-      action: {
-        reason: "account_rate_limit",
-        provider: "redcode-go",
-        title: "Go 额度已用尽",
-        message: "5 hour 额度已用尽，将在 5 小时 23 分钟后重置。如需现在继续使用该模型，请启用账户余额用量。",
-        label: "打开设置",
-        link: "https://redcode.dev/workspace/wrk_01K6XGM22R6FM8JVABE9XDQXGH/go",
-      },
+      message: "5 hour 额度已用尽，将在 5 小时 23 分钟后重置。",
     })
   })
 
@@ -442,8 +423,8 @@ describe("session.retry.retryable", () => {
       }).toObject(),
     )
 
-    expect(SessionRetry.retryable(error, "redcode-go")?.action?.message).toBe(
-      "额度已用尽，将在 15 分钟后重置。如需现在继续使用该模型，请启用账户余额用量。",
+    expect(SessionRetry.retryable(error, "redcode-go")?.message).toBe(
+      "额度已用尽，将在 15 分钟后重置。",
     )
   })
 })

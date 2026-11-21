@@ -17,8 +17,6 @@ import { useConnected } from "./use-connected"
 import { useBindings } from "../keymap"
 
 const PROVIDER_PRIORITY: Record<string, number> = {
-  redcode: 0,
-  "redcode-go": 1,
   openai: 2,
   "github-copilot": 3,
   anthropic: 4,
@@ -55,10 +53,8 @@ export function providerOptions(list: { id: string; name: string }[]): ProviderO
         value: provider.id,
         providerID: provider.id,
         description: {
-          redcode: "(Recommended)",
           anthropic: "(API key)",
           openai: "(ChatGPT Plus/Pro or API key)",
-          "redcode-go": "Low cost subscription for everyone",
         }[provider.id],
         category: provider.id in PROVIDER_PRIORITY ? "Popular" : "Providers",
       })),
@@ -392,37 +388,11 @@ function ApiMethod(props: ApiMethodProps) {
   const sdk = useSDK()
   const sync = useSync()
   const toast = useToast()
-  const { theme } = useTheme()
 
   return (
     <DialogPrompt
       title={props.title}
       placeholder="API key"
-      description={() =>
-        ({
-          redcode: (
-            <box gap={1}>
-              <text fg={theme.textMuted}>
-                RedCode Zen gives you access to all the best coding models at the cheapest prices with a single API key.
-              </text>
-              <text fg={theme.text}>
-                Go to <span style={{ fg: theme.primary }}>https://redcode.dev/zen</span> to get a key
-              </text>
-            </box>
-          ),
-          "redcode-go": (
-            <box gap={1}>
-              <text fg={theme.textMuted}>
-                RedCode Go is a $10 per month subscription that provides reliable access to popular open coding models
-                with generous usage limits.
-              </text>
-              <text fg={theme.text}>
-                Go to <span style={{ fg: theme.primary }}>https://redcode.dev/zen</span> and enable RedCode Go
-              </text>
-            </box>
-          ),
-        })[props.providerID] ?? undefined
-      }
       onConfirm={async (value) => {
         if (!value) return
         // 261108 Red 审计 RC-P2-10：auth.set 没传 throwOnError，HTTP/网络失败时只是一份

@@ -165,9 +165,6 @@ export const dict = {
   "dialog.provider.group.popular": "Popular",
   "dialog.provider.group.other": "Other",
   "dialog.provider.tag.recommended": "Recommended",
-  "dialog.provider.RedCode.note": "Curated models including Claude, GPT, Gemini and more",
-  "dialog.provider.RedCode.tagline": "Reliable optimized models",
-  "dialog.provider.RedCodeGo.tagline": "Low cost subscription for everyone",
   "dialog.provider.anthropic.note": "Direct access to Claude models, including Pro and Max",
   "dialog.provider.copilot.note": "AI models for coding assistance via GitHub Copilot",
   "dialog.provider.openai.note": "GPT models for fast, capable general AI tasks",
@@ -186,7 +183,7 @@ export const dict = {
   "dialog.model.manage.description": "Customize which models appear in the model selector.",
   "dialog.model.manage.provider.toggle": "Toggle all {{provider}} models",
 
-  "dialog.model.unpaid.freeModels.title": "Free models provided by RedCode",
+  "dialog.model.unpaid.freeModels.title": "Available models",
   "dialog.model.unpaid.addMore.title": "Add more models from popular providers",
 
   "dialog.provider.viewAll": "Show more providers",
@@ -203,13 +200,6 @@ export const dict = {
   "provider.connect.apiKey.label": "{{provider}} API key",
   "provider.connect.apiKey.placeholder": "API key",
   "provider.connect.apiKey.required": "API key is required",
-  "provider.connect.RedCodeZen.line1":
-    "RedCode Zen gives you access to a curated set of reliable optimized models for coding agents.",
-  "provider.connect.RedCodeZen.line2":
-    "With a single API key you'll get access to models such as Claude, GPT, Gemini, GLM and more.",
-  "provider.connect.RedCodeZen.visit.prefix": "Visit ",
-  "provider.connect.RedCodeZen.visit.link": "redcode.dev/zen",
-  "provider.connect.RedCodeZen.visit.suffix": " to collect your API key.",
   "provider.connect.oauth.code.visit.prefix": "Visit ",
   "provider.connect.oauth.code.visit.link": "this link",
   "provider.connect.oauth.code.visit.suffix":
@@ -463,7 +453,7 @@ export const dict = {
     "The process may still be running and its record was kept. Refresh and try again.",
   "prompt.background.button": "Background",
   "prompt.background.running": "Background {{count}}",
-  "dialog.usageExceeded.dontShowAgain": "Don't show again",
+
   "titlebar.update.button": "Update",
   "titlebar.update.tooltip": "Update {{version}}",
 
@@ -1075,7 +1065,6 @@ export const dict = {
   "sidebar.workspaces.enable": "Enable workspaces",
   "sidebar.workspaces.disable": "Disable workspaces",
   "sidebar.gettingStarted.title": "Getting started",
-  "sidebar.gettingStarted.line1": "RedCode includes free models so you can start immediately.",
   "sidebar.gettingStarted.line2": "Connect any provider to use models, inc. Claude, GPT, Gemini etc.",
   "sidebar.project.recentSessions": "Recent sessions",
   "sidebar.project.viewAllSessions": "View all sessions",

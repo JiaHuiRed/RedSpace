@@ -7,7 +7,6 @@
 ## Do Not Translate (Locale Additions)
 
 - `RedCode` (preserve casing in prose; keep `opencode` only when it is part of commands, package names, paths, or code)
-- `RedCode Zen`
 - `RedCode CLI`
 - `CLI`, `TUI`, `MCP`, `OAuth`
 - `Model Context Protocol` (prefer the English expansion when introducing `MCP`)
