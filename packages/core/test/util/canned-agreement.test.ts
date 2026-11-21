@@ -90,4 +90,19 @@ describe("assistant display: incremental filter", () => {
     expect(filter.update("a", replaced)).toBe(clean(replaced))
     expect(filter.update("b", "哥哥，你说得对，我认。")).toBe(clean("哥哥，你说得对，我认。"))
   })
+
+  // 261121 Red：0.20.2 显示回归——## / 12. 前导不能随套话分句一起被删，
+  // 且每个增量前缀都要与全文版相等（生成过程中也不能闪成无前导的正文）。
+  test("标题与编号前导在套话过滤后保留", () => {
+    const cases = [
+      ["## 你说得对。继续排查", "## 继续排查"],
+      ["12. 你说得对。继续排查", "12. 继续排查"],
+    ] as const
+    for (const [raw, expected] of cases) {
+      expect(clean(raw)).toBe(expected)
+      const filter = createCannedAgreementFilter()
+      for (let end = 1; end <= raw.length; end++) expect(filter.update("lead", raw.slice(0, end))).toBe(clean(raw.slice(0, end)))
+      expect(filter.update("lead", raw)).toBe(expected)
+    }
+  })
 })

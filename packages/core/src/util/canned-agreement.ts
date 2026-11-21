@@ -262,7 +262,10 @@ const stepUndecided = (u: Undecided, ch: string): { keep: true } | { keep: false
     u.fenceRun = 1
     return { keep: true }
   }
-  if (ch === "#" && free) {
+  // 261121 Red：run 的后续字符仍是前导候选（## / 12.），不能再用 free 把关——
+  // 第一个字符已让 free 变 false，第二个 # 或第二位数字若掉进 feed，整行就没有 lead，
+  // 套话一删连标题/编号前缀一起吞掉。数字串在 afterNum 之后必须停：「12.5」不是列表前导。
+  if (ch === "#" && (free || u.hashes > 0)) {
     u.hashes++
     return u.hashes > 6 ? { keep: false, to: "feed" } : { keep: true }
   }
@@ -270,7 +273,7 @@ const stepUndecided = (u: Undecided, ch: string): { keep: true } | { keep: false
     u.marker = ch
     return { keep: true }
   }
-  if (ch >= "0" && ch <= "9" && free) {
+  if (ch >= "0" && ch <= "9" && (free || (u.digits > 0 && !u.afterNum))) {
     u.digits++
     return { keep: true }
   }

@@ -46,6 +46,13 @@ test("single-frame results equal the full-text filter", () => {
     "前言\n“引用开始\n你说得对\n”结束",
     "0.5 的概率你说得对",
     "　全角空格你说得对",
+    // 261121 Red：多字符行首 run 的后续字符必须继续留在前导候选里，否则增量版
+    // 会把整个标题/编号前导并进套话分句一起删掉（0.20.2 显示回归）。
+    "## 你说得对。继续排查",
+    "12. 你说得对。继续排查",
+    "### 12. 你说得对。继续排查",
+    "## 12.5 你说得对。继续排查",
+    "####### 你说得对。继续排查",
   ]
   for (const text of samples) expect(filterCannedAgreement(text)).toBe(filterCannedAgreement(text))
   for (const text of samples) expectPrefixEquality(text)
