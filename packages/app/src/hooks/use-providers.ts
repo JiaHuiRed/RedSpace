@@ -22,9 +22,12 @@ export function useProviders(directory?: () => string | undefined) {
   const globalSync = useServerSync()
   const params = useParams()
   const dir = createMemo(() => directory?.() ?? decode64(params.dir) ?? "")
+  // 261121 Red Chat 首页读模型不该顺手拉起整目录初始化：providers 是独立 useQuery，
+  // 缓存由 ensureProviders 灌入，这里只要 { bootstrap: false } 的轻量 child store。
+  const child = () => globalSync.child(dir(), { bootstrap: false })
   const providers = () => {
     if (dir()) {
-      const [projectStore] = globalSync.child(dir())
+      const [projectStore] = child()
       if (projectStore.provider_ready) return projectStore.provider
     }
     return globalSync.data.provider
@@ -32,7 +35,7 @@ export function useProviders(directory?: () => string | undefined) {
   // 260529 Red provider 数据加载完成前阻止提交，避免误触发"请选择智能体和模型"
   const ready = () => {
     if (dir()) {
-      const [projectStore] = globalSync.child(dir())
+      const [projectStore] = child()
       if (directory) return projectStore.provider_ready
       if (!projectStore.provider_ready) return false
     }
