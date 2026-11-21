@@ -212,9 +212,12 @@ const normalizeSessionTabList = (path: ReturnType<typeof createPathHelpers> | un
 
 const normalizeStoredSessionTabs = (key: string, tabs: SessionTabs) => {
   const path = sessionPath(key)
+  const active = tabs.active ? normalizeSessionTab(path, tabs.active) : tabs.active
+  // 261121 Red plan tab 已退役为独立胶囊；旧持久化的 plan active 回退到 context，
+  // 否则 Kobalte 会选中一个没有 trigger/content 的值，面板正文空白。
   return {
     all: normalizeSessionTabList(path, tabs.all),
-    active: tabs.active ? normalizeSessionTab(path, tabs.active) : tabs.active,
+    active: active === "plan" ? "context" : active,
   }
 }
 

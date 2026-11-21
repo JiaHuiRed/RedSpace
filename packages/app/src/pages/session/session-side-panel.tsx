@@ -289,6 +289,28 @@ export function SessionSidePanel(props: {
     measure()
   }
 
+  // 261121 Red 计划胶囊锚点：展开态胶囊不再撑满高度，下方留出计划卡片的空间。
+  // 高度表达式同时喂给胶囊自身与 rail 上的 CSS 变量，计划卡片从变量取 top，
+  // 折叠 / 展开 / 浮动三种形态共用同一条定位链，不再依赖「compact 时才渲染」。
+  const reviewPanelHeight = createMemo(() => {
+    if (floating()) return `${floatingRect().height}px`
+    if (!overlay()) return "calc(100% - 220px)"
+    if (!open()) return "clamp(240px, 28vh, 320px)"
+    return activeTab() === "context" && contextPanelHeight() !== undefined
+      ? `min(${contextPanelHeight()}px, calc(100% - 220px))`
+      : "calc(100% - 220px)"
+  })
+  const planCapsuleTop = createMemo(() => {
+    if (floating()) return `${floatingRect().y + floatingRect().height + 12}px`
+    if (!open()) return "calc(56px + var(--side-panel-capsule-height) + 12px)"
+    return `calc(56px + ${reviewPanelHeight()} + 12px)`
+  })
+  const planCapsuleRight = createMemo(() =>
+    floating()
+      ? `${Math.max(12, viewport().width - (floatingRect().x + floatingRect().width))}px`
+      : "12px",
+  )
+
   // 260924 Red 宽桌面 compact 仍要显示当前 tab 内容；中桌面收起时延迟卸载以保留关闭过渡。
   const [rendered, setRendered] = createSignal(open() || isWideDesktop())
   createEffect(() => {
@@ -414,9 +436,11 @@ export function SessionSidePanel(props: {
           "transition-[width] duration-[240ms] ease-[cubic-bezier(0.22,1,0.36,1)] will-change-[width] motion-reduce:transition-none":
             !isWideDesktop() && !props.size.active() && !props.reviewSnap,
         }}
-        style={{
-          width: floating() || overlay() ? "0px" : props.docked() ? props.dockWidth() : flowPanelWidth(),
-        }}
+          style={{
+            width: floating() || overlay() ? "0px" : props.docked() ? props.dockWidth() : flowPanelWidth(),
+            "--plan-capsule-top": planCapsuleTop(),
+            "--plan-capsule-right": planCapsuleRight(),
+          }}
       >
         <aside
           onFocusOut={(event) => {
@@ -447,15 +471,8 @@ export function SessionSidePanel(props: {
             // inline 优先级最高，折叠矮胶囊 ↔ 展开全高从此不受类名竞争影响。
             // 260922 Red 折叠态收短：高度与 CSS 里的分态值保持一致，
             // 别让 inline 和 class 各说一套（这个 inline 优先级压过 CSS，改一面等于没改）。
-            height: floating()
-              ? `${floatingRect().height}px`
-              : overlay()
-                ? open()
-                  ? activeTab() === "context" && contextPanelHeight() !== undefined
-                    ? `min(${contextPanelHeight()}px, calc(100% - 68px))`
-                    : "calc(100% - 68px)"
-                  : "clamp(240px, 28vh, 320px)"
-                : undefined,
+            // 260921/260922 Red 分态高度统一由 reviewPanelHeight 给出，与计划胶囊锚点同源。
+            height: overlay() || floating() ? reviewPanelHeight() : undefined,
           }}
         >
           <div class="session-side-panel__body">
@@ -516,10 +533,9 @@ export function SessionSidePanel(props: {
                                   language.t("session.tab.outline"),
                                   <Icon name="bullet-list" size="small" />,
                                 )}
-                                {/* 261115 Red：计划入口按形态分流——宽桌面折叠态由右侧计划胶囊
-                              承载，展开态与 768–1279px 中等桌面由本 tab 承接。两个入口同时
-                              在场会重复，折叠态隐藏不会让展开态找不到计划。 */}
-                                <Show when={!compact()}>
+                                {/* 261121 Red：计划入口彻底独立——宽桌面（含展开态）与浮动工作台
+                              由下方计划胶囊承载；只有 768–1279px 中等桌面仍用本 tab。 */}
+                                <Show when={!isWideDesktop() && !floating()}>
                                   {systemTab(
                                     "plan",
                                     language.t("session.tab.plan"),
@@ -768,9 +784,9 @@ export function SessionSidePanel(props: {
             />
           </Show>
         </aside>
-        {/* 261115 Red 计划胶囊：宽桌面折叠态挂在上下文胶囊下方，独立展开（不塞进
-            上下文面板内部）；面板打开后计划仍走顶部 plan tab。 */}
-        <Show when={compact()}>
+        {/* 261121 Red 计划胶囊：宽桌面折叠/展开与浮动工作台下都独立于上下文胶囊，
+            不再塞回 plan tab。top / right 由 rail 上的 CSS 变量按当前形态给出。 */}
+        <Show when={isWideDesktop() || floating()}>
           <SessionPlanCapsule />
         </Show>
       </div>

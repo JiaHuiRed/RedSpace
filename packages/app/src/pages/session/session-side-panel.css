@@ -181,7 +181,8 @@
     /* 展开：原侧边栏全高（top 56 + bottom 12） */
     &.session-side-panel__capsule--open {
       width: min(var(--panel-width, 420px), 560px, calc(100vw - 24px));
-      height: calc(100% - 68px);
+      /* 261121 Red 不再撑满：下方要给独立的计划胶囊留空间 */
+      height: calc(100% - 220px);
       transform: none;
       opacity: 1;
       pointer-events: auto;
@@ -475,19 +476,35 @@
 /* 261115 Red 计划胶囊：宽桌面折叠态挂在上下文胶囊下方的独立卡片。位置与宽度跟
   折叠胶囊共用同一基准（56px 顶距 / 12px 右距 / 320px 宽）——改基准要两边同步。
   展开时最多长到下方空白底部，内容超出的部分在卡片内部滚动。 */
+/* 261121 Red 计划胶囊在折叠/展开/浮动三形态下都独立：位置由 rail 上的变量给出，
+   与上下文胶囊共用同一条高度链；上下间距从 8px 放宽到 12px。 */
 .session-side-panel__plan-capsule {
- position: absolute;
- inset-block-start: calc(56px + var(--side-panel-capsule-height) + 8px);
- inset-inline-end: 12px;
- z-index: 1;
- display: flex;
- flex-direction: column;
- width: min(320px, calc(100vw - 24px));
- max-height: calc(100% - 56px - var(--side-panel-capsule-height) - 20px);
- overflow: hidden;
- border: 1px solid var(--border-weaker-base);
- border-radius: var(--radius-xl);
- background: var(--surface-raised-stronger-non-alpha);
- box-shadow: var(--shadow-lg-border-base);
- pointer-events: auto;
+  position: absolute;
+  inset-block-start: var(--plan-capsule-top, calc(56px + var(--side-panel-capsule-height) + 12px));
+  inset-inline-end: var(--plan-capsule-right, 12px);
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  width: min(320px, calc(100vw - 24px));
+  max-height: calc(
+    100% - var(--plan-capsule-top, calc(56px + var(--side-panel-capsule-height) + 12px)) - 12px
+  );
+  overflow: hidden;
+  border: 1px solid var(--border-weaker-base);
+  border-radius: var(--radius-xl);
+  background: var(--surface-raised-stronger-non-alpha);
+  box-shadow: var(--shadow-lg-border-base);
+  pointer-events: auto;
+}
+
+/* 261121 Red 壁纸模式下跟上下文胶囊同一套玻璃：半透明底 + 背景模糊 + 迎光边。 */
+[data-app-frost] .session-side-panel__plan-capsule {
+  border-color: var(--v2-border-border-base);
+  border-radius: var(--radius-pane);
+  background-color: color-mix(in srgb, var(--frost-tint-aside) var(--frost-alpha-aside), transparent);
+  backdrop-filter: blur(var(--frost-blur-chrome));
+  -webkit-backdrop-filter: blur(var(--frost-blur-chrome));
+  box-shadow:
+    inset 0 1px 0 var(--frost-edge-highlight),
+    var(--v2-elevation-floating);
 }

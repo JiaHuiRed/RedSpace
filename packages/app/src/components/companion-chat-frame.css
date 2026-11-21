@@ -7,6 +7,11 @@
   --chat-pink: #a54853;
   --chat-ink: var(--text-strong);
   --chat-muted: var(--text-weak);
+  /* 261121 Red Chat 发送圆钮四态：浅色主题深圆底配浅图标，深色主题在下面反转。 */
+  --chat-send-idle: #7e7386;
+  --chat-send-idle-ink: #f5f2f6;
+  --chat-send-ready: #26252b;
+  --chat-send-ready-ink: #fafafa;
   position: relative;
   display: flex;
   width: 100%;
@@ -27,6 +32,10 @@
   --chat-ink: #efeded;
   --chat-muted: #a9a4ac;
   --chat-pink: #e79a9e;
+  --chat-send-idle: #b0a4b6;
+  --chat-send-idle-ink: #35303a;
+  --chat-send-ready: #fafafa;
+  --chat-send-ready-ink: #202024;
 }
 .companion-rail {
   width: 246px;
@@ -143,6 +152,12 @@
 .companion-frame button:hover:not(:disabled),
 .companion-new:hover {
   background-color: var(--chat-hover);
+}
+/* 261121 Red 思考行：上面那条通用按钮悬停底色会在壁纸上刷出横贯整行的灰条，
+   Chat 内把这条规则收回到图标与文字，整行背景保持透明。 */
+.companion-frame [data-slot="reasoning-toggle"]:hover:not(:disabled),
+.companion-frame [data-slot="reasoning-toggle"][aria-expanded="true"] {
+  background: transparent;
 }
 .companion-profile {
   border-top: 1px solid var(--chat-line);
@@ -285,6 +300,8 @@
 .companion-home-composer:focus-within {
   border-color: color-mix(in srgb, var(--chat-line), var(--chat-muted) 45%);
 }
+/* 261121 Red 发送圆钮：底色与纸飞机分别设成明确状态色，去掉通用悬停底色的干扰。
+   首页按钮用继承色，会话按钮的 IconButton 给 SVG 单独设色，两处都要覆盖。 */
 .companion-frame .companion-send,
 .companion-frame [data-action="prompt-submit"] {
   display: grid;
@@ -293,14 +310,31 @@
   height: 34px;
   border-radius: 50%;
   padding: 7px;
-  color: var(--chat-canvas);
-  background: var(--chat-pink) !important;
+  color: var(--chat-send-ready-ink);
+  background: var(--chat-send-ready) !important;
   box-shadow: none;
 }
 .companion-frame .companion-send:disabled,
 .companion-frame [data-action="prompt-submit"]:disabled {
-  background: var(--chat-hover) !important;
-  color: var(--chat-muted);
+  color: var(--chat-send-idle-ink);
+  background: var(--chat-send-idle) !important;
+}
+.companion-frame .companion-send [data-slot="icon-svg"],
+.companion-frame [data-action="prompt-submit"] [data-slot="icon-svg"] {
+  color: var(--chat-send-ready-ink) !important;
+}
+.companion-frame .companion-send:disabled [data-slot="icon-svg"],
+.companion-frame [data-action="prompt-submit"]:disabled [data-slot="icon-svg"] {
+  color: var(--chat-send-idle-ink) !important;
+}
+.companion-frame .companion-send:not(:disabled):hover,
+.companion-frame [data-action="prompt-submit"]:not(:disabled):hover {
+  background: color-mix(in srgb, var(--chat-send-ready) 88%, #000) !important;
+}
+.companion-frame .companion-send:focus-visible,
+.companion-frame [data-action="prompt-submit"]:focus-visible {
+  outline: 2px solid var(--chat-ink);
+  outline-offset: 2px;
 }
 .companion-frame #session-chat-panel {
   width: 100%;

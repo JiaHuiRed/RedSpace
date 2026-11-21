@@ -398,6 +398,13 @@
       color: var(--text-base);
     }
 
+    /* 261121 Red 焦点环落在标签附近，不横贯整行 */
+    &:focus-visible [data-slot="reasoning-state"] {
+      outline: 1px solid var(--border-interactive-base);
+      outline-offset: 2px;
+      border-radius: var(--radius-xs);
+    }
+
     .reasoning-spinner {
       width: 13px;
       height: 13px;
@@ -417,6 +424,8 @@
 
     [data-slot="reasoning-duration"] {
       margin-left: auto;
+      /* 261121 Red 悬停时整行文字提亮，但耗时仍保持次要色并固定在右侧 */
+      color: var(--text-weak);
     }
 
     .reasoning-chevron {
