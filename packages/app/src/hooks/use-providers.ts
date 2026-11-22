@@ -1,4 +1,5 @@
 import { useServerSync } from "@/context/server-sync"
+import { useWorkspaceSessionParams } from "@/context/session-params"
 import { decode64 } from "@/utils/base64"
 import { useParams } from "@solidjs/router"
 import { mergeProviderMaps } from "@/context/global-sync/utils"
@@ -13,7 +14,8 @@ const popularProviderSet = new Set(popularProviders)
 export function useProviders(directory?: () => string | undefined) {
   const globalSync = useServerSync()
   const params = useParams()
-  const dir = createMemo(() => directory?.() ?? decode64(params.dir) ?? "")
+  const workspace = useWorkspaceSessionParams()
+  const dir = createMemo(() => directory?.() ?? decode64(workspace?.dir ?? params.dir) ?? "")
   // 261121 Red Chat 首页读模型不该顺手拉起整目录初始化：providers 是独立 useQuery，
   // 缓存由 ensureProviders 灌入，这里只要 { bootstrap: false } 的轻量 child store。
   const child = () => globalSync.child(dir(), { bootstrap: false })
@@ -28,7 +30,7 @@ export function useProviders(directory?: () => string | undefined) {
   const ready = () => {
     if (dir()) {
       const [projectStore] = child()
-      if (directory) return projectStore.provider_ready
+      if (directory || workspace) return projectStore.provider_ready
       if (!projectStore.provider_ready) return false
     }
     // 260605 Red 只检查 all.size（provider 列表是否已加载），不检查 connected.length。

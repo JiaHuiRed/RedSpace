@@ -25,21 +25,20 @@ type KanbanRecord = {
 type KanbanColumn = {
   id: "working" | "attention" | "idle"
   records: KanbanRecord[]
-  /** 因超过 KANBAN_LIMIT 被折叠掉的条数。只有 idle 列会非零。 */
+  /** 因超过空闲列上限被折叠掉的条数。 */
   hidden?: number
 }
 
-// 260829 Red 看板最多铺几张卡。原来跟着 HOME_SESSION_LIMIT 走（64），结果一屏全是同尺寸
-// 小卡，扫视时没有重点 —— "最近"这件事被稀释掉了。
-// 截断只砍「空闲」：正在跑与需关注的会话无论多旧都留着，那两列是看板存在的理由，
-// 砍掉等于把报警灯关了。idle 是"过去式"，少看几个不影响任何决策。
-const KANBAN_LIMIT = 24
+// 261122 Red 空闲列只展示最近的 9 条；工作中与需关注不占用它的额度。
+const KANBAN_IDLE_LIMIT = 9
 
 // 260615 Red Kanban 看板视图：按会话运行状态分列（工作中/需关注/空闲）
 export function HomeKanban(props: {
   records: KanbanRecord[]
   /** 当前选中的项目名。卡片只在自己不属于它时才印项目名 —— 否则那是个常量。 */
   selectedProjectName?: string
+  /** 显式搜索与归档视图保留全部已加载的结果。 */
+  showAllIdle?: boolean
   openSession: (session: Session, focus?: "prompt") => void
   onArchive: (session: Session) => void
   onUnarchive?: (session: Session) => void
@@ -64,8 +63,7 @@ export function HomeKanban(props: {
       else idle.push(record)
     }
 
-    // idle 的额度 = 上限减去前两列已经占掉的；前两列自己超上限时 idle 直接为 0。
-    const shown = Math.min(idle.length, Math.max(0, KANBAN_LIMIT - working.length - attention.length))
+    const shown = props.showAllIdle ? idle.length : Math.min(idle.length, KANBAN_IDLE_LIMIT)
 
     return [
       { id: "working", records: working },

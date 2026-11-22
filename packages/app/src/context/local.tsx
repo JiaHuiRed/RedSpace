@@ -1,6 +1,6 @@
 import { createSimpleContext } from "@redcode-ai/ui/context"
 import { base64Encode } from "@redcode-ai/core/util/encode"
-import { useParams } from "@solidjs/router"
+import { useSessionParams, useWorkspaceSessionParams } from "@/context/session-params"
 import { batch, createEffect, createMemo } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useModels } from "@/context/models"
@@ -58,11 +58,12 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
   name: "Local",
   gate: false,
   init: () => {
-    const params = useParams()
+    const params = useSessionParams()
     const sdk = useSDK()
     const sync = useSync()
     const providers = useProviders()
     const models = useModels()
+    const catalog = useWorkspaceSessionParams() ? models.catalog(providers) : models
 
     const id = createMemo(() => params.id || undefined)
     const list = createMemo(() => sync.data.agent.filter((item) => item.mode !== "subagent" && !item.hidden))
@@ -277,7 +278,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         fallback,
       )
       if (!item) return
-      return models.find(item)
+      return catalog.find(item)
     }
 
     const configured = () => {
@@ -315,13 +316,13 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
       setStore("draft", state)
     }
 
-    const recent = createMemo(() => models.recent.list().map(models.find).filter(Boolean))
+    const recent = createMemo(() => models.recent.list().map(catalog.find).filter(Boolean))
 
     const model = {
       ready: models.ready,
       current,
       recent,
-      list: models.list,
+      list: catalog.list,
       cycle(direction: 1 | -1) {
         const items = recent()
         const item = current()
@@ -354,7 +355,7 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         })
       },
       visible(item: ModelKey) {
-        return models.visible(item)
+        return catalog.visible(item)
       },
       setVisibility(item: ModelKey, visible: boolean) {
         models.setVisibility(item, visible)

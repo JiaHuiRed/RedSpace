@@ -8,14 +8,13 @@ import { LocalProvider } from "@/context/local"
 import { SDKProvider } from "@/context/sdk"
 import { useSync } from "@/context/sync"
 import { useSettings } from "@/context/settings"
-import { decodeDirectory, type ProjectDirString } from "@/utils/project-dir"
+import { decodeDirectory } from "@/utils/project-dir"
 
-function DirectoryDataProvider(props: ParentProps<{ directory: string }>) {
+function DirectoryRouteData(props: ParentProps<{ directory: string }>) {
   const location = useLocation()
   const navigate = useNavigate()
   const params = useParams()
   const sync = useSync()
-  const settings = useSettings()
   const slug = createMemo(() => base64Encode(props.directory))
 
   createEffect(() => {
@@ -29,6 +28,15 @@ function DirectoryDataProvider(props: ParentProps<{ directory: string }>) {
     () => params.id,
     (id) => sync.session.sync(id),
   )
+
+  return <DirectoryDataProvider directory={props.directory}>{props.children}</DirectoryDataProvider>
+}
+
+export function DirectoryDataProvider(props: ParentProps<{ directory: string }>) {
+  const navigate = useNavigate()
+  const sync = useSync()
+  const settings = useSettings()
+  const slug = () => base64Encode(props.directory)
 
   return (
     <DataProvider
@@ -79,7 +87,7 @@ export default function Layout(props: ParentProps) {
     <Show when={resolved()} keyed>
       {(resolved) => (
         <SDKProvider directory={resolved}>
-          <DirectoryDataProvider directory={resolved}>{props.children}</DirectoryDataProvider>
+          <DirectoryRouteData directory={resolved}>{props.children}</DirectoryRouteData>
         </SDKProvider>
       )}
     </Show>

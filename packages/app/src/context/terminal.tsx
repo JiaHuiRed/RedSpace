@@ -1,7 +1,7 @@
 import { createStore, produce } from "solid-js/store"
 import { createSimpleContext } from "@redcode-ai/ui/context"
 import { batch, createEffect, createMemo, createRoot, on, onCleanup } from "solid-js"
-import { useParams } from "@solidjs/router"
+import { useSessionParams } from "@/context/session-params"
 import { useSDK } from "./sdk"
 import type { Platform } from "./platform"
 import { ServerConnection, useServer } from "./server"
@@ -409,7 +409,7 @@ export const { use: useTerminal, provider: TerminalProvider } = createSimpleCont
   init: () => {
     const sdk = useSDK()
     const server = useServer()
-    const params = useParams()
+    const params = useSessionParams()
     const cache = new Map<string, TerminalCacheEntry>()
     const scope = createMemo(() => {
       return getTerminalServerScope(server.current, server.key)

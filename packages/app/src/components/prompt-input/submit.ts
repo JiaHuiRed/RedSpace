@@ -5,7 +5,8 @@ import type { Message, Session } from "@redcode-ai/sdk/v2/client"
 import { showToast } from "@redcode-ai/ui/toast"
 import { base64Encode } from "@redcode-ai/core/util/encode"
 import { Binary } from "@redcode-ai/core/util/binary"
-import { useNavigate, useParams } from "@solidjs/router"
+import { useNavigate } from "@solidjs/router"
+import { useSessionParams } from "@/context/session-params"
 import { batch, createSignal, type Accessor } from "solid-js"
 import type { FileSelection } from "@/context/file"
 import { useServerSync } from "@/context/server-sync"
@@ -274,7 +275,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
   const prompt = usePrompt()
   const layout = useLayout()
   const language = useLanguage()
-  const params = useParams()
+  const params = useSessionParams()
 
   const [sendError, setSendError] = createSignal<string | null>(null)
 

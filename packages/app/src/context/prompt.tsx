@@ -1,7 +1,7 @@
 import { createSimpleContext } from "@redcode-ai/ui/context"
 import { showToast } from "@redcode-ai/ui/toast"
 import { checksum } from "@redcode-ai/core/util/encode"
-import { useParams } from "@solidjs/router"
+import { useSessionParams } from "@/context/session-params"
 import { batch, createEffect, createMemo, createRoot, getOwner, onCleanup, untrack } from "solid-js"
 import { createStore, type SetStoreFunction } from "solid-js/store"
 import type { FileSelection } from "@/context/file"
@@ -322,7 +322,7 @@ export const { use: usePrompt, provider: PromptProvider } = createSimpleContext(
   name: "Prompt",
   gate: false,
   init: () => {
-    const params = useParams()
+    const params = useSessionParams()
     const cache = new Map<string, PromptCacheEntry>()
 
     const disposeAll = () => {

@@ -41,6 +41,8 @@ const RECENT_LIMIT = 5
 export function NewSessionDesignView(props: {
   worktree: string
   children: JSX.Element
+  embedded?: boolean
+  onProjectChange?: (directory: string) => void
   // 261114 Red UX-03 评审：Soul 选择从输入区工具栏挪到上下文行，状态由 session.tsx 持有
   newSessionSoul?: () => string | undefined
   onNewSessionSoulChange?: (id: string | undefined) => void
@@ -104,7 +106,8 @@ export function NewSessionDesignView(props: {
     if (directory === projectRoot()) return
     layout.projects.open(directory)
     server.projects.touch(directory)
-    navigate(`/${base64Encode(directory)}/session`)
+    if (props.onProjectChange) props.onProjectChange(directory)
+    else navigate(`/${base64Encode(directory)}/session`)
   }
 
   // 261116 Red B03：当前项目（含 sandbox）最近 3—5 个任务，作为「继续已有任务」的轻量入口。
@@ -120,7 +123,7 @@ export function NewSessionDesignView(props: {
         return true
       })
       .sort(compareSessionTime)
-      .slice(0, RECENT_LIMIT)
+      .slice(0, props.embedded ? 3 : RECENT_LIMIT)
   })
 
   // 继续入口落到具体会话，而不是只回项目首页。项目行固定开当前项目根，
@@ -140,9 +143,10 @@ export function NewSessionDesignView(props: {
   // 清底交给 index.css 的 [data-app-frost] [data-component="session-new-design"] 规则，
   // 无壁纸时这里的实色照常生效。
   return (
-    <main
+    <section
       data-component="session-new-design"
-      class="relative size-full overflow-hidden bg-v2-background-bg-deep"
+      data-embedded={props.embedded ? "" : undefined}
+      class={props.embedded ? "relative w-full" : "relative size-full overflow-hidden bg-v2-background-bg-deep"}
       aria-label={language.t("command.session.new")}
     >
       {/* 260828 cc 原来是 `absolute inset-x-0 top-[25.375%]` —— 一个精确到小数点后三位的
@@ -150,7 +154,7 @@ export function NewSessionDesignView(props: {
           1100px 高的窗口里内容到 500px 就结束，下面 600px 全空，而且窗口越高空白越大。
           改成 flex 垂直居中、再用 pb 往上偏一点（输入框略高于正中读起来更稳），跟窗口
           高度走。 */}
-      <div class="flex size-full flex-col items-center justify-center px-6 pb-[10vh]">
+      <div class={props.embedded ? "flex flex-col items-center px-2 sm:px-6" : "flex size-full flex-col items-center justify-center px-6 pb-[10vh]"}>
         <div class="w-full max-w-[720px]">
           {/* 260828 cc 容器宽度保持 720 —— 试过拓到 820 让模型芯片少截断一点，结果输入框
               有它自己的宽度约束、没跟着变宽，底下的项目/分支那行按外层宽度起头就顶到输入框
@@ -158,18 +162,18 @@ export function NewSessionDesignView(props: {
           <div class="text-center">
             {/* 261118 RedSpace 八字母字标：响应式字号不超出 720px 主列，
                 保留原组件逐字母入场与减少动态效果偏好。 */}
-            <WordmarkV2 class="text-[clamp(30px,8vw,82px)] leading-none" />
+            <WordmarkV2 class={props.embedded ? "text-[clamp(26px,4.7vw,56px)] leading-none" : "text-[clamp(30px,8vw,82px)] leading-none"} />
           </div>
           {/* 260828 cc 问候语。字标是品牌、输入框是功能，中间这一句是唯一说人话的地方，
               所以放这儿。字号刻意压在 15px：它是陪衬，抢了输入框的注意力就本末倒置了。 */}
-          <h1 class="mt-5 text-center text-[15px] font-[440] text-v2-text-text-muted">{language.t(greetingKey())}</h1>
-          <div class="mt-8">
+          <h1 class={`${props.embedded ? "mt-3" : "mt-5"} text-center text-[15px] font-[440] text-v2-text-text-muted`}>{language.t(greetingKey())}</h1>
+          <div class={props.embedded ? "mt-4" : "mt-8"}>
             {props.children}
             {/* 260920 Red 把项目选择与当前分支归为一组上下文元信息，和主输入保持一条
                 清晰的分隔线；它们是开始前的选择，不再和提交动作抢同一层级。 */}
             <div
               data-component="new-session-context"
-              class="mt-4 flex min-h-8 flex-wrap items-center gap-0 border-t border-v2-border-border-base/50 pl-2 pt-2"
+              class={`flex min-h-8 flex-wrap items-center gap-0 pl-2 ${props.embedded ? "mt-2" : "mt-4 border-t border-v2-border-border-base/50 pt-2"}`}
               aria-label={language.t("command.session.new")}
             >
               {/* 261114 Red UX-03 评审：Soul 选择器与工作区归入同一行上下文元信息，
@@ -284,7 +288,7 @@ export function NewSessionDesignView(props: {
           </div>
         </div>
       </div>
-    </main>
+    </section>
   )
 }
 
