@@ -1,4 +1,4 @@
-// 261116 Red B05/B06：时间线片段定位的 DOM 观察层（纯函数 + 有界重试，能单测）。
+// 261116 Red B05/B06：时间线定位生命周期与 DOM 观察。
 //
 // 搜索命中落在工具输出里时，时间线只展开到「工具组」还不够：组内每个工具自己的
 // BasicTool 折叠默认是收起的，未挂载的 output 没有 textNode，既定位不到也高亮不了。
@@ -6,6 +6,162 @@
 // 每轮用 textContent 观测命中词是否真的出现，命中即停；只作用于目标片段，不全展开整组。
 // 不假设「等一帧 DOM 就好」——每一轮都重新读取状态，帧数/展开次数都有上限。
 // 决策：docs/notes/implemented/feature/2026-11-16-experience-roadmap-v2.md
+
+import { createComputed, on, onCleanup } from "solid-js"
+
+export type RevealTarget = {
+  messageID: string
+  partID?: string
+  userMessageID?: string
+  /** 命中消息/cited 消息的 time.created；窗口外定位用它选翻页方向。 */
+  createdAt?: number
+  /** 命中词（后端语义：字面、大小写敏感），用于在正文/工具内容上高亮。 */
+  query?: string
+  /** 片段找不到时恢复的阅读位置（B06 返回工具）。 */
+  scrollTop?: number
+}
+
+export type TimelineLocator = ReturnType<typeof createTimelineLocator>
+
+export function createTimelineLocator(
+  input: {
+    root: () => HTMLElement | undefined
+    sessionKey: () => string
+    anchor: (id: string) => string
+    usingNative: () => boolean
+    scrollToVirtualRow: (kind: "message" | "part", id: string) => void
+    onReveal: () => void
+  },
+  frame = nextFrame,
+) {
+  let generation = 0
+  let disposed = false
+  let highlightStyle: HTMLStyleElement | undefined
+  const clearHighlight = () => highlightRegistry()?.delete(LOCATE_HIGHLIGHT)
+
+  createComputed(
+    on(
+      input.sessionKey,
+      () => {
+        generation++
+        clearHighlight()
+      },
+      { defer: true },
+    ),
+  )
+  onCleanup(() => {
+    disposed = true
+    clearHighlight()
+    highlightStyle?.remove()
+  })
+
+  const revealMessage = (id: string) => {
+    if (disposed) return
+    input.onReveal()
+    if (!input.usingNative()) {
+      input.scrollToVirtualRow("message", id)
+      return
+    }
+    const root = input.root()
+    const target = root?.ownerDocument.getElementById(input.anchor(id))
+    if (root && target && root.contains(target)) scrollIntoView(root, target)
+  }
+
+  const revealPart = async (target: RevealTarget) => {
+    const { partID } = target
+    const root = input.root()
+    if (disposed || !partID || !root) return false
+    const started = generation
+    const isCurrent = () => !disposed && generation === started && input.root() === root
+    const mountRow = () => {
+      if (!input.usingNative()) input.scrollToVirtualRow("part", partID)
+    }
+    const fallback = () => {
+      if (!isCurrent()) return false
+      clearHighlight()
+      if (target.scrollTop === undefined) return false
+      root.scrollTop = target.scrollTop
+      return true
+    }
+
+    input.onReveal()
+    mountRow()
+    let groupOpened = false
+    let host: HTMLElement | undefined
+    // 261117 Red 40 帧在 2 核 CI 上不够等虚拟行挂载；放宽到 120 帧，每 12 帧补滚一次。
+    for (let attempt = 0; attempt < 120; attempt++) {
+      if (!isCurrent()) return false
+      host = findPartHost(root, partID)
+      if (host) break
+      if (!groupOpened) {
+        const group = findGroupHost(root, partID)
+        if (group) groupOpened = openGroupTrigger(group)
+      }
+      await frame()
+      if (isCurrent() && attempt % 12 === 11) mountRow()
+    }
+    if (!host) return fallback()
+
+    const located = await revealWithinHost({
+      host: () => {
+        if (host && root.contains(host)) return host
+        host = findPartHost(root, partID)
+        return host
+      },
+      query: target.query,
+      frame,
+      isCurrent,
+      onFound: (found) => {
+        scrollIntoView(root, found, 12)
+        clearHighlight()
+        const registry = highlightRegistry()
+        const Highlight = (globalThis as { Highlight?: new (...ranges: Range[]) => unknown }).Highlight
+        if (!target.query || !registry || !Highlight) return
+        const ranges = highlightRanges(found, target.query)
+        if (!ranges.length) return
+        if (!highlightStyle?.isConnected) {
+          highlightStyle = root.ownerDocument.createElement("style")
+          highlightStyle.textContent = `::highlight(${LOCATE_HIGHLIGHT}){background-color:rgba(235,175,45,0.45);color:inherit}`
+          root.ownerDocument.head.append(highlightStyle)
+        }
+        registry.set(LOCATE_HIGHLIGHT, new Highlight(...ranges))
+      },
+    })
+    return located || fallback()
+  }
+
+  return { revealMessage, revealPart }
+}
+
+function scrollIntoView(root: HTMLElement, target: HTMLElement, padding = 0) {
+  const sticky = root.querySelector<HTMLElement>("[data-session-title]")
+  const delta = target.getBoundingClientRect().top - root.getBoundingClientRect().top
+  root.scrollTo({ top: Math.max(0, root.scrollTop + delta - (sticky?.offsetHeight ?? 0) - padding), behavior: "auto" })
+}
+
+const LOCATE_HIGHLIGHT = "redcode-locate"
+type HighlightRegistry = { set(name: string, value: unknown): void; delete(name: string): void }
+const highlightRegistry = () => (globalThis as { CSS?: { highlights?: HighlightRegistry } }).CSS?.highlights
+
+// 与后端搜索同为字面、区分大小写的子串；不改写 Solid 管理的正文。
+function highlightRanges(host: HTMLElement, query: string) {
+  const doc = host.ownerDocument
+  const walker = doc.createTreeWalker(host, NodeFilter.SHOW_TEXT)
+  const ranges: Range[] = []
+  for (let node = walker.nextNode(); node && ranges.length < 200; node = walker.nextNode()) {
+    const value = node.nodeValue ?? ""
+    for (let from = 0; ranges.length < 200; ) {
+      const index = value.indexOf(query, from)
+      if (index === -1) break
+      const range = doc.createRange()
+      range.setStart(node, index)
+      range.setEnd(node, index + query.length)
+      ranges.push(range)
+      from = index + query.length
+    }
+  }
+  return ranges
+}
 
 export const findPartHost = (root: ParentNode, partID: string) => {
   for (const el of root.querySelectorAll<HTMLElement>("[data-timeline-part-id]")) {
@@ -62,6 +218,7 @@ export type RevealWithinHostInput = {
   host: () => HTMLElement | undefined
   query?: string
   frame: () => Promise<void>
+  isCurrent?: () => boolean
   onFound?: (host: HTMLElement) => void
   maxFrames?: number
   maxExpands?: number
@@ -77,6 +234,7 @@ export async function revealWithinHost(input: RevealWithinHostInput) {
   const maxFrames = input.maxFrames ?? 90
   const maxExpands = input.maxExpands ?? 12
   for (let frame = 0; frame < maxFrames; frame++) {
+    if (input.isCurrent?.() === false) return false
     const host = input.host()
     if (!host) {
       await input.frame()
@@ -116,7 +274,7 @@ export async function revealWithinHost(input: RevealWithinHostInput) {
 }
 
 /** rAF 观测一拍；窗口被遮挡时 rAF 不回调，用等长兜底避免跳转锁死。 */
-export const nextFrame = () =>
+const nextFrame = () =>
   new Promise<void>((resolve) => {
     let settled = false
     let frame: number

@@ -77,7 +77,7 @@ import { messageAgentColor } from "@/utils/agent"
 import { buildReference, appendReference, referenceLabel, referenceTime, type ReferenceAnchor } from "@/utils/reference"
 import { usePrompt } from "@/context/prompt"
 import { pushRecentReference, recentReferences, referenceLocatable, type RecentReference } from "./reference-links"
-import { findGroupHost, findPartHost, nextFrame, openGroupTrigger, revealWithinHost } from "./timeline-locate"
+import { createTimelineLocator, type RevealTarget, type TimelineLocator } from "./timeline-locate"
 import { sessionTitle } from "@/utils/session-title"
 import { guiDiagnostics } from "@/context/gui-diagnostics"
 import { makeTimer } from "@solid-primitives/timer"
@@ -97,19 +97,6 @@ const emptyTools: ToolPart[] = []
 const emptyAssistantMessages: AssistantMessage[] = []
 const idle = { type: "idle" as const }
 const CODING_TOOLS = new Set(["edit", "write", "apply_patch"])
-
-/** 261116 Red B05/B06：搜索命中与文件来源的精确片段定位目标。 */
-export type RevealTarget = {
-  messageID: string
-  partID?: string
-  userMessageID?: string
-  /** 命中消息/cited 消息的 time.created；窗口外定位用它选翻页方向。 */
-  createdAt?: number
-  /** 命中词（后端语义：字面、大小写敏感），用于在正文/工具内容上高亮。 */
-  query?: string
-  /** 片段找不到时恢复的阅读位置（B06 返回工具）。 */
-  scrollTop?: number
-}
 
 /** 261116 Red B06：从工具内容打开文件时记录来源。 */
 export type FileOpenSource = {
@@ -366,8 +353,7 @@ export function MessageTimeline(props: {
   historyShift: boolean
   userMessages: UserMessage[]
   anchor: (id: string) => string
-  setRevealMessage?: (fn: (id: string) => void) => void
-  setRevealPart?: (fn: (target: RevealTarget) => Promise<boolean>) => void
+  setLocator?: (locator: TimelineLocator | undefined) => void
   setFileOpenSource?: (fn: () => FileOpenSource | undefined) => void
   /** 261116 Red A04：最近引用 chip 的跳转入口（由 session 的 jumpToTarget 承接）。 */
   onJumpTarget?: (target: RevealTarget) => void
@@ -967,12 +953,6 @@ export function MessageTimeline(props: {
     })
   }
 
-  // 260929 Red 缓存写回已挪到 Virtualizer 自己的 ref（实例销毁即写，配对天然正确），
-  // 这里不再重复写一次。
-  onCleanup(() => {
-    props.setRevealMessage?.(() => {})
-  })
-
   const [title, setTitle] = createStore({
     draft: "",
     editing: false,
@@ -1006,150 +986,30 @@ export function MessageTimeline(props: {
   let imeComposing = false
   const [scrollRoot, setScrollRoot] = createSignal<HTMLDivElement>()
 
-  // 260922 Red：revealMessage 的契约是「让消息进入当前 renderer 的视口」，不能绑死 Virtua。
-  // native timeline 没有 virtualizer，直接按 hash scroll 的同一套 sticky 标题偏移计算 DOM 落点；
-  // 否则 outline / message rail 在 native A/B 下会静默 no-op，比较结果不公平。
-  const revealMessage = (id: string) => {
-    const index = messageRowIndex().get(id)
-    if (!usingNative()) {
-      if (index === undefined) return
-      mounted?.handle.scrollToIndex(index, { align: "center" })
-      return
-    }
-
-    const root = listRoot
-    const target = root?.ownerDocument.getElementById(props.anchor(id))
-    if (!root || !target || !root.contains(target)) return
-
-    const rootBox = root.getBoundingClientRect()
-    const targetBox = target.getBoundingClientRect()
-    const sticky = root.querySelector("[data-session-title]")
-    const inset = sticky instanceof HTMLElement ? sticky.offsetHeight : 0
-    const top = Math.max(0, targetBox.top - rootBox.top + root.scrollTop - inset)
-    root.scrollTo({ top, behavior: "auto" })
-  }
-
-  createEffect(() => {
-    props.setRevealMessage?.(revealMessage)
+  const locator = createTimelineLocator({
+    root: () => listRoot,
+    sessionKey,
+    anchor: (id) => props.anchor(id),
+    usingNative,
+    onReveal: () => {
+      // 261122 Red 显式跳转接管视口，入场纠偏和已排队的追底帧不能把命中位置盖掉。
+      if (bottomAnchorFrame !== undefined) cancelAnimationFrame(bottomAnchorFrame)
+      if (scrollToEndFrame !== undefined) cancelAnimationFrame(scrollToEndFrame)
+      bottomAnchorFrame = undefined
+      scrollToEndFrame = undefined
+      bottomAnchorForce = false
+      measuredBottomAnchored = false
+    },
+    scrollToVirtualRow: (kind, id) => {
+      if (mounted?.session !== sessionKey()) return
+      const index = (kind === "message" ? messageRowIndex() : partRowIndex()).get(id)
+      if (index !== undefined) mounted.handle.scrollToIndex(index, { align: "center" })
+    },
   })
-
-  // 261116 Red B05/B06：精确到片段的定位。与 revealMessage 共用同一套 renderer 判断：
-  //   先按行号让 virtua 把目标行挂上，再展开折叠的工具组与组内目标工具自己的正文折叠
-  //   （见 timeline-locate.ts，按已挂载 DOM 观测、有界重试），最后按 data-timeline-part-id
-  //   找真实 DOM；命中词用 CSS Custom Highlight 画在正文上，不改写 Solid 管理的 DOM。
-  const scrollHostIntoView = (host: HTMLElement) => {
-    const root = listRoot
-    if (!root) return
-    const box = root.getBoundingClientRect()
-    const target = host.getBoundingClientRect()
-    const sticky = root.querySelector("[data-session-title]")
-    const inset = sticky instanceof HTMLElement ? sticky.offsetHeight : 0
-    root.scrollTo({ top: Math.max(0, target.top - box.top + root.scrollTop - inset - 12), behavior: "auto" })
-  }
-
-  const LOCATE_HIGHLIGHT = "redcode-locate"
-  let highlightStyle: HTMLStyleElement | undefined
-  type HighlightRegistry = { set(name: string, value: unknown): void; delete(name: string): void }
-  const highlightRegistry = () => (globalThis as { CSS?: { highlights?: HighlightRegistry } }).CSS?.highlights
-  const HighlightCtor = () => (globalThis as { Highlight?: new (...ranges: Range[]) => unknown }).Highlight
-  const ensureHighlightStyle = () => {
-    if (typeof document === "undefined" || highlightStyle?.isConnected) return
-    highlightStyle = document.createElement("style")
-    highlightStyle.textContent = `::highlight(${LOCATE_HIGHLIGHT}){background-color:rgba(235,175,45,0.45);color:inherit}`
-    document.head.append(highlightStyle)
-  }
-  // 后端搜索是字面大小写敏感子串；这里同语义 indexOf（不构造正则，特殊字符不会被解释）。
-  const applyLocateHighlight = (host: HTMLElement | undefined, query: string | undefined) => {
-    const registry = highlightRegistry()
-    if (!registry) return
-    registry.delete(LOCATE_HIGHLIGHT)
-    const Highlight = HighlightCtor()
-    if (!host || !query || !Highlight) return
-    const ranges: Range[] = []
-    const walker = document.createTreeWalker(host, NodeFilter.SHOW_TEXT)
-    for (let node = walker.nextNode(); node && ranges.length < 200; node = walker.nextNode()) {
-      const value = node.nodeValue ?? ""
-      for (let from = 0; ;) {
-        const index = value.indexOf(query, from)
-        if (index === -1) break
-        const range = document.createRange()
-        range.setStart(node, index)
-        range.setEnd(node, index + query.length)
-        ranges.push(range)
-        from = index + query.length
-      }
-    }
-    if (!ranges.length) return
-    ensureHighlightStyle()
-    registry.set(LOCATE_HIGHLIGHT, new Highlight(...ranges))
-  }
-
-  const revealPart = async (target: RevealTarget) => {
-    const partID = target.partID
-    if (!partID) return false
-    const root = listRoot
-    if (!root) return false
-
-    const index = partRowIndex().get(partID)
-    if (!usingNative() && index !== undefined && mounted) mounted.handle.scrollToIndex(index, { align: "center" })
-
-    let groupToggled = false
-    let host: HTMLElement | undefined
-    // 261117 Red 40 帧约 0.67 秒，2 核 CI 上虚拟列表还没挂载完就放弃了，
-    // 「返回工具」会定位不到目标 part。放宽到 120 帧，并周期性补一次滚动，
-    // 覆盖挂载晚于首帧、以及渲染窗口随滚动才展开的情况。
-    for (let attempt = 0; attempt < 120; attempt++) {
-      host = findPartHost(root, partID)
-      if (host) break
-      // 组渲染出来才点一次；逐帧重复点会把刚展开的组又关回去。
-      if (!groupToggled) {
-        const group = findGroupHost(root, partID)
-        if (group) {
-          groupToggled = true
-          openGroupTrigger(group)
-        }
-      }
-      await nextFrame()
-      if (!usingNative() && index !== undefined && mounted && attempt % 12 === 11) {
-        mounted.handle.scrollToIndex(index, { align: "center" })
-      }
-    }
-
-    if (!host) {
-      applyLocateHighlight(undefined, undefined)
-      if (target.scrollTop === undefined) return false
-      root.scrollTop = target.scrollTop
-      return true
-    }
-
-    // 组已展开不等于命中可见：组内目标工具自己的折叠未开时正文还没挂载，交给 DOM 观察层
-    // 逐层展开（命中词出现即停；返回工具时只展开该工具自身的正文）。
-    let live: HTMLElement | undefined = host
-    const located = await revealWithinHost({
-      host: () => {
-        if (live?.isConnected) return live
-        live = findPartHost(root, partID)
-        return live
-      },
-      query: target.query,
-      frame: nextFrame,
-      onFound: (found) => {
-        scrollHostIntoView(found)
-        applyLocateHighlight(found, target.query)
-      },
-    })
-    if (located) return true
-
-    applyLocateHighlight(undefined, undefined)
-    if (target.scrollTop === undefined) return false
-    root.scrollTop = target.scrollTop
-    return true
-  }
-
-  createEffect(() => props.setRevealPart?.(revealPart))
-  onCleanup(() => {
-    props.setRevealPart?.(async () => false)
-    applyLocateHighlight(undefined, undefined)
+  createEffect(() => {
+    const setLocator = props.setLocator
+    setLocator?.(locator)
+    onCleanup(() => setLocator?.(undefined))
   })
 
   // 261116 Red A04：消息/工具选区 → 带来源引用追加到当前草稿；不发送、不动已有附件。

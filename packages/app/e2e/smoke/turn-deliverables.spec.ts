@@ -10,6 +10,7 @@ test("turn outputs open a document and retain the producing tool as the return t
   const userID = "msg_outputs_user"
   const assistantID = "msg_outputs_assistant"
   const now = Date.now()
+  const needle = "unique delivery marker"
   const files = ["docs/brief.md", "prototype/index.html", "src/one.ts", "src/two.ts", "src/three.ts"]
   const write = (path: string, index: number) => ({
     id: `prt_output_${index}`,
@@ -21,8 +22,23 @@ test("turn outputs open a document and retain the producing tool as the return t
     state: {
       status: "completed",
       input: { filePath: `${fixture.directory}/${path}`, content: "# Output" },
-      metadata: { filepath: `${fixture.directory}/${path}`, exists: false },
-      output: `Wrote ${path}`,
+      metadata: {
+        filepath: `${fixture.directory}/${path}`,
+        exists: false,
+        diagnostics:
+          index === 0
+            ? {
+                [`${fixture.directory}/${path}`]: [
+                  {
+                    message: needle,
+                    severity: 1,
+                    range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
+                  },
+                ],
+              }
+            : undefined,
+      },
+      output: index === 0 ? `Wrote ${path}\n${needle}` : `Wrote ${path}`,
       title: path,
       time: { start: now + index, end: now + index + 1 },
     },
@@ -81,6 +97,18 @@ test("turn outputs open a document and retain the producing tool as the return t
     sessions: [{ ...fixture.sessions[0]!, id: sessionID, title: "Deliverables smoke" }],
     pageMessages: () => ({ items: messages }),
   })
+  await page.route(`**/session/${sessionID}/outline?**`, (route) =>
+    route.fulfill({ json: { entries: [] }, headers: { "access-control-allow-origin": "*" } }),
+  )
+  await page.route(`**/session/${sessionID}/query?**`, (route) =>
+    route.fulfill({
+      headers: { "access-control-allow-origin": "*" },
+      json: {
+        results: [{ messageID: assistantID, partID: "prt_output_0", createdAt: now + 1, role: "assistant", text: needle }],
+        scannedParts: parts.length,
+      },
+    }),
+  )
   await page.route("**/file/content?**", (route) =>
     route.fulfill({
       status: 200,
@@ -147,10 +175,31 @@ test("turn outputs open a document and retain the producing tool as the return t
   await expect(openCode).toBeFocused()
   await openCode.press("Enter")
   await expect(page.getByRole("tab", { name: "three.ts" })).toHaveAttribute("aria-selected", "true")
-  await open.click()
+  const source = page.locator('[data-timeline-part-id="prt_output_0"]')
+  await expect(source.getByText(needle, { exact: false })).toHaveCount(0)
+  await page.getByRole("tab", { name: "Turns" }).click()
+  const search = page.getByRole("textbox", { name: /Search this session's history/ })
+  await search.fill(needle)
+  await search.press("Enter")
+  await page.getByRole("button", { name: new RegExp(needle) }).click()
+  await expect(source.getByText(needle, { exact: false })).toBeVisible()
+  await expect(source).toBeInViewport()
+  await expect
+    .poll(() => page.evaluate(() => CSS.highlights.get("redcode-locate")?.size ?? 0))
+    .toBeGreaterThan(0)
+  await source.locator('[data-slot="message-part-title-filename"]').click()
   await expect(page.getByRole("heading", { name: "Delivery brief", exact: true })).toBeVisible()
+  await page
+    .locator("#session-chat-panel")
+    .getByRole("region", { name: "scrollable content" })
+    .evaluate((root) => {
+      root.scrollTop = root.scrollHeight
+    })
+  await expect(source).not.toBeInViewport()
   await page.getByRole("button", { name: /返回工具|Back to tool|ツールに戻る/ }).click()
-  await expect(page.locator('[data-timeline-part-id="prt_output_0"]')).toBeVisible()
+  await expect(source.getByText(needle, { exact: false })).toBeVisible()
+  await expect(source).toBeInViewport()
+  await expect.poll(() => page.evaluate(() => CSS.highlights.has("redcode-locate"))).toBe(false)
   await panel.getByRole("button", { name: /^(View source step|查看来源|操作を確認) prototype\/index.html$/ }).click()
   await expect(page.locator('[data-timeline-part-id="prt_output_1"]')).toBeVisible()
   await panel.getByRole("button", { name: /^(Open file|打开文件|ファイルを開く) prototype\/index.html$/ }).click()

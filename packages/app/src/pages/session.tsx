@@ -62,7 +62,8 @@ import { createDeferRender } from "./session-defer-render"
 import { diffFingerprint, reviewedFiles } from "./session/review-progress"
 import { anonKey, guiDiagnostics, hashId } from "@/context/gui-diagnostics"
 import { createSessionKeyboard } from "@/pages/session/session-keyboard"
-import { MessageTimeline, type FileOpenSource, type RevealTarget } from "@/pages/session/message-timeline"
+import { MessageTimeline, type FileOpenSource } from "@/pages/session/message-timeline"
+import type { RevealTarget, TimelineLocator } from "@/pages/session/timeline-locate"
 import { type DiffStyle, SessionReviewTab, type SessionReviewTabProps } from "@/pages/session/review-tab"
 import { useSessionLayout } from "@/context/session-layout"
 import { SessionMessageRail, SessionTurnOutline } from "@/pages/session/turn-outline"
@@ -564,9 +565,8 @@ export default function Page() {
   let promptDock: HTMLDivElement | undefined
   let dockHeight = 0
   let scroller: HTMLDivElement | undefined
-  let revealMessage = (_id: string) => {}
-  // 261116 Red B05/B06：时间线注册的片段定位与文件打开来源读取器（与 revealMessage 同一条注册链）。
-  let revealPartTarget: ((target: RevealTarget) => Promise<boolean>) | undefined
+  let timelineLocator: TimelineLocator | undefined
+  const revealMessage = (id: string) => timelineLocator?.revealMessage(id)
   let takeFileOpenSource: (() => FileOpenSource | undefined) | undefined
   const scrollGestureWindowMs = 250
 
@@ -1453,6 +1453,7 @@ export default function Page() {
     }
   }
 
+  const jumpOwner = createMemo(() => ({ key: sessionKey() }))
   /**
    * 261116 Red B05/B06：搜索命中与「返回工具」共用的精确定位。
    *
@@ -1462,36 +1463,39 @@ export default function Page() {
    */
   const jumpToTarget = async (target: RevealTarget) => {
     if (jumpingTurn()) return
-    const id = params.id
-    if (!id) return
-    const directory = sdk.directory
+    if (!params.id) return
+    const owner = jumpOwner()
+    const current = () => jumpOwner() === owner
+    const unreachable = () => showToast({ variant: "error", title: language.t("session.outline.unreachable") })
     setJumpingTurn(true)
     try {
       const turnID =
         target.userMessageID ??
         (await historyLoader.locateTarget({ messageID: target.messageID, createdAt: target.createdAt }))
-      if (params.id !== id || sdk.directory !== directory) return
+      if (!current()) return
       if (!turnID) {
-        showToast({ variant: "error", title: language.t("session.outline.unreachable") })
+        unreachable()
         return
       }
-      if (!(await historyLoader.loadThrough(turnID))) {
-        if (params.id === id && sdk.directory === directory)
-          showToast({ variant: "error", title: language.t("session.outline.unreachable") })
+      const loaded = await historyLoader.loadThrough(turnID)
+      if (!current()) return
+      if (!loaded) {
+        unreachable()
         return
       }
+      // 261122 Red 展开工具正文会改变内容高度，定位时不能让跟底把阅读位置拉走。
+      autoScroll.pause()
       nav.setActiveMessage(visibleUserMessages().find((message) => message.id === turnID))
       await new Promise<void>((resolve) =>
         requestAnimationFrame(() => {
-          if (params.id === id && sdk.directory === directory) revealMessage(turnID)
+          if (current()) revealMessage(turnID)
           resolve()
         }),
       )
-      if (!target.partID || !revealPartTarget) return
-      const located = await revealPartTarget({ ...target, userMessageID: turnID })
+      if (!target.partID || !timelineLocator || !current()) return
+      const located = await timelineLocator.revealPart({ ...target, userMessageID: turnID })
       // 片段找不到时仍停在所属轮次；提示原因（历史压缩/内容被删），不假装已定位。
-      if (!located && params.id === id && sdk.directory === directory)
-        showToast({ variant: "error", title: language.t("session.outline.unreachable") })
+      if (!located && current()) unreachable()
     } finally {
       setJumpingTurn(false)
     }
@@ -2209,11 +2213,8 @@ export default function Page() {
                 historyShift={historyLoader.shift()}
                 userMessages={historyLoader.userMessages()}
                 anchor={nav.anchor}
-                setRevealMessage={(fn) => {
-                  revealMessage = fn
-                }}
-                setRevealPart={(fn) => {
-                  revealPartTarget = fn
+                setLocator={(locator) => {
+                  timelineLocator = locator
                 }}
                 setFileOpenSource={(fn) => {
                   takeFileOpenSource = fn

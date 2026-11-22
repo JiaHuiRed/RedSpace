@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test"
+import { createRoot, createSignal } from "solid-js"
 import {
+  createTimelineLocator,
   findGroupHost,
   findPartHost,
   openGroupTrigger,
@@ -52,6 +54,122 @@ function addNestedAccordion(container: HTMLElement, text: string) {
 }
 
 const frame = () => Promise.resolve()
+
+function setupLocator(options: {
+  frame?: () => Promise<void>
+  usingNative?: boolean
+  scrollToVirtualRow?: (kind: "message" | "part", id: string) => void
+} = {}) {
+  return createRoot((dispose) => {
+    const root = document.createElement("div")
+    const [sessionKey, setSession] = createSignal("a")
+    const locator = createTimelineLocator({
+      root: () => root,
+      sessionKey,
+      anchor: (id) => id,
+      usingNative: () => options.usingNative ?? false,
+      onReveal: () => {},
+      scrollToVirtualRow: options.scrollToVirtualRow ?? (() => {}),
+    }, options.frame ?? frame)
+    return { root, dispose, setSession, ...locator }
+  })
+}
+
+describe("timeline locator", () => {
+  test("asks the renderer again for a late row, then opens the tool group and body once", async () => {
+    const target = { messageID: "msg", partID: "prt_1", query: "needle" }
+    const { host } = buildHost({ bodyOpen: false, text: "needle" })
+    const group = document.createElement("div")
+    group.dataset.timelinePartIds = "prt_1"
+    const trigger = document.createElement("button")
+    trigger.dataset.component = "context-tool-group-trigger"
+    group.append(trigger)
+    let opens = 0
+    trigger.addEventListener("click", () => {
+      opens++
+      group.append(host)
+    })
+
+    const calls: string[] = []
+    const locator = setupLocator({
+      scrollToVirtualRow: (kind, id) => {
+        calls.push(`${kind}:${id}`)
+        if (calls.length === 3) locator.root.append(group)
+      },
+    })
+    try {
+      locator.revealMessage(target.messageID)
+      expect(await locator.revealPart(target)).toBe(true)
+      expect(calls).toEqual(["message:msg", "part:prt_1", "part:prt_1"])
+      expect(opens).toBe(1)
+      expect(host.textContent).toBe("needle")
+    } finally {
+      locator.dispose()
+    }
+  })
+
+  test("reports a missing search hit but restores the saved scroll position on return", async () => {
+    const locator = setupLocator()
+    const target = { messageID: "msg", partID: "missing" }
+    try {
+      locator.root.scrollTop = 70
+      expect(await locator.revealPart({ ...target, query: "lost" })).toBe(false)
+      expect(locator.root.scrollTop).toBe(70)
+      expect(await locator.revealPart({ ...target, scrollTop: 0 })).toBe(true)
+      expect(locator.root.scrollTop).toBe(0)
+    } finally {
+      locator.dispose()
+    }
+  })
+
+  test("a session switch and switch back invalidates pending part work", async () => {
+    const locator = setupLocator()
+    const { host, body } = buildHost({ bodyOpen: false, text: "needle" })
+    try {
+      locator.root.scrollTop = 70
+      const pending = locator.revealPart({ messageID: "msg", partID: "prt_1", scrollTop: 0 })
+      locator.setSession("b")
+      locator.setSession("a")
+      locator.root.append(host)
+      expect(await pending).toBe(false)
+      expect(body.getAttribute("aria-expanded")).toBe("false")
+      expect(locator.root.scrollTop).toBe(70)
+    } finally {
+      locator.dispose()
+    }
+  })
+
+  test("unmount stops an in-flight body reveal before it scrolls or restores a snapshot", async () => {
+    const locator = setupLocator()
+    const { host } = buildHost({ bodyOpen: false, text: "needle" })
+    locator.root.append(host)
+    locator.root.scrollTop = 70
+    const pending = locator.revealPart({ messageID: "msg", partID: "prt_1", scrollTop: 0 })
+    locator.dispose()
+    expect(await pending).toBe(false)
+    expect(locator.root.scrollTop).toBe(70)
+  })
+
+  test("native message and part jumps use the scroll root, not the virtual renderer", async () => {
+    const calls: string[] = []
+    const locator = setupLocator({ usingNative: true, scrollToVirtualRow: (kind) => calls.push(kind) })
+    const { host } = buildHost({ bodyOpen: true, text: "needle" })
+    host.id = "msg"
+    locator.root.append(host)
+    document.body.append(locator.root)
+    try {
+      locator.root.scrollTop = 60
+      locator.revealMessage("msg")
+      expect(locator.root.scrollTop).toBe(60)
+      expect(await locator.revealPart({ messageID: "msg", partID: "prt_1", query: "needle" })).toBe(true)
+      expect(locator.root.scrollTop).toBe(48)
+      expect(calls).toEqual([])
+    } finally {
+      locator.root.remove()
+      locator.dispose()
+    }
+  })
+})
 
 describe("revealWithinHost", () => {
   test("expands the tool body when the group is already open but the item is collapsed", async () => {
