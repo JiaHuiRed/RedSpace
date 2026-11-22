@@ -79,13 +79,14 @@ import {
   stripPromptHistoryImages,
 } from "./prompt-input/history"
 import { createPromptSubmit, type FailedSubmission, type FollowupDraft } from "./prompt-input/submit"
+import { resolveCachedCodeSoul } from "@/context/soul-identity"
 import { PromptPopover, type AtOption, type SlashCommand } from "./prompt-input/slash-popover"
 import { PromptContextItems } from "./prompt-input/context-items"
 import { PromptImageAttachments } from "./prompt-input/image-attachments"
 import { PromptDragOverlay } from "./prompt-input/drag-overlay"
 import { promptPlaceholder } from "./prompt-input/placeholder"
 import { ImagePreview } from "@redcode-ai/ui/image-preview"
-import { useQueries } from "@tanstack/solid-query"
+import { useQueries, useQueryClient } from "@tanstack/solid-query"
 import { useQueryOptions } from "@/context/server-sync"
 import { pathKey } from "@/utils/path-key"
 import { getFilename } from "@redcode-ai/core/util/path"
@@ -156,6 +157,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   const globalSync = useServerSync()
   const settings = useSettings()
   const platform = usePlatform()
+  const queryClient = useQueryClient()
   const { params, tabs, view } = useSessionLayout()
   let editorRef!: HTMLDivElement
   let fileInputRef: HTMLInputElement | undefined
@@ -164,6 +166,10 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
 
   const mirror = { input: false }
   const inset = 56
+
+  // 261122 Red 第二批：新会话页与发送入口共用同一条身份口径——显式选择优先，
+  // 其次本地保存，最后交给解析规则。confirmedSoul 命中缓存时提交不再发身份查询。
+  const savedSoul = () => props.newSessionSoul?.() ?? settings.personalization.lastSoul()
 
   const scrollCursorIntoView = () => {
     const container = scrollRef
@@ -1197,7 +1203,10 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       onSubmit: props.onSubmit,
       // 261114 Red UX-03 评审：Soul 选择挪到新会话页上下文行（设计视图渲染），
       // 输入区工具栏不再拥挤；提交仍经 lastSoul 通道接 session.create。
-      lastSoul: () => props.newSessionSoul?.() ?? settings.personalization.lastSoul() ?? undefined,
+      lastSoul: savedSoul,
+      // 261122 Red 第二批：已解析出有效身份时直接建会话（暖态零查询）；
+      // 冷缓存返回 undefined，由 submit 只取决定身份所缺的数据。
+      confirmedSoul: () => resolveCachedCodeSoul(queryClient, { url: sdk.url, saved: savedSoul() }),
     })
 
   const handleKeyDown = (event: KeyboardEvent) => {

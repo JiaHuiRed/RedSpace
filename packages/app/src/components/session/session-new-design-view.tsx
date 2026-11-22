@@ -29,6 +29,7 @@ import { Button } from "@redcode-ai/ui/button"
 import { SoulAvatar } from "@/components/soul-avatar"
 import { isCodeSession } from "@/utils/product-mode"
 import { chooseCodeSoul } from "@/utils/code-soul"
+import { codeSoulKeys } from "@/context/soul-identity"
 import { WordmarkV2 } from "@redcode-ai/ui/v2/components/wordmark-v2.jsx"
 import { readSessionDraft, sessionNextAction } from "./session-next-action"
 
@@ -60,16 +61,18 @@ export function NewSessionDesignView(props: {
 
   // 261114 Red UX-03：Soul 快选（跟随设置默认 / 全阵容 / 设为默认 / 管理），
   // 逻辑与原工具栏版一致，只是位置移到上下文行。
+  // 261122 Red 第二批：键走共享模块（context/soul-identity），与发送入口同缓存——
+  // 暖态首发不再重复请求默认接口。
   const soulList = useQuery(() => ({
-    queryKey: ["soul", globalSDK.url, "list"],
+    queryKey: codeSoulKeys(globalSDK.url).list,
     queryFn: async () => (await globalSDK.client.soul.list({ throwOnError: true })).data,
   }))
   const companionList = useQuery(() => ({
-    queryKey: ["companion", globalSDK.url, "list"],
+    queryKey: codeSoulKeys(globalSDK.url).companions,
     queryFn: async () => (await globalSDK.client.companion.list({ throwOnError: true })).data,
   }))
   const defaultSoul = useQuery(() => ({
-    queryKey: ["soul", globalSDK.url, "default", "desktop"],
+    queryKey: codeSoulKeys(globalSDK.url).desktopDefault,
     queryFn: async () => (await globalSDK.client.soul.default({ client: "desktop" }, { throwOnError: true })).data,
   }))
   const codeSouls = createMemo(() => {

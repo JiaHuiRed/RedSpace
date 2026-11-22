@@ -1,6 +1,6 @@
 import { useQueryClient } from "@tanstack/solid-query"
 import { recordCompanionMessageAccepted } from "@/utils/companion-onboarding"
-import { chooseCodeSoul } from "@/utils/code-soul"
+import { resolveCodeSoul } from "@/context/soul-identity"
 import type { Message, Session } from "@redcode-ai/sdk/v2/client"
 import { showToast } from "@redcode-ai/ui/toast"
 import { base64Encode } from "@redcode-ai/core/util/encode"
@@ -231,6 +231,8 @@ type PromptSubmitInput = {
   onAbort?: () => void
   onSubmit?: () => void
   lastSoul?: Accessor<string>
+  /** 261122 Red 第二批：新会话页已解析确认的 Code Soul；有值时直接建会话，不再查身份。 */
+  confirmedSoul?: Accessor<string | undefined>
 }
 
 type CommentItem = {
@@ -378,6 +380,9 @@ export function createPromptSubmit(input: PromptSubmitInput) {
   // 261031 Red 打断发送与普通发送共用整条提交流水线（草稿收集/历史/防重入/乐观消息），
   // 只在 API 调用处按 intent 分流；interruptSend 由忙碌时的打断按钮触发。
   const runSubmit = async (event: Event, intent: "send" | "interrupt") => {
+    // 261122 Red 第二批：点击 → 受理的本地分段计时（只进 GUI 诊断，默认关闭）。
+    // 与服务端 llm.slow 的关联靠 messageID/会话；创建会话与 worktree 等待只在这里可见。
+    const submitStartedAt = performance.now()
     clearSendError()
     event.preventDefault()
 
@@ -446,6 +451,8 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     // 各建一个 worktree 之后才被 session.create 的 guard 挡住，留下孤儿目录和重复的
     // 工作区草稿清理。锁从第一个副作用起持有，worktree 与 session.create 同属创建窗口。
     let session = submitSession
+    // 261122 Red 第二批：新会话创建完成的本地时刻（GUI 诊断分段用）。
+    let sessionReadyAt: number | undefined
     const needsSessionCreate = isNewSession && !session
     if (needsSessionCreate) {
       if (creatingSession) {
@@ -508,20 +515,14 @@ export function createPromptSubmit(input: PromptSubmitInput) {
       if (!session && isNewSession) {
         // 260909 Red 会话创建窗口（局域网可到秒级）二次 Enter 会并发建出两个会话。
         // 排队补消息的语义不受影响——锁只在 needsSessionCreate 时成立。
-        const created = await Promise.all([
-          queryClient.fetchQuery({
-            queryKey: ["soul", sdk.url, "list"],
-            queryFn: async () => (await client.soul.list({ throwOnError: true })).data,
-          }),
-          queryClient.fetchQuery({
-            queryKey: ["companion", sdk.url, "list"],
-            queryFn: async () => (await client.companion.list({ throwOnError: true })).data,
-          }),
-          client.soul.default({ client: "desktop" }, { throwOnError: true }).then((result) => result.data.id),
-        ])
-          .then(([souls, companions, serverDefault]) =>
-            chooseCodeSoul({ saved: input.lastSoul?.(), serverDefault, souls, companions }),
-          )
+        // 261122 Red 第二批：身份查询走共享缓存。已确认的 Soul 直接建会话（暖态零请求）；
+        // 冷缓存只取决定身份所需的数据，saved 有效时不再等桌面默认值。
+        const created = await resolveCodeSoul(queryClient, {
+          client,
+          url: sdk.url,
+          saved: input.lastSoul?.(),
+          confirmed: input.confirmedSoul?.(),
+        })
           .then((soul) => client.session.create({ mode: "code", soul }))
           .then((x) => x.data ?? undefined)
           .catch((err) => {
@@ -534,6 +535,7 @@ export function createPromptSubmit(input: PromptSubmitInput) {
         if (created) {
           seed(sessionDirectory, created)
           session = created
+          sessionReadyAt = performance.now()
           if (shouldAutoAccept) permission.enableAutoAccept(session.id, sessionDirectory)
           local.session.promote(sessionDirectory, session.id)
           layout.handoff.setTabs(base64Encode(sessionDirectory), session.id)
@@ -768,6 +770,21 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     })
       .then((sent) => {
         if (!sent) return
+        // 261122 Red 第二批：受理完成（prompt_async 返回）即记录分段耗时；失败不记，
+        // 免把重试/报错混进正常样本。
+        const acceptedAt = performance.now()
+        guiDiagnostics.record("ui.submit.timing", {
+          name: isNewSession ? "new-session" : "followup",
+          // duration 进导出摘要的 durations 统计；detail 保留分段。
+          duration: acceptedAt - submitStartedAt,
+          detail: {
+            session: anonKey(session.id),
+            totalMs: acceptedAt - submitStartedAt,
+            ...(sessionReadyAt !== undefined
+              ? { createMs: sessionReadyAt - submitStartedAt, acceptMs: acceptedAt - sessionReadyAt }
+              : { acceptMs: acceptedAt - submitStartedAt }),
+          },
+        })
         recordCompanionMessageAccepted(queryClient, sdk.url, session)
         input.onDeliveryReset?.()
         // 261115 Red RX-01 新提交成功后旧失败记录即失效，一并清掉，不留隐形重试入口。

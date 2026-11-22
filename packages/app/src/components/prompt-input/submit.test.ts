@@ -2,6 +2,7 @@ import { beforeAll, beforeEach, describe, expect, mock, test } from "bun:test"
 import * as solidJsRouter from "@solidjs/router"
 import * as solidQuery from "@tanstack/solid-query"
 import { companionAcceptedKey } from "@/utils/companion-onboarding"
+import { guiDiagnostics } from "@/context/gui-diagnostics"
 import type { Prompt } from "@/context/prompt"
 
 let createPromptSubmit: typeof import("./submit").createPromptSubmit
@@ -936,5 +937,40 @@ describe("Chat and Code identity submission boundaries", () => {
     submit.retryFailedSubmit()
     await new Promise((resolve) => setTimeout(resolve, 10))
     expect(queryClient.getQueryData<boolean>(key) === true).toBe(true)
+  })
+})
+
+describe("submit timing diagnostics", () => {
+  test("records local create and accept segments while recording is on", async () => {
+    guiDiagnostics.start()
+    try {
+      const submit = createPromptSubmit({
+        info: () => undefined,
+        imageAttachments: () => [],
+        commentCount: () => 0,
+        autoAccept: () => false,
+        mode: () => "normal",
+        working: () => false,
+        editor: () => undefined,
+        queueScroll: () => undefined,
+        promptLength: (value) => value.reduce((sum, part) => sum + ("content" in part ? part.content.length : 0), 0),
+        addToHistory: () => undefined,
+        resetHistoryNavigation: () => undefined,
+        setMode: () => undefined,
+        setPopover: () => undefined,
+        lastSoul: () => lastSoul,
+      })
+      await submit.handleSubmit({ preventDefault: () => undefined } as unknown as Event)
+      await new Promise((resolve) => setTimeout(resolve, 10))
+
+      const record = guiDiagnostics.payload().records.find((item) => item.type === "ui.submit.timing")
+      expect(record?.name).toBe("new-session")
+      expect(record?.detail?.totalMs).toBeTypeOf("number")
+      expect(record?.detail?.createMs).toBeTypeOf("number")
+      expect(record?.detail?.acceptMs).toBeTypeOf("number")
+      expect(String(record?.detail?.session).startsWith("anon-")).toBe(true)
+    } finally {
+      guiDiagnostics.stop()
+    }
   })
 })

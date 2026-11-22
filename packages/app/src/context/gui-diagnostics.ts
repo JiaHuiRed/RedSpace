@@ -17,6 +17,9 @@
 
 export const GUI_DIAGNOSTIC_TYPES = [
   "ui.input",
+  // 261122 Red 第二批：一次发送的本地分段耗时（创建会话 / 受理），与本地服务日志按
+  // 会话匿名 key 对齐。默认关闭；开启录制时才有成本。
+  "ui.submit.timing",
   "ui.popover",
   "ui.session.transition",
   "sse.flush",
