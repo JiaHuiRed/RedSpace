@@ -228,13 +228,13 @@
    补一层与 Code 会话同半径的 backdrop 模糊——首页没有会话页那道渐变罩，这里就是
    它的对应物。滚动容器的 backdrop 取的是壁纸透过 main 之后的合成，模糊稳定。 */
 [data-app-frost] .companion-home-scroll {
-  backdrop-filter: blur(var(--frost-blur-chrome));
-  -webkit-backdrop-filter: blur(var(--frost-blur-chrome));
+  backdrop-filter: blur(var(--frost-blur-chrome)) saturate(var(--frost-saturate));
+  -webkit-backdrop-filter: blur(var(--frost-blur-chrome)) saturate(var(--frost-saturate));
 }
 [data-app-frost] .companion-rail {
   background-color: color-mix(in srgb, var(--chat-rail) var(--frost-alpha-aside), transparent);
-  backdrop-filter: blur(var(--frost-blur-chrome));
-  -webkit-backdrop-filter: blur(var(--frost-blur-chrome));
+  backdrop-filter: blur(var(--frost-blur-chrome)) saturate(var(--frost-saturate));
+  -webkit-backdrop-filter: blur(var(--frost-blur-chrome)) saturate(var(--frost-saturate));
 }
 [data-app-frost] .companion-frame [data-component="session-prompt-dock"] {
   background: transparent;

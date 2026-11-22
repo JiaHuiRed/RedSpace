@@ -289,6 +289,12 @@
   --frost-blur-inline: 12px;
   --frost-blur-edge: 5px;
 
+  /* 261122 Karina 玻璃通透度：参照琉璃（liuli.css）的 blur(18px) saturate(1.6)。
+     此前主磨砂面只有 blur，透上来的壁纸像素读作"灰玻璃"；补 saturate 让底色鲜起来。
+     一个变量统一所有磨砂面，暗色过艳就往 1.2 调；浮层原有 140% 单列一档保持原样。 */
+  --frost-saturate: 1.5;
+  --frost-saturate-popover: 140%;
+
   /* 磨砂强度总开关：下面每一档不透明度都乘它。1 = 现状，逐像素与旋钮化之前一致。
      调大 = 更实、更少透壁纸；调小 = 更通透。要做成设置项时把它接出去即可。
      实测可用区间约 0.6–1.35：外壳档是 72%，强度到 1.39 就乘满 100% 被钳成全不透明，
@@ -328,6 +334,13 @@
   --frost-edge-highlight: rgba(255, 255, 255, 0.42);
   --frost-edge-veil: rgba(255, 255, 255, 0.16);
 
+   /* 261122 Karina 玻璃颗粒：180px SVG feTurbulence，参照琉璃 --ll-noise。
+      她们踩过"全屏盖一层噪点让文字发虚"的坑（liuli.css:120-122 已关闭），
+      所以这里只作为大面自己的 background-image，不平铺到内容之上。
+      斜率 0.1 比她们的 0.045 高一档：她们挂在深色亚克力上，白噪点天然更显；
+      本仓主色是浅色底，0.04 实测放大五倍才勉强可见，0.1 在 1x 下刚好是"有质感不脏"。 */
+   --frost-noise: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.82' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.1'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23n)'/%3E%3C/svg%3E");
+
   /* 261029 Red 交互玻璃共用边缘与浮层底，不改变壁纸磨砂分档。 */
   --glass-edge: var(--frost-edge-highlight);
   --glass-border: var(--v2-border-border-base);
@@ -357,6 +370,15 @@
   --frost-edge-veil: rgba(0, 0, 0, 0.14);
   --frost-spot-color: rgba(168, 180, 240, 0.16);
   --glass-popover-alpha: 94%;
+}
+
+/* 261122 Karina 暗色档饱和度降一档。深色底上壁纸的色相差被放大：同一张壁纸下
+   main 区实测 1.5 会把饱和度推高 26%（浅色只 +9%），1.3 收到 +13%——紫蓝还在，
+   不会整屏发闷。deepblue 同为深色档（ui/styles/tailwind/index.css:10），一起走；
+   只覆盖 saturate，不碰它原有的边缘/浮层档。 */
+:root[data-color-scheme="dark"],
+:root[data-color-scheme="deepblue"] {
+  --frost-saturate: 1.3;
 }
 
 /* ---------- 260901 cc 启动画面的底。
@@ -401,8 +423,8 @@
    那些对伙伴框架不生效——Chat 会话在罩上补齐，否则壁纸透出区域保持原锐度，
    视觉焦点被壁纸抢走。 */
 [data-wallpaper-soften] {
-  backdrop-filter: blur(var(--frost-blur-chrome));
-  -webkit-backdrop-filter: blur(var(--frost-blur-chrome));
+  backdrop-filter: blur(var(--frost-blur-chrome)) saturate(var(--frost-saturate));
+  -webkit-backdrop-filter: blur(var(--frost-blur-chrome)) saturate(var(--frost-saturate));
 }
 
 /* ---------- 260829 cc 一条实测过的边界，动磨砂面之前先读。
@@ -436,8 +458,8 @@
       calc(var(--frost-alpha-bubble) * var(--frost-strength)),
     transparent
   );
-  backdrop-filter: blur(var(--frost-blur-inline));
-  -webkit-backdrop-filter: blur(var(--frost-blur-inline));
+  backdrop-filter: blur(var(--frost-blur-inline)) saturate(var(--frost-saturate));
+  -webkit-backdrop-filter: blur(var(--frost-blur-inline)) saturate(var(--frost-saturate));
 }
 
 /* 输入框毛玻璃：dock 不再铺底色（260812 Red 去掉 bg-background-stronger 后此处同删——
@@ -450,8 +472,8 @@
     var(--v2-background-bg-base) calc(var(--frost-alpha-inline) * var(--frost-strength)),
     transparent
   );
-  backdrop-filter: blur(var(--frost-blur-inline));
-  -webkit-backdrop-filter: blur(var(--frost-blur-inline));
+  backdrop-filter: blur(var(--frost-blur-inline)) saturate(var(--frost-saturate));
+  -webkit-backdrop-filter: blur(var(--frost-blur-inline)) saturate(var(--frost-saturate));
 }
 
 /* 260810 Red 毛玻璃 B：全界面毛玻璃。背景图由根布局整窗铺底（祖先带 data-app-frost），
@@ -464,8 +486,8 @@
     var(--v2-background-bg-deep) calc(var(--frost-alpha-chrome) * var(--frost-strength)),
     transparent
   );
-  backdrop-filter: blur(var(--frost-blur-chrome));
-  -webkit-backdrop-filter: blur(var(--frost-blur-chrome));
+  backdrop-filter: blur(var(--frost-blur-chrome)) saturate(var(--frost-saturate));
+  -webkit-backdrop-filter: blur(var(--frost-blur-chrome)) saturate(var(--frost-saturate));
 }
 
 [data-app-frost] [data-frost-surface="main"] {
@@ -474,8 +496,8 @@
     var(--v2-background-bg-base) calc(var(--frost-alpha-surface) * var(--frost-strength)),
     transparent
   );
-  backdrop-filter: blur(var(--frost-blur-chrome));
-  -webkit-backdrop-filter: blur(var(--frost-blur-chrome));
+  backdrop-filter: blur(var(--frost-blur-chrome)) saturate(var(--frost-saturate));
+  -webkit-backdrop-filter: blur(var(--frost-blur-chrome)) saturate(var(--frost-saturate));
 }
 
 /* 260610 Red 0.5.0 refine#1 亮暗互换：文件栏/审查栏是"外壳"，给更深的磨砂底（透出但压暗背景图），
@@ -488,8 +510,8 @@
     var(--v2-background-bg-deep) calc(var(--frost-alpha-shell) * var(--frost-strength)),
     transparent
   );
-  backdrop-filter: blur(var(--frost-blur-chrome));
-  -webkit-backdrop-filter: blur(var(--frost-blur-chrome));
+  backdrop-filter: blur(var(--frost-blur-chrome)) saturate(var(--frost-saturate));
+  -webkit-backdrop-filter: blur(var(--frost-blur-chrome)) saturate(var(--frost-saturate));
 }
 /* 261121 Red 上下文胶囊（审查栏折叠态）壁纸模式从外壳 72% 降到胶囊中间档，
    与下方计划胶囊同款深底、同档位，消除两个胶囊一深一淡的落差；文件树仍走外壳档。 */
@@ -520,8 +542,8 @@
       calc(var(--frost-alpha-aside) * var(--frost-strength)),
     transparent
   );
-  backdrop-filter: blur(var(--frost-blur-chrome));
-  -webkit-backdrop-filter: blur(var(--frost-blur-chrome));
+  backdrop-filter: blur(var(--frost-blur-chrome)) saturate(var(--frost-saturate));
+  -webkit-backdrop-filter: blur(var(--frost-blur-chrome)) saturate(var(--frost-saturate));
 }
 /* 260920 Red Usage 是辅助信息，保持同一磨砂材质但降低面板存在感，把注意力还给会话看板。 */
 [data-app-frost] [data-frost-surface="home-usage"] {
@@ -532,6 +554,18 @@
     transparent
   );
 }
+/* ---------- 261122 Karina 玻璃颗粒：只给大面，不做全屏覆盖。
+   参照琉璃的卡片配方（layout.css:22-31）：亚克力底 + 噪点 + backdrop 模糊。
+   噪点跟着材质走而不是盖在内容上，文字保持锐利；小面积（胶囊、气泡、输入框）不加，
+   颗粒落在 8px 缝隙里会读成脏点。审查栏的折叠胶囊也排除。 ---------- */
+[data-app-frost] [data-frost-surface="titlebar"],
+[data-app-frost] [data-frost-surface="main"],
+[data-app-frost] [data-frost-surface="home-sidebar"],
+[data-app-frost] #file-tree-panel,
+[data-app-frost] #review-panel:not(.session-side-panel__capsule) {
+  background-image: var(--frost-noise);
+}
+
 [data-app-frost] #file-tree-panel .bg-background-stronger,
 [data-app-frost] #review-panel .bg-background-base,
 [data-app-frost] #review-panel .bg-background-stronger,
@@ -612,8 +646,8 @@
     var(--surface-raised-stronger-non-alpha) var(--glass-popover-alpha),
     transparent
   );
-  backdrop-filter: blur(var(--frost-blur-inline)) saturate(140%);
-  -webkit-backdrop-filter: blur(var(--frost-blur-inline)) saturate(140%);
+  backdrop-filter: blur(var(--frost-blur-inline)) saturate(var(--frost-saturate-popover));
+  -webkit-backdrop-filter: blur(var(--frost-blur-inline)) saturate(var(--frost-saturate-popover));
   box-shadow:
     inset 0 1px 0 var(--glass-edge),
     0 0 0 1px var(--glass-border),
@@ -716,8 +750,8 @@
     var(--v2-background-bg-base) calc(var(--frost-alpha-inline) * var(--frost-strength)),
     transparent
   );
-  backdrop-filter: blur(var(--frost-blur-inline));
-  -webkit-backdrop-filter: blur(var(--frost-blur-inline));
+  backdrop-filter: blur(var(--frost-blur-inline)) saturate(var(--frost-saturate));
+  -webkit-backdrop-filter: blur(var(--frost-blur-inline)) saturate(var(--frost-saturate));
 }
 
 /* 261029 Red 会话气泡和工作台工具条统一迎光边，正文与代码表面保持原样。 */
@@ -897,8 +931,8 @@
       calc(var(--frost-alpha-bubble) * var(--frost-strength)),
     transparent
   );
-  backdrop-filter: blur(var(--frost-blur-inline));
-  -webkit-backdrop-filter: blur(var(--frost-blur-inline));
+  backdrop-filter: blur(var(--frost-blur-inline)) saturate(var(--frost-saturate));
+  -webkit-backdrop-filter: blur(var(--frost-blur-inline)) saturate(var(--frost-saturate));
 }
 
 /* 260828 cc 看板卡片的呼吸抬起 —— 配方取自私仓用量面板
