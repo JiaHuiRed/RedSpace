@@ -276,7 +276,6 @@
   corner-shape: round;
   overflow: hidden;
 }
-}
 .companion-home-composer,
 .companion-frame [data-component="session-composer"] {
   background: var(--chat-field);
