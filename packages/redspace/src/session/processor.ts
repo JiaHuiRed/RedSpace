@@ -239,7 +239,9 @@ export const layer = Layer.effect(
       // Pre-capture snapshot before the LLM stream starts. The AI SDK
       // may execute tools internally before emitting start-step events,
       // so capturing inside the event handler can be too late.
+      const snapshotStartedAt = performance.now()
       const initialSnapshot = yield* snapshot.track()
+      const snapshotMs = Math.round(performance.now() - snapshotStartedAt)
       const cfg = yield* config.get()
       const failureLimit = ConfigToolFailure.resolve(cfg.experimental?.repeated_tool_failure_limit)
       // 261108 Red 中断预算独立于失败预算：默认 5 步。见 ConfigToolFailure.InterruptLimit。
@@ -1475,7 +1477,8 @@ export const layer = Layer.effect(
         // 只在总耗时超过阈值时记一条，带关联号与首事件/首正文节点；中断与失败也经过这里。
         const summarizeTiming = Effect.sync(() => {
           const totalMs = Date.now() - stepStartedAt
-          if (totalMs < SLOW_TURN_MS) return
+          const preProcessMs = Math.max(0, stepStartedAt - input.assistantMessage.time.created)
+          if (preProcessMs + totalMs < SLOW_TURN_MS) return
           // 首事件/首正文只在它们确实发生在本 step 时带上，避免多 step 时把上一步的旧时刻
           // 算成这一步的耗时。
           const firstEventMs = ctx.firstChunkAt && ctx.firstChunkAt >= stepStartedAt ? ctx.firstChunkAt - stepStartedAt : undefined
@@ -1484,6 +1487,8 @@ export const layer = Layer.effect(
             sessionID: ctx.sessionID,
             messageID: ctx.assistantMessage.id,
             totalMs,
+            preProcessMs,
+            snapshotMs,
             ...(firstEventMs !== undefined ? { firstEventMs } : {}),
             ...(firstTextMs !== undefined ? { firstTextMs } : {}),
           })
