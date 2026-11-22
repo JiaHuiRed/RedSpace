@@ -4,6 +4,7 @@ import * as solidQuery from "@tanstack/solid-query"
 import { companionAcceptedKey } from "@/utils/companion-onboarding"
 import { guiDiagnostics } from "@/context/gui-diagnostics"
 import type { Prompt } from "@/context/prompt"
+import { appendReference } from "@/utils/reference"
 
 let createPromptSubmit: typeof import("./submit").createPromptSubmit
 
@@ -35,6 +36,7 @@ const storedSessions: Record<
 > = {}
 const promoted: Array<{ directory: string; sessionID: string }> = []
 const sentShell: string[] = []
+const shellCommands: string[] = []
 const syncedDirectories: string[] = []
 const resetScopes: Array<{ dir: string; id?: string } | undefined> = []
 const setCalls: Array<{ scope?: { dir: string; id?: string } }> = []
@@ -80,8 +82,9 @@ const clientFor = (directory: string) => {
           },
         }
       },
-      shell: async () => {
+      shell: async (input: { command: string }) => {
         sentShell.push(directory)
+        shellCommands.push(input.command)
         return { data: undefined }
       },
       prompt: async () => ({ data: undefined }),
@@ -299,6 +302,7 @@ beforeEach(() => {
   params = {}
   readyValue = true
   sentShell.length = 0
+  shellCommands.length = 0
   syncedDirectories.length = 0
   resetScopes.length = 0
   setCalls.length = 0
@@ -343,11 +347,13 @@ describe("prompt submit worktree selection", () => {
 
     await submit.handleSubmit(event)
     selected = "/repo/worktree-b"
+    promptValue.splice(0, promptValue.length, ...appendReference(promptValue, "[引用]\n> pwd").prompt)
     await submit.handleSubmit(event)
 
     expect(createdClients).toEqual(["/repo/worktree-a", "/repo/worktree-b"])
     expect(createdSessions).toEqual(["/repo/worktree-a", "/repo/worktree-b"])
     expect(sentShell).toEqual(["/repo/worktree-a", "/repo/worktree-b"])
+    expect(shellCommands).toEqual(["ls", "ls"])
     expect(syncedDirectories).toEqual(["/repo/worktree-a", "/repo/worktree-a", "/repo/worktree-b", "/repo/worktree-b"])
     expect(promoted).toEqual([
       { directory: "/repo/worktree-a", sessionID: "session-1" },

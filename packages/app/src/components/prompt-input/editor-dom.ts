@@ -34,16 +34,30 @@ function isGhostNode(node: Node): boolean {
   return node.nodeType === Node.ELEMENT_NODE && (node as HTMLElement).dataset.ghost === "true"
 }
 
+function isEditorPill(node: Node) {
+  if (node.nodeType !== Node.ELEMENT_NODE) return false
+  const type = (node as HTMLElement).dataset.type
+  return type === "file" || type === "agent" || type === "quote"
+}
+
+function quoteContent(node: Node) {
+  if (node.nodeType !== Node.ELEMENT_NODE) return
+  const { type, quoteText } = (node as HTMLElement).dataset
+  if (type === "quote") return quoteText
+}
+
 export function getNodeLength(node: Node): number {
   if (isGhostNode(node)) return 0
   if (node.nodeType === Node.ELEMENT_NODE && (node as HTMLElement).tagName === "BR") return 1
-  return (node.textContent ?? "").replace(/\u200B/g, "").length
+  return quoteContent(node)?.length ?? (node.textContent ?? "").replace(/\u200B/g, "").length
 }
 
 export function getTextLength(node: Node): number {
   if (isGhostNode(node)) return 0
   if (node.nodeType === Node.TEXT_NODE) return (node.textContent ?? "").replace(/\u200B/g, "").length
   if (node.nodeType === Node.ELEMENT_NODE && (node as HTMLElement).tagName === "BR") return 1
+  const quote = quoteContent(node)
+  if (quote !== undefined) return quote.length
   let length = 0
   for (const child of Array.from(node.childNodes)) {
     length += getTextLength(child)
@@ -68,9 +82,7 @@ export function setCursorPosition(parent: HTMLElement, position: number) {
   while (node) {
     const length = getNodeLength(node)
     const isText = node.nodeType === Node.TEXT_NODE
-    const isPill =
-      node.nodeType === Node.ELEMENT_NODE &&
-      ((node as HTMLElement).dataset.type === "file" || (node as HTMLElement).dataset.type === "agent")
+    const isPill = isEditorPill(node)
     const isBreak = node.nodeType === Node.ELEMENT_NODE && (node as HTMLElement).tagName === "BR"
 
     if (isText && remaining <= length) {
@@ -133,9 +145,7 @@ export function setRangeEdge(parent: HTMLElement, range: Range, edge: "start" | 
   for (const node of nodes) {
     const length = getNodeLength(node)
     const isText = node.nodeType === Node.TEXT_NODE
-    const isPill =
-      node.nodeType === Node.ELEMENT_NODE &&
-      ((node as HTMLElement).dataset.type === "file" || (node as HTMLElement).dataset.type === "agent")
+    const isPill = isEditorPill(node)
     const isBreak = node.nodeType === Node.ELEMENT_NODE && (node as HTMLElement).tagName === "BR"
 
     if (isText && remaining <= length) {
@@ -212,6 +222,20 @@ export function parseFromDOM(editorRef: HTMLElement): Prompt {
     if (el.dataset.type === "agent") {
       flushText()
       pushAgent(el)
+      return
+    }
+    if (el.dataset.type === "quote" && el.dataset.quoteId && el.dataset.quoteText) {
+      flushText()
+      const content = el.dataset.quoteText
+      parts.push({
+        type: "quote",
+        id: el.dataset.quoteId,
+        preview: el.dataset.quotePreview ?? "",
+        content,
+        start: position,
+        end: position + content.length,
+      })
+      position += content.length
       return
     }
     if (el.tagName === "BR") {

@@ -2246,6 +2246,7 @@ export default function Page() {
                   takeFileOpenSource = fn
                 }}
                 onJumpTarget={(target) => void jumpToTarget(target)}
+                onQuote={focusInput}
                 setRetainViewport={(fn) => {
                   retainViewport = fn
                 }}

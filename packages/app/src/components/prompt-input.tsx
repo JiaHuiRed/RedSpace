@@ -28,6 +28,7 @@ import {
   ImageAttachmentPart,
   AgentPart,
   FileAttachmentPart,
+  type QuotePart,
 } from "@/context/prompt"
 import { useLayout } from "@/context/layout"
 import { useSDK } from "@/context/sdk"
@@ -90,6 +91,7 @@ import { useQueries, useQueryClient } from "@tanstack/solid-query"
 import { useQueryOptions } from "@/context/server-sync"
 import { pathKey } from "@/utils/path-key"
 import { getFilename } from "@redcode-ai/core/util/path"
+import { removeDraftQuote } from "@/utils/reference"
 
 interface PromptInputProps {
   class?: string
@@ -836,6 +838,43 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     return pill
   }
 
+  const createQuotePill = (part: QuotePart) => {
+    const pill = document.createElement("span")
+    pill.dataset.type = "quote"
+    pill.dataset.quoteId = part.id
+    pill.dataset.quoteText = part.content
+    pill.dataset.quotePreview = part.preview
+    pill.contentEditable = "false"
+    pill.className =
+      "mx-0.5 inline-flex max-w-full items-center gap-1 rounded-md bg-surface-raised px-1.5 align-baseline text-12-regular text-text-strong"
+    pill.title = part.content.trim()
+
+    const preview = document.createElement("span")
+    preview.className = "min-w-0 truncate"
+    preview.textContent = part.preview
+      ? language.t("reference.draft") + " · " + part.preview
+      : language.t("reference.draft")
+    const remove = document.createElement("button")
+    remove.type = "button"
+    remove.dataset.action = "remove-draft-quote"
+    remove.className = "shrink-0 rounded px-0.5 text-text-weak hover:text-text-strong focus-visible:text-text-strong"
+    remove.ariaLabel = language.t("reference.removeDraft")
+    remove.title = remove.ariaLabel
+    remove.textContent = "×"
+    remove.onkeydown = (event) => {
+      if (event.key === "Enter" || event.key === " ") event.stopPropagation()
+    }
+    remove.onclick = () => {
+      const next = removeDraftQuote(prompt.current(), part.id)
+      if (!next) return
+      closePopover()
+      prompt.set(next.prompt.length ? next.prompt : DEFAULT_PROMPT, next.cursor)
+      restoreFocus()
+    }
+    pill.append(preview, remove)
+    return pill
+  }
+
   const isNormalizedEditor = () =>
     Array.from(editorRef.childNodes).every((node) => {
       if (node.nodeType === Node.TEXT_NODE) {
@@ -853,6 +892,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       if (el.dataset.ghost === "true") return true
       if (el.dataset.type === "file") return true
       if (el.dataset.type === "agent") return true
+      if (el.dataset.type === "quote") return true
       return el.tagName === "BR"
     })
 
@@ -866,6 +906,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       if (part.type === "file" || part.type === "agent") {
         editorRef.appendChild(createPill(part))
       }
+      if (part.type === "quote") editorRef.appendChild(createQuotePill(part))
     }
 
     const last = editorRef.lastChild
@@ -919,6 +960,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     const dom = parseFromDOM(editorRef)
     if (isNormalizedEditor() && isPromptEqual(input, dom)) return
 
+    closePopover()
     renderEditorWithCursor(input)
   }
 
@@ -1314,6 +1356,13 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
 
     const ctrl = event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey
 
+    if (
+      event.key === "Enter" &&
+      ((store.popover === "at" && !atLoading() && atFlat().length === 0) ||
+        (store.popover === "slash" && slashFlat().length === 0))
+    ) {
+      closePopover()
+    }
     if (store.popover) {
       if (event.key === "Tab") {
         selectPopoverActive()

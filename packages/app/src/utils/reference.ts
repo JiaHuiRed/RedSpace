@@ -4,6 +4,7 @@
 // 决策：docs/notes/implemented/feature/2026-11-16-experience-roadmap-v2.md
 
 import type { Prompt } from "@/context/prompt"
+import { Identifier } from "./id"
 
 /** 单条引用的正文上限（与后台结果引用一致）。 */
 export const REFERENCE_TEXT_LIMIT = 2000
@@ -149,8 +150,7 @@ export function buildReference(input: ReferenceInput): Reference {
 }
 
 /**
- * 追加引用块到草稿末尾：不动已有部件（附件/@文件/Agent/图片都保留），只追加一个文本部件，
- * start/end 按现有内容长度累加，光标落到引用块末尾。
+ * 草稿中的引用可整段移除，发送时沿用已有的纯文本引用格式。
  */
 export function appendReference(prompt: Prompt, reference: Reference | string) {
   const block = typeof reference === "string" ? reference : reference.block
@@ -161,7 +161,32 @@ export function appendReference(prompt: Prompt, reference: Reference | string) {
   const content = `${separator}${block}\n`
   const cursor = base.length + content.length
   return {
-    prompt: [...parts, { type: "text" as const, content, start: base.length, end: cursor }],
+    prompt: [
+      ...parts,
+      {
+        type: "quote" as const,
+        id: Identifier.ascending("part"),
+        preview: (typeof reference === "string" ? block : reference.text).replace(/\s+/g, " ").trim().slice(0, 80),
+        content,
+        start: base.length,
+        end: cursor,
+      },
+    ],
     cursor,
   }
+}
+
+export function removeDraftQuote(prompt: Prompt, id: string): { prompt: Prompt; cursor: number } | undefined {
+  const quote = prompt.find((part) => part.type === "quote" && part.id === id)
+  if (!quote || quote.type !== "quote") return
+  let offset = 0
+  const remaining = prompt
+    .filter((part) => part !== quote)
+    .map((part) => {
+      if (part.type === "image") return part
+      const start = offset
+      offset += part.content.length
+      return { ...part, start, end: offset }
+    })
+  return { prompt: remaining, cursor: quote.start }
 }

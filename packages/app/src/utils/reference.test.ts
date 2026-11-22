@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { appendReference, buildReference, REFERENCE_TEXT_LIMIT, referenceLabel } from "./reference"
+import { appendReference, buildReference, REFERENCE_TEXT_LIMIT, referenceLabel, removeDraftQuote } from "./reference"
 import type { Prompt } from "@/context/prompt"
 
 describe("buildReference", () => {
@@ -104,7 +104,7 @@ describe("appendReference", () => {
     expect(next.prompt[0]).toEqual(prompt[0])
     expect(next.prompt[1]).toEqual(prompt[1])
     const appended = next.prompt[2]
-    if (appended.type !== "text") throw new Error("expected trailing text part")
+    if (appended.type !== "quote") throw new Error("expected trailing quote")
     expect(appended.start).toBe(10)
     expect(appended.content.startsWith("\n\n[引用 · 助手")).toBe(true)
     expect(appended.content.endsWith("\n")).toBe(true)
@@ -114,7 +114,27 @@ describe("appendReference", () => {
   test("does not add leading blank lines to an empty draft", () => {
     const next = appendReference([text("", 0)], "> block")
     const appended = next.prompt.at(-1)
-    if (!appended || appended.type !== "text") throw new Error("expected trailing text part")
+    if (!appended || appended.type !== "quote") throw new Error("expected trailing quote")
     expect(appended.content.startsWith("> block")).toBe(true)
+  })
+
+  test("removing one quote keeps other quotes, typed text, and file offsets", () => {
+    const first = appendReference([text("hello", 0)], "> repeated")
+    const second = appendReference(first.prompt, "> repeated")
+    const quote = first.prompt.at(-1)
+    const kept = second.prompt.at(-1)
+    if (quote?.type !== "quote" || kept?.type !== "quote") throw new Error("expected quotes")
+    const next = removeDraftQuote(
+      [
+        ...second.prompt,
+        { type: "file", content: "@a.ts", path: "a.ts", start: second.cursor, end: second.cursor + 5 },
+        text("also keep this", second.cursor + 5),
+      ],
+      quote.id,
+    )
+    expect(next?.cursor).toBe(5)
+    expect(next?.prompt.map((part) => part.type)).toEqual(["text", "quote", "file", "text"])
+    expect(next?.prompt[1]).toMatchObject({ id: kept.id, start: 5 })
+    expect(next?.prompt[2]).toMatchObject({ path: "a.ts", start: 5 + kept.content.length })
   })
 })

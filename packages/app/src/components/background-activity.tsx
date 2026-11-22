@@ -19,6 +19,7 @@ import { errorMessage } from "@/utils/session-helpers"
 import { useTerminal } from "@/context/terminal"
 import { useSessionLayout } from "@/context/session-layout"
 import { TaskSteering } from "@/components/task-steering"
+import { appendReference } from "@/utils/reference"
 import { base64Encode } from "@redcode-ai/core/util/encode"
 
 type JobStatus = "running" | "completed" | "error" | "cancelled"
@@ -475,7 +476,7 @@ function JobResultDialog(props: { row: Row; onSeen?: () => void }) {
     showToast({ title: language.t("session.share.copy.copied") })
   }
 
-  // 引用到草稿：把结果摘录追加成一条文本部件，原草稿内容与光标语义不动，也不发送。
+  // 引用结果与时间线引用使用同一个可移除的草稿部件。
   // 来源写在引文头部；超过 2K 字符只带末尾并标注，完整输出走复制/会话。
   // 261115 Red UX-17 复审：上限独立于服务端截断标记——服务端只标自己的 32K 上限，
   // 20K 的完整输出仍远超引用预算，不能整段塞进草稿。
@@ -487,12 +488,8 @@ function JobResultDialog(props: { row: Row; onSeen?: () => void }) {
     const body = over ? data.output.slice(-QUOTE_CHAR_CAP) : data.output
     const tail = over ? `\n…（${language.t("dialog.background.result.quoteTruncated")}）` : ""
     const text = `${header}${body}${tail}\n`
-    const parts = prompt.current()
-    let offset = 0
-    for (const part of parts) {
-      if ("content" in part) offset += part.content.length
-    }
-    prompt.set([...parts, { type: "text", content: text, start: offset, end: offset + text.length }])
+    const next = appendReference(prompt.current(), text.trim())
+    prompt.set(next.prompt, next.cursor)
     showToast({ title: language.t("dialog.background.result.quoted") })
   }
 

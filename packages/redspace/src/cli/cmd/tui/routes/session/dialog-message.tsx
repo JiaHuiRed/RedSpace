@@ -8,7 +8,7 @@ import { useToast } from "@tui/ui/toast"
 import * as Clipboard from "@tui/util/clipboard"
 import * as Log from "@redcode-ai/core/util/log"
 import type { PromptInfo } from "@tui/component/prompt/history"
-import type { Part, ToolPart } from "@redcode-ai/sdk/v2"
+import type { ToolPart } from "@redcode-ai/sdk/v2"
 import { strip } from "@tui/component/prompt/part"
 import { quoteMessageText, quoteSnippet, quoteTitle } from "@tui/util/quote"
 
@@ -23,6 +23,7 @@ export function DialogMessage(props: {
   const sdk = useSDK()
   const toast = useToast()
   const message = createMemo(() => sync.data.message[props.sessionID]?.find((x) => x.id === props.messageID))
+  const body = createMemo(() => quoteMessageText(sync.data.part[props.messageID] ?? []))
   const route = useRoute()
 
   // 261116 Red A04：工具输出也是可引用证据。只列有已完成输出的工具（末尾 4 条），
@@ -131,15 +132,12 @@ export function DialogMessage(props: {
                 title: "引用到草稿",
                 value: "message.quote",
                 description: "把本条正文追加到当前草稿，不自动发送",
+                disabled: !message() || !body(),
                 onSelect: (dialog: { clear: () => void }) => {
                   const msg = message()
-                  if (!msg) return
-                  const text = quoteMessageText((sync.data.part[msg.id] ?? []) as Part[])
-                  if (!text) {
-                    toast.show({ message: "本条没有可引用的正文（可能只有附件或内部提醒）", variant: "warning" })
-                    dialog.clear()
-                    return
-                  }
+                  const text = body()
+                  dialog.clear()
+                  if (!msg || !text) return
                   quote(
                     quoteSnippet(text, {
                       kind: "message",
@@ -148,7 +146,6 @@ export function DialogMessage(props: {
                       label: msg.role === "assistant" ? "助手消息" : "用户消息",
                     }),
                   )
-                  dialog.clear()
                 },
               },
               ...tools()
@@ -159,10 +156,8 @@ export function DialogMessage(props: {
                   description: quoteTitle(part.state.status === "completed" ? (part.state.output ?? "") : ""),
                   onSelect: (dialog: { clear: () => void }) => {
                     const output = part.state.status === "completed" ? part.state.output : undefined
-                    if (!output) {
-                      dialog.clear()
-                      return
-                    }
+                    dialog.clear()
+                    if (!output) return
                     quote(
                       quoteSnippet(output, {
                         kind: "tool",
@@ -172,7 +167,6 @@ export function DialogMessage(props: {
                         label: part.tool,
                       }),
                     )
-                    dialog.clear()
                   },
                 })),
             ]

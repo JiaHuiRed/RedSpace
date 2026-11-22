@@ -50,6 +50,44 @@ test.describe("smoke: session timeline", () => {
     await expectSessionTimelineReady(page, expectedPartIDs, expectedMessageIDs, errors)
     await expectCanScrollToStart(page, expectedPartIDs, expectedMessageIDs, errors)
   })
+
+  test("removing a quote keeps the draft and an empty mention picker does not swallow Enter", async ({ page }) => {
+    await mockRedCodeServer(page, {
+      sessions: fixture.sessions,
+      provider: fixture.provider,
+      directory: fixture.directory,
+      project: fixture.project,
+      pageMessages,
+    })
+    const promptURL = new RegExp("/session/" + fixture.sourceID + "/prompt_async$")
+    const headers = { "access-control-allow-origin": "*" }
+    await page.route(promptURL, (route) => route.fulfill({ status: 204, headers }))
+    await page.route(/\/find\/file(\?|$)/, (route) => route.fulfill({ json: [], headers }))
+    await configureSmokePage(page, fixture.directory)
+    await selectHomeProject(page, fixture.project.name)
+    await navigateToSession(page, fixture.directory, fixture.sourceID, fixture.expected.sourceTitle)
+    await expectSessionReady(page)
+
+    const editor = page.locator('[data-component="prompt-input"]')
+    await editor.fill("Keep my draft")
+    const row = page.locator('[data-timeline-row="UserMessage"]').last()
+    await row.hover()
+    await row.locator('[data-action="quote-row"]').click()
+    await expect(editor.locator('[data-type="quote"]')).toBeVisible()
+    await expect(editor).toBeFocused()
+    await editor.getByRole("button", { name: "Remove quote" }).press("Enter")
+    await expect(editor).toHaveText("Keep my draft")
+    await expect(editor).toBeFocused()
+
+    await editor.press("End")
+    await page.keyboard.insertText(" @missing-reference-for-smoke")
+    await expect(page.getByText("No matching results")).toBeVisible()
+    const sent = page.waitForRequest((request) => promptURL.test(request.url()) && request.method() === "POST")
+    await editor.press("Enter")
+    const body = (await sent).postDataJSON()
+    expect(body.parts).toHaveLength(1)
+    expect(body.parts[0]).toMatchObject({ type: "text", text: "Keep my draft @missing-reference-for-smoke" })
+  })
 })
 
 async function configureSmokePage(page: Page, directory: string) {

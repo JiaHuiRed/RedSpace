@@ -357,6 +357,7 @@ export function MessageTimeline(props: {
   setFileOpenSource?: (fn: () => FileOpenSource | undefined) => void
   /** 261116 Red A04：最近引用 chip 的跳转入口（由 session 的 jumpToTarget 承接）。 */
   onJumpTarget?: (target: RevealTarget) => void
+  onQuote?: () => void
   setRetainViewport?: (fn: () => () => void) => void
 }) {
   let touchGesture: number | undefined
@@ -1039,7 +1040,8 @@ export function MessageTimeline(props: {
   }
 
   const partText = (part: PartType) => {
-    if (part.type === "text" || part.type === "reasoning") return part.text
+    if (part.type === "text") return part.synthetic ? "" : part.text
+    if (part.type === "reasoning") return part.text
     if (part.type !== "tool") return ""
     const state = part.state
     const input = state.input === undefined ? "" : JSON.stringify(state.input)
@@ -1061,16 +1063,18 @@ export function MessageTimeline(props: {
     showToast({ title: language.t("dialog.background.result.quoted") })
     setSelectionChip(undefined)
     window.getSelection()?.removeAllRanges()
+    props.onQuote?.()
   }
 
   // 261116 Red A04：草稿旁的「引用来源」轻列表（每会话 8 条、最多 4 个会话）。
   // 终端来源由 TerminalPanel 通过 CustomEvent 接入（terminal → redcode:reference-added；
-  // 点击 → redcode:reference-terminal），不扩 prompt 类型；跳转复用 jumpToTarget，不另造
-  // 历史加载器。导航只移动阅读位置，不改 draft。
-  const recentList = createMemo(() => recentReferences(sessionID() ?? ""))
-  const [recentOpen, setRecentOpen] = createSignal(false)
+  // 点击 → redcode:reference-terminal）。导航复用 jumpToTarget，只移动阅读位置。
   const canOpenReference = (anchor: ReferenceAnchor) =>
     anchor.kind === "terminal" ? !!anchor.terminalID : referenceLocatable(anchor)
+  const recentList = createMemo(() =>
+    recentReferences(sessionID() ?? "").filter((item) => canOpenReference(item.anchor)),
+  )
+  const [recentOpen, setRecentOpen] = createSignal(false)
   const openReference = (item: RecentReference) => {
     const anchor = item.anchor
     if (anchor.kind === "terminal") {
@@ -1105,14 +1109,14 @@ export function MessageTimeline(props: {
 
   // 无选区时的整条引用：范围由被点的那一行决定（用户消息 / 助手片段 / 工具组），
   // 来源头部同样写明消息与片段 id。
-  const quoteRow = (row: TimelineRow.TimelineRow) => {
+  const quoteForRow = (row: TimelineRow.TimelineRow): { anchor: ReferenceAnchor; text: string } | undefined => {
     if (row._tag === "UserMessage") {
       const text = getMsgParts(row.userMessageID)
-        .filter((part) => part.type === "text")
-        .map((part) => (part.type === "text" ? part.text : ""))
+        .flatMap((part) => (part.type === "text" && !part.synthetic ? [part.text] : []))
         .join("\n")
-      appendQuote(
-        {
+      if (!text.trim()) return
+      return {
+        anchor: {
           kind: "message",
           sessionID: sessionID(),
           messageID: row.userMessageID,
@@ -1120,14 +1124,14 @@ export function MessageTimeline(props: {
           role: "user",
         },
         text,
-      )
-      return
+      }
     }
     if (row._tag !== "AssistantPart") return
     if (row.group.type === "part") {
       const part = getMsgPart(row.group.ref.messageID, row.group.ref.partID)
-      if (part) appendQuote(anchorFor(part, row.group.ref.messageID, row.userMessageID), partText(part))
-      return
+      const text = part ? partText(part) : ""
+      if (!part || !text.trim()) return
+      return { anchor: anchorFor(part, row.group.ref.messageID, row.userMessageID), text }
     }
     const text = row.group.refs
       .map((ref) => {
@@ -1136,8 +1140,9 @@ export function MessageTimeline(props: {
       })
       .filter((item) => !!item)
       .join("\n")
-    appendQuote(
-      {
+    if (!text.trim()) return
+    return {
+      anchor: {
         kind: "message",
         sessionID: sessionID(),
         messageID: row.group.refs[0]?.messageID,
@@ -1145,7 +1150,7 @@ export function MessageTimeline(props: {
         role: "assistant",
       },
       text,
-    )
+    }
   }
 
   const readSelection = () => {
@@ -1167,7 +1172,14 @@ export function MessageTimeline(props: {
     const owner = partID ? partOwner(partID) : undefined
     const anchor: ReferenceAnchor = owner
       ? anchorFor(owner.part, owner.message.id, userMessageID)
-      : { kind: "message", sessionID: sessionID(), userMessageID }
+      : {
+          kind: "message",
+          sessionID: sessionID(),
+          userMessageID,
+          ...(rowEl instanceof HTMLElement && rowEl.dataset.timelineRow === "UserMessage"
+            ? { messageID: userMessageID, role: "user" as const }
+            : {}),
+        }
 
     const rect = range.getBoundingClientRect()
     setSelectionChip({
@@ -2108,6 +2120,9 @@ export function MessageTimeline(props: {
   const [hoverRowKey, setHoverRowKey] = createSignal<string>()
 
   function TimelineRowFrame(input: { row: Accessor<FramedTimelineRow>; children: JSX.Element }) {
+    const quoteTarget = createMemo(() =>
+      hoverRowKey() === TimelineRow.key(input.row()) ? quoteForRow(input.row()) : undefined,
+    )
     const anchor = () => {
       const row = input.row()
       return row._tag === "CommentStrip" || (row._tag === "UserMessage" && row.anchor)
@@ -2143,25 +2158,22 @@ export function MessageTimeline(props: {
         {/* 261116 Red A04：没有选区时也能明确范围——按行引用整条消息/片段。 */}
         {/* 261121 Red 文字按钮直接浮在气泡右上角，行拉宽后与正文重叠；收成图标芯片
             （配方同下方 2676 行的行内悬浮芯片），说明文字收进 hover tooltip。 */}
-        <Show
-          when={
-            hoverRowKey() === TimelineRow.key(input.row()) &&
-            (input.row()._tag === "UserMessage" || input.row()._tag === "AssistantPart")
-          }
-        >
-          <button
-            type="button"
-            data-action="quote-row"
-            aria-label={language.t("dialog.background.result.quote")}
-            title={language.t("dialog.background.result.quote")}
-            class="absolute right-2 top-1 z-10 flex h-6 w-7 items-center justify-center rounded-[6px] border border-border-weaker-base bg-[color-mix(in_srgb,var(--surface-raised-stronger-non-alpha)_80%,transparent)] text-text-weak backdrop-blur-[0.75px] transition-colors hover:border-[var(--border-weak-base)] hover:text-text-strong"
-            onClick={(event) => {
-              event.stopPropagation()
-              quoteRow(input.row())
-            }}
-          >
-            <Icon name="speech-bubble" size="small" />
-          </button>
+        <Show when={quoteTarget()}>
+          {(target) => (
+            <button
+              type="button"
+              data-action="quote-row"
+              aria-label={language.t("dialog.background.result.quote")}
+              title={language.t("dialog.background.result.quote")}
+              class="absolute right-2 top-1 z-10 flex h-6 w-7 items-center justify-center rounded-[6px] border border-border-weaker-base bg-[color-mix(in_srgb,var(--surface-raised-stronger-non-alpha)_80%,transparent)] text-text-weak backdrop-blur-[0.75px] transition-colors hover:border-[var(--border-weak-base)] hover:text-text-strong"
+              onClick={(event) => {
+                event.stopPropagation()
+                appendQuote(target().anchor, target().text)
+              }}
+            >
+              <Icon name="speech-bubble" size="small" />
+            </button>
+          )}
         </Show>
         <div data-component="session-turn" class="min-w-0 w-full relative" style={{ height: "auto" }}>
           {input.children}
@@ -2952,8 +2964,7 @@ export function MessageTimeline(props: {
                   <button
                     type="button"
                     data-action="reference-open"
-                    disabled={!canOpenReference(item.anchor)}
-                    title={canOpenReference(item.anchor) ? item.preview : language.t("session.outline.unreachable")}
+                    title={item.preview}
                     class="flex w-full flex-col gap-0.5 rounded px-1.5 py-1 text-left text-sm hover:bg-surface-raised disabled:opacity-50"
                     onClick={() => openReference(item)}
                   >
@@ -2961,9 +2972,7 @@ export function MessageTimeline(props: {
                       <span class="truncate text-text-strong">{item.label}</span>
                       <span class="shrink-0 tabular-nums text-text-weak">{referenceTime(item.at)}</span>
                     </span>
-                    <span class="truncate text-text-weak">
-                      {canOpenReference(item.anchor) ? item.preview : language.t("session.outline.unreachable")}
-                    </span>
+                    <span class="truncate text-text-weak">{item.preview}</span>
                   </button>
                 )}
               </For>
@@ -2976,7 +2985,7 @@ export function MessageTimeline(props: {
             class="rounded-full border border-border-weak-base bg-surface-raised-stronger px-2 py-0.5 text-sm text-text-strong shadow-md hover:bg-surface-raised"
             onClick={() => setRecentOpen((open) => !open)}
           >
-            {language.t("dialog.background.result.quote")} · {recentList().length}
+            {language.t("reference.recent")} · {recentList().length}
           </button>
         </div>
       </Show>

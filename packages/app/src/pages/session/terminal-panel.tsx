@@ -62,6 +62,7 @@ export function TerminalPanel() {
     window.dispatchEvent(new CustomEvent("redcode:reference-added", { detail: { anchor: reference.anchor } }))
     setStore("selection", "")
     showToast({ title: language.t("dialog.background.result.quoted") })
+    command.trigger("input.focus")
   }
 
   const max = () => store.view * 0.6

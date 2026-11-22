@@ -1,5 +1,12 @@
 import { describe, expect, test } from "bun:test"
-import { createTextFragment, getCursorPosition, getNodeLength, getTextLength, setCursorPosition } from "./editor-dom"
+import {
+  createTextFragment,
+  getCursorPosition,
+  getNodeLength,
+  getTextLength,
+  parseFromDOM,
+  setCursorPosition,
+} from "./editor-dom"
 
 describe("prompt-input editor dom", () => {
   test("createTextFragment preserves newlines with consecutive br nodes", () => {
@@ -94,6 +101,26 @@ describe("prompt-input editor dom", () => {
     setCursorPosition(container, 3)
     expect(getCursorPosition(container)).toBe(3)
 
+    container.remove()
+  })
+
+  test("a draft quote keeps its wire text and offsets without including its button label", () => {
+    const container = document.createElement("div")
+    const quote = document.createElement("span")
+    quote.dataset.type = "quote"
+    quote.dataset.quoteId = "quote-1"
+    quote.dataset.quoteText = "[quote]\n> the actual text\n"
+    quote.textContent = "Quote preview ×"
+    container.append("before", quote, "after")
+    document.body.appendChild(container)
+    const end = 6 + quote.dataset.quoteText.length
+    expect(parseFromDOM(container)).toEqual([
+      { type: "text", content: "before", start: 0, end: 6 },
+      { type: "quote", id: "quote-1", content: quote.dataset.quoteText, preview: "", start: 6, end },
+      { type: "text", content: "after", start: end, end: end + 5 },
+    ])
+    setCursorPosition(container, end + 2)
+    expect(getCursorPosition(container)).toBe(end + 2)
     container.remove()
   })
 })

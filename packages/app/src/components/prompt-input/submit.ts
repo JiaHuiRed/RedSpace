@@ -387,9 +387,9 @@ export function createPromptSubmit(input: PromptSubmitInput) {
     event.preventDefault()
 
     const currentPrompt = prompt.current()
-    const text = currentPrompt.map((part) => ("content" in part ? part.content : "")).join("")
     const images = input.imageAttachments().slice()
     const mode = input.mode()
+    const text = draftText(mode === "shell" ? currentPrompt.filter((part) => part.type !== "quote") : currentPrompt)
 
     // 261109 Red 提交目标钉在点击那一刻：下面的 ready() 轮询最长等 5 秒，期间用户切到
     // 别的会话时，params / input.info() 已经是新会话，A 的草稿会被发进 B（连同模型调用）。
