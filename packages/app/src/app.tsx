@@ -10,7 +10,7 @@ import { Font } from "@redcode-ai/ui/font"
 import { Splash } from "@redcode-ai/ui/logo"
 import { ThemeProvider } from "@redcode-ai/ui/theme/context"
 import { MetaProvider } from "@solidjs/meta"
-import { type BaseRouterProps, Navigate, Route, Router } from "@solidjs/router"
+import { type BaseRouterProps, Navigate, Route, Router, useParams } from "@solidjs/router"
 import { QueryClient, QueryClientProvider } from "@tanstack/solid-query"
 import {
   type Component,
@@ -27,8 +27,7 @@ import {
 } from "solid-js"
 import { Dynamic } from "solid-js/web"
 import { CommandProvider } from "@/context/command"
-import { CommentsProvider } from "@/context/comments"
-import { FileProvider } from "@/context/file"
+import { SessionProviders } from "@/context/session-providers"
 import { GlobalSDKProvider } from "@/context/global-sdk"
 import { ServerSDKProvider } from "@/context/server-sdk"
 import { ServerSyncProvider } from "@/context/server-sync"
@@ -38,14 +37,13 @@ import { LayoutProvider } from "@/context/layout"
 import { ModelsProvider } from "@/context/models"
 import { NotificationProvider } from "@/context/notification"
 import { PermissionProvider } from "@/context/permission"
-import { PromptProvider } from "@/context/prompt"
 import { ServerConnection, ServerProvider, serverName, useServer } from "@/context/server"
 import { SettingsProvider } from "@/context/settings"
-import { TerminalProvider } from "@/context/terminal"
 import DirectoryLayout from "@/pages/directory-layout"
 import Layout from "@/pages/layout"
 import { DiagnosticErrorBoundary } from "./components/diagnostic-error-boundary"
 import { ErrorPage, formatError } from "./pages/error"
+import { decodeDirectory } from "@/utils/project-dir"
 import { useCheckServerHealth } from "./utils/server-health"
 import { awaitStartupHealth } from "./utils/startup-health"
 
@@ -90,11 +88,16 @@ function LazyFile(props: FileProps<unknown>) {
 }
 
 const SessionRoute = Object.assign(
-  () => (
-    <SessionProviders>
-      <Session />
-    </SessionProviders>
-  ),
+  () => {
+    const params = useParams()
+    return (
+      <Show when={params.id} fallback={<HomeRoute initialDirectory={params.dir ? decodeDirectory(params.dir) : undefined} />}>
+        <SessionProviders>
+          <Session />
+        </SessionProviders>
+      </Show>
+    )
+  },
   { preload: Session.preload },
 )
 
@@ -147,18 +150,6 @@ function AppShellProviders(props: ParentProps) {
         </LayoutProvider>
       </PermissionProvider>
     </SettingsProvider>
-  )
-}
-
-function SessionProviders(props: ParentProps) {
-  return (
-    <TerminalProvider>
-      <FileProvider>
-        <PromptProvider>
-          <CommentsProvider>{props.children}</CommentsProvider>
-        </PromptProvider>
-      </FileProvider>
-    </TerminalProvider>
   )
 }
 
@@ -382,7 +373,7 @@ export function AppInterface(props: {
                     <RouterRoot appChildren={props.children}>{routerProps.children as JSX.Element}</RouterRoot>
                   )}
                 >
-                  <Route path="/" component={HomeRoute} />
+                  <Route path="/" component={() => <HomeRoute />} />
                   <Route path="/chat" component={ChatRoute} />
                   <Route path="/:dir" component={DirectoryLayout}>
                     <Route path="/" component={() => <Navigate href="session" />} />

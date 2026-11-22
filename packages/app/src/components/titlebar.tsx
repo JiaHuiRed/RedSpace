@@ -86,13 +86,6 @@ export function Titlebar(props: { update?: TitlebarUpdate }) {
   })
 
   const path = () => `${location.pathname}${location.search}${location.hash}`
-  const creating = createMemo(() => {
-    if (!params.dir) return false
-    if (params.id) return false
-    const parts = location.pathname.replace(/\/+$/, "").split("/")
-    return parts.at(-1) === "session"
-  })
-
   createEffect(() => {
     const current = path()
 
@@ -173,13 +166,6 @@ function V2TitlebarContent(props: { update?: TitlebarUpdate }) {
   const mac = createMemo(() => platform.platform === "desktop" && platform.os === "macos")
   const windows = createMemo(() => platform.platform === "desktop" && platform.os === "windows")
   const linux = createMemo(() => platform.platform === "desktop" && platform.os === "linux")
-
-  const creating = createMemo(() => {
-    if (!params.dir) return false
-    if (params.id) return false
-    const parts = location.pathname.replace(/\/+$/, "").split("/")
-    return parts.at(-1) === "session"
-  })
 
   const globalSync = useServerSync()
   const navigate = useNavigate()
@@ -444,28 +430,22 @@ function V2TitlebarContent(props: { update?: TitlebarUpdate }) {
             )}
           </For>
         </div>
-        <Show
-          when={creating() && params.dir}
-          fallback={
-            <IconButtonV2
-              type="button"
-              variant="ghost-muted"
-              size="large"
-              class="shrink-0"
-              icon={<IconV2 name="plus" />}
-              as="a"
-              href={newSessionHref()}
-              disabled={!mode()}
-              aria-label={language.t("command.session.new")}
-            />
-          }
-        >
-          <NewSessionTabItem
-            href={`/${params.dir}/session`}
-            title={language.t("command.session.new")}
-            onClose={() => navigate(tabsEnriched().at(-1)?.href ?? "/")}
-          />
-        </Show>
+        <IconButtonV2
+          type="button"
+          variant="ghost-muted"
+          size="large"
+          class="shrink-0"
+          icon={<IconV2 name="plus" />}
+          as="a"
+          href={newSessionHref()}
+          onClick={(event) => {
+            if (mode() !== "code" || params.id || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+            event.preventDefault()
+            command.trigger("session.new")
+          }}
+          disabled={!mode()}
+          aria-label={language.t("command.session.new")}
+        />
         <Show when={tabsEnriched().length > 0}>
           <DropdownMenu gutter={4} placement="bottom-end">
             <DropdownMenu.Trigger
@@ -610,40 +590,5 @@ function ProjectTabAvatar(props: { project?: LocalProject; directory: string }) 
       {...getAvatarColors(props.project?.icon?.color)}
       class="size-4 rounded"
     />
-  )
-}
-
-function NewSessionTabItem(props: { href: string; title: string; onClose: () => void }) {
-  const language = useLanguage()
-  return (
-    <div class="group relative flex h-7 max-w-[312px] flex-row items-center gap-1.5 overflow-hidden rounded-[6px] bg-[var(--v2-overlay-simple-overlay-pressed)] pl-1.5 pr-8 whitespace-nowrap focus-within:outline focus-within:outline-2 focus-within:outline-offset-2 focus-within:outline-[var(--v2-border-border-focus)]">
-      <a
-        href={props.href}
-        aria-current="page"
-        class="flex h-full min-w-0 flex-1 flex-row items-center gap-1.5 overflow-hidden text-[13px] font-medium leading-none text-[var(--v2-text-text-base)]"
-      >
-        <span class="flex size-4 shrink-0 rotate-90 items-center justify-center">
-          <IconV2 name="edit" />
-        </span>
-        <span class="truncate">{props.title}</span>
-      </a>
-      <div class="absolute right-0 inset-y-0 flex w-7 items-center justify-center">
-        <IconButtonV2
-          size="small"
-          variant="ghost-muted"
-          onMouseDown={(event) => {
-            event.preventDefault()
-            event.stopPropagation()
-          }}
-          onClick={(event) => {
-            event.preventDefault()
-            event.stopPropagation()
-            props.onClose()
-          }}
-          icon={<IconV2 name="xmark-small" />}
-          aria-label={language.t("common.closeTab")}
-        />
-      </div>
-    </div>
   )
 }

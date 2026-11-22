@@ -706,7 +706,7 @@
 
 /* 261029 Red 外壳和卡片用边缘光，不给密集列表或正文叠加模糊。 */
 [data-component="home-dashboard"],
-[data-component="session-new-design"] {
+[data-component="session-new-design"]:not([data-embedded]) {
   background-image: radial-gradient(ellipse at 50% 0%, var(--glass-atmosphere), transparent 60%);
 }
 

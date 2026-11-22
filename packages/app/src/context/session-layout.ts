@@ -1,4 +1,4 @@
-import { useParams } from "@solidjs/router"
+import { useSessionParams } from "@/context/session-params"
 import { createMemo, type Accessor } from "solid-js"
 import { SYSTEM_TABS, useLayout } from "@/context/layout"
 import { same } from "@/utils/same"
@@ -9,7 +9,7 @@ import { same } from "@/utils/same"
 // 都在 context/layout，且被 prompt-input / dialog-select-file 两个组件消费。
 
 export const useSessionKey = () => {
-  const params = useParams()
+  const params = useSessionParams()
   const sessionKey = createMemo(() => `${params.dir}${params.id ? "/" + params.id : ""}`)
   return { params, sessionKey }
 }
