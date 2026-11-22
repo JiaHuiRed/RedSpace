@@ -433,6 +433,42 @@ describe("session_query", () => {
     }),
   )
 
+  // 261122 Red 第三批：请求侧只折 ASCII 大小写，与 SQLite lower() 同口径。此前 JS 用
+  // toLowerCase() 全量折叠，É→é 而库内仍是 É，含大写重音的目录返回 200 但零命中。
+  it.instance("matches accented directories under the same rule as sqlite lower()", () =>
+    Effect.gen(function* () {
+      const session = yield* (yield* Session.Service).create({})
+      yield* add(session.id, 100, "accent needle", "assistant")
+      // Windows 路径按大小写不敏感比较；POSIX 保持大小写敏感。两平台都必须能搜到
+      // 同一形态的重音目录，不能被 JS/SQLite 的折叠差异吞掉。
+      const windows = process.platform === "win32"
+      const recorded = windows ? "C:\\CafÉ\\Project" : "/tmp/CafÉ/Project"
+      Database.use((db) =>
+        db.update(SessionTable).set({ directory: recorded }).where(eq(SessionTable.id, session.id)).run(),
+      )
+      const exact = yield* query({ operation: "search", query: "accent needle" }, recorded)
+      if (!("results" in exact)) throw new Error("Expected search result")
+      expect(exact.results).toHaveLength(1)
+
+      if (windows) {
+        // ASCII 部分折叠后仍命中，É 原样保留
+        const folded = yield* query({ operation: "search", query: "accent needle" }, "c:\\cafÉ\\project")
+        if (!("results" in folded)) throw new Error("Expected search result")
+        expect(folded.results).toHaveLength(1)
+      }
+
+      // 重音不同的目录不能被当成同一个（É ≠ e）
+      const other = yield* query(
+        { operation: "search", query: "accent needle" },
+        windows ? "C:\\Cafe\\Project" : "/tmp/Cafe/Project",
+      )
+      if (!("results" in other)) throw new Error("Expected search result")
+      expect(other.results).toHaveLength(0)
+    }),
+  )
+
+  // 261122 Red 第三批：session_id 仍受目录作用域约束（跨目录需显式传目录），
+  // HTTP 端点改为传入会话记录的目录，让请求头形态不再参与比较。
   test("validates required fields, time bounds, literal queries and cursor scope", () => {
     const decode = Schema.decodeUnknownSync(Parameters)
     expect(() => decode({ operation: "search", query: "x", limit: 0 })).toThrow()

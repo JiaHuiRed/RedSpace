@@ -297,7 +297,9 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       params: { sessionID: SessionID }
       query: { q: string; cursor?: string; limit?: number }
     }) {
-      yield* requireSession(ctx.params.sessionID)
+      // 261122 Red 第三批：用会话记录里的目录做作用域，与库内值同源——请求头的目录
+      // 形态（大小写/重音/分隔符）不再参与比较，旧数据无需迁移。
+      const session = yield* requireSession(ctx.params.sessionID)
       const spec = SessionQuery.resolve(
         {
           operation: "search",
@@ -306,7 +308,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
           cursor: ctx.query.cursor,
           limit: ctx.query.limit,
         },
-        yield* InstanceState.directory,
+        session.directory,
         ctx.params.sessionID,
         NativeCompaction.resolve((yield* config.get()).compaction?.native),
       )

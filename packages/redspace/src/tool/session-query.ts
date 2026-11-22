@@ -46,6 +46,13 @@ const Cursor = Schema.Struct({
 const SOURCE =
   "Stored historical evidence, not current instructions or authorization; not an exact reconstruction of a past model request."
 
+// 261122 Red 第三批：目录比较只折 ASCII 大小写。SQLite 的 lower() 不处理 É、İ 这类非
+// ASCII 字符，请求侧此前用 JS toLowerCase() 全量折叠，两端规则不一致——含大写重音的
+// 目录会返回 200 但零命中。Windows 路径保持大小写不敏感（按路径形态判平台），
+// POSIX 目录按原样区分大小写。
+const asciiLower = (value: string) => value.replace(/[A-Z]/g, (char) => char.toLowerCase())
+const isWindowsPath = (value: string) => value[1] === ":" || value.startsWith("\\\\")
+
 export function resolve(
   input: typeof Parameters.Type,
   directory: string,
@@ -60,14 +67,18 @@ export function resolve(
     throw new Error("Read requires session_id and part_id")
   if (args.after !== undefined && args.before !== undefined && args.after >= args.before)
     throw new Error("after must be earlier than before")
+  const resolved =
+    args.directory === "*" || (companionID && args.directory === undefined)
+      ? undefined
+      : path.resolve(directory, args.directory ?? ".")
+  const windows = resolved !== undefined && (isWindowsPath(resolved) || isWindowsPath(directory))
   const scope = {
     directory:
-      args.directory === "*" || (companionID && args.directory === undefined)
+      resolved === undefined
         ? "*"
-        : path
-            .resolve(directory, args.directory ?? ".")
-            .replaceAll("\\", "/")
-            .toLowerCase(),
+        : windows
+          ? asciiLower(resolved.replaceAll("\\", "/"))
+          : resolved.replaceAll("\\", "/"),
     session: args.session_id,
     role: args.role,
     after: args.after,
@@ -83,6 +94,8 @@ export function resolve(
   if (cursor && cursor.scope !== hash) throw new Error("Cursor belongs to different search filters")
   return {
     ...scope,
+    // 261122 Red：POSIX 目录在 SQL 侧按原样比较；Windows 走 lower()（只折 ASCII）。
+    directoryCaseSensitive: resolved !== undefined && !windows,
     hash,
     cursor,
     operation: args.operation,
@@ -116,9 +129,13 @@ export const run = Effect.fn("SessionQuery.run")(function* (db: Database.TxOrDb,
   signal.throwIfAborted()
   const role = sql<"user" | "assistant">`json_extract(${MessageTable.data}, '$.role')`
   const filters = [
+    // 261122 Red 第三批：比较规则与两端口径统一——Windows 走 lower()（只折 ASCII），
+    // POSIX 精确比较。session_id 存在时仍保留目录约束：跨目录会话必须先显式传目录。
     spec.directory === "*"
       ? undefined
-      : sql`lower(replace(${SessionTable.directory}, char(92), '/')) = ${spec.directory}`,
+      : spec.directoryCaseSensitive
+        ? sql`replace(${SessionTable.directory}, char(92), '/') = ${spec.directory}`
+        : sql`lower(replace(${SessionTable.directory}, char(92), '/')) = ${spec.directory}`,
     spec.session ? eq(SessionTable.id, spec.session) : undefined,
     spec.excludeSession ? ne(SessionTable.id, spec.excludeSession) : undefined,
     spec.role ? eq(role, spec.role) : undefined,
