@@ -22,7 +22,7 @@ type Diff = {
   message: string
 }
 
-const repo = process.env.GH_REPO ?? "JiaHuiRed/redcode"
+const repo = process.env.GH_REPO ?? process.env.GITHUB_REPOSITORY ?? "JiaHuiRed/RedSpace"
 const bot = ["actions-user", "github-actions[bot]", "redcode", "redcode-agent[bot]"]
 const team = ["JiaHuiRed", ...bot]
 const order = ["Core", "TUI", "Desktop", "SDK", "Extensions"] as const
@@ -35,6 +35,26 @@ const sections = {
   "extensions/zed": "Extensions",
   github: "Extensions",
 } as const
+
+// Historical release ranges can cross an engine-directory rename. Match the more specific CLI rule first.
+const engineDirs = ["redspace", "opencode", "redcode"].map((name) => `packages/${name}`)
+const releaseAreas: ReadonlyArray<readonly [string, keyof typeof sections]> = [
+  ...engineDirs.flatMap((dir) => [
+    [`${dir}/src/cli/cmd`, "tui"],
+    [`${dir}/test/cli/tui`, "tui"],
+    [`${dir}/test/cli/cmd/tui`, "tui"],
+    [dir, "core"],
+  ] as const),
+  ["packages/core", "core"],
+  ["packages/llm", "core"],
+  ["packages/app", "app"],
+  ["packages/ui", "app"],
+  ["packages/desktop", "app"],
+  ["packages/sdk", "sdk"],
+  ["packages/plugin", "plugin"],
+  ["packages/extensions", "extensions/zed"],
+  ["github", "github"],
+]
 
 function ref(input: string) {
   if (input === "HEAD") return input
@@ -112,8 +132,8 @@ async function commits(from: string, to: string) {
     data.set(item.sha, { login: item.login, message: item.message.split("\n")[0] ?? "" })
   }
 
-  const log =
-    await $`git log ${base}..${head} --format=%H -- packages/redcode packages/sdk packages/plugin packages/desktop packages/app packages/extensions github`.text()
+  const paths = releaseAreas.map(([path]) => path)
+  const log = await $`git log ${base}..${head} --format=%H -- ${paths}`.text()
 
   const list: Commit[] = []
   for (const hash of log.split("\n").filter(Boolean)) {
@@ -125,12 +145,8 @@ async function commits(from: string, to: string) {
     const areas = new Set<string>()
 
     for (const file of diff.split("\n").filter(Boolean)) {
-      if (file.startsWith("packages/redcode/src/cli/cmd/")) areas.add("tui")
-      else if (file.startsWith("packages/redcode/")) areas.add("core")
-      else if (file.startsWith("packages/desktop/") || file.startsWith("packages/app/")) areas.add("app")
-      else if (file.startsWith("packages/sdk/") || file.startsWith("packages/plugin/")) areas.add("sdk")
-      else if (file.startsWith("packages/extensions/")) areas.add("extensions/zed")
-      else if (file.startsWith("github/")) areas.add("github")
+      const match = releaseAreas.find(([path]) => file.startsWith(path + "/"))
+      if (match) areas.add(match[1])
     }
 
     if (areas.size === 0) continue
