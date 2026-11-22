@@ -1,25 +1,6 @@
-// 260816 Yuqi：mock @redcode-ai/ui/message-part（tsx → solid-js），只测行生成逻辑。
-// 真实实现的纯函数部分等价：renderable 判空逻辑、groupParts 单 group 映射。
-import { describe, expect, mock, test } from "bun:test"
+import { describe, expect, test } from "bun:test"
 import { createMemo, createRoot, createSignal } from "solid-js"
-
-mock.module("@redcode-ai/ui/message-part", () => {
-  const renderable = (part: { type: string; text?: string }) => {
-    if (part.type === "tool") return true
-    if (part.type === "text") return !!part.text?.trim()
-    if (part.type === "reasoning") return !!part.text?.trim()
-    return false
-  }
-  const groupParts = (parts: { messageID: string; part: { id: string } }[]) =>
-    parts.map((item) => ({
-      key: `part:${item.messageID}:${item.part.id}`,
-      type: "part" as const,
-      ref: { messageID: item.messageID, partID: item.part.id },
-    }))
-  return { groupParts, renderable }
-})
-
-const { Timeline, TimelineCache, TimelineRow } = await import("./message-timeline.data")
+import { Timeline, TimelineCache, TimelineRow } from "./message-timeline.data"
 
 import type { AssistantMessage, Part, UserMessage } from "@redcode-ai/sdk/v2"
 
@@ -32,13 +13,13 @@ const assistantMessage = (id: string, created: number, parentID: string): Assist
 const textPart = (id: string, messageID: string): Part =>
   ({ id, sessionID: "s1", messageID, type: "text", text: "hello" }) as unknown as Part
 
-const toolPart = (id: string, messageID: string): Part =>
+const toolPart = (id: string, messageID: string, tool = "bash"): Part =>
   ({
     id,
     sessionID: "s1",
     messageID,
     type: "tool",
-    tool: "bash",
+    tool,
     callID: id,
     state: { status: "completed", input: {}, output: "ok", title: "bash", time: { start: 1, end: 2 } },
   }) as unknown as Part
@@ -645,8 +626,8 @@ describe("AssistantPart.repeatSignature — 连续工作段", () => {
       false,
     ).filter((row): row is Extract<TimelineRow, { _tag: "AssistantPart" }> => row._tag === "AssistantPart")
 
-  test("text → tool → tool → text：只有第二个工具延续署名", () => {
-    const rows = build([textPart("p1", "a1"), toolPart("p2", "a1"), toolPart("p3", "a1"), textPart("p4", "a1")])
+  test("正文 → 命令组 → 读取组 → 正文：只有读取组延续署名", () => {
+    const rows = build([textPart("p1", "a1"), toolPart("p2", "a1"), toolPart("p3", "a1", "read"), textPart("p4", "a1")])
     expect(rows.map((row) => row.repeatSignature)).toEqual([false, false, true, false])
   })
 
@@ -655,9 +636,10 @@ describe("AssistantPart.repeatSignature — 连续工作段", () => {
     expect(rows.map((row) => row.repeatSignature)).toEqual([false, false])
   })
 
-  test("tool → tool → text：正文出现即恢复署名", () => {
+  test("同组两条命令只显示一行，下一段正文恢复署名", () => {
     const rows = build([toolPart("p1", "a1"), toolPart("p2", "a1"), textPart("p3", "a1")])
-    expect(rows.map((row) => row.repeatSignature)).toEqual([false, true, false])
+    expect(rows.map((row) => row.group.type)).toEqual(["command", "part"])
+    expect(rows.map((row) => row.repeatSignature)).toEqual([false, false])
   })
 
   test("每轮从 false 起步（返回值只覆盖 assistant part，不受上一轮影响）", () => {

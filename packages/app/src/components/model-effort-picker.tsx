@@ -1,4 +1,4 @@
-import { For, Show, createEffect, createSignal, onCleanup, type Component } from "solid-js"
+import { For, Show, createEffect, createMemo, createSignal, onCleanup, type Component } from "solid-js"
 import { Icon } from "@redcode-ai/ui/icon"
 import { Tag } from "@redcode-ai/ui/tag"
 import { ProviderIcon } from "@redcode-ai/ui/provider-icon"
@@ -9,28 +9,20 @@ import {
   selectedEffortIndex,
 } from "@redcode-ai/ui/v2/components/effort-slider-v2.jsx"
 import { useLanguage } from "@/context/language"
+import type { ModelKey, useModels } from "@/context/models"
+import { isFreeModel, popularFirstProviders, recentProviderIDs } from "@/utils/model-picker"
 import "./model-effort-picker.css"
 
-export type PickerProvider = { id: string; name: string; source?: string }
+type PickerProvider = { id: string; name: string; source?: string }
 
-export type PickerModel = {
-  providerID: string
-  modelID: string
-  name: string
-  cost?: { input: number }
-  latest?: boolean
-}
-
-export interface ModelEffortPickerProps {
+interface ModelEffortPickerProps {
   /** 弹层开合。打开那一刻浏览态重置为当前模型的供应商（或第一个可用供应商）。 */
   open: () => boolean
   providers: () => PickerProvider[]
-  /** 最近使用过的供应商 ID（由模型最近记录推导），飞出层前排。 */
-  recentProviderIDs: () => string[]
-  /** 该供应商下可见的模型，调用方已做可见性过滤。 */
-  models: (providerID: string) => PickerModel[]
-  currentModel: () => { providerID: string; modelID: string } | undefined
-  onModelSelect: (model: PickerModel) => void
+  recentModels: () => readonly ({ provider: { id: string } } | undefined)[]
+  catalog: Pick<ReturnType<typeof useModels>, "list" | "visible">
+  currentModel: () => ModelKey | undefined
+  onModelSelect: (model: ModelKey) => void
   /** 默认模型行（仅 Chat 首页），提交 undefined 表示回到服务端默认；不给就不渲染。 */
   onReset?: () => void
   onManage: () => void
@@ -47,10 +39,6 @@ export interface ModelEffortPickerProps {
   /** 思考强度的循环快捷键提示（如 ⇧Ctrl+D），缺省不显示 kbd。 */
   keybindHint?: () => string | undefined
 }
-
-// 261121 Red 与 dialog-select-model 的 isFree 同一判定；redcode 免费模型挂「免费」标。
-const isFree = (providerID: string, cost: { input: number } | undefined) =>
-  providerID === "redcode" && (!cost || cost.input === 0)
 
 /**
  * 261121 Red 统一模型选择弹层内容：供应商行（悬停出右侧飞出层，最近使用→全部供应商→
@@ -82,6 +70,9 @@ export const ModelEffortPicker: Component<ModelEffortPickerProps> = (props) => {
     return "panel"
   }
 
+  const providers = createMemo(() => popularFirstProviders(props.providers()))
+  const recentIDs = createMemo(() => recentProviderIDs(props.recentModels()))
+
   // 打开即重置浏览态：当前模型的供应商优先，没有就落第一个可用供应商。
   createEffect(() => {
     if (!props.open()) return
@@ -89,7 +80,7 @@ export const ModelEffortPicker: Component<ModelEffortPickerProps> = (props) => {
     if (current) {
       setBrowse(current)
     } else {
-      setBrowse(props.providers()[0]?.id ?? "")
+      setBrowse(providers()[0]?.id ?? "")
     }
     setSide(measureSide())
     setPanelProviders(false)
@@ -135,8 +126,14 @@ export const ModelEffortPicker: Component<ModelEffortPickerProps> = (props) => {
     modelListRef?.focus({ preventScroll: true })
   }
 
-  const browsed = () => props.providers().find((p) => p.id === browse())
-  const browseModels = () => (browse() ? props.models(browse()) : [])
+  const browsed = () => providers().find((p) => p.id === browse())
+  const browseModels = createMemo(() => {
+    const providerID = browse()
+    if (!providerID) return []
+    return props.catalog
+      .list()
+      .filter((model) => model.provider.id === providerID && props.catalog.visible({ providerID, modelID: model.id }))
+  })
   const current = () => props.currentModel()
 
   const providerTag = (provider: PickerProvider) => {
@@ -147,14 +144,13 @@ export const ModelEffortPicker: Component<ModelEffortPickerProps> = (props) => {
   }
 
   const recent = () => {
-    const ids = new Set(props.recentProviderIDs())
-    const connected = new Map(props.providers().map((p) => [p.id, p]))
-    return [...ids].flatMap((id) => {
+    const connected = new Map(providers().map((p) => [p.id, p]))
+    return recentIDs().flatMap((id) => {
       const provider = connected.get(id)
       return provider ? [provider] : []
     })
   }
-  const rest = () => props.providers().filter((p) => !props.recentProviderIDs().includes(p.id))
+  const rest = () => providers().filter((p) => !recentIDs().includes(p.id))
 
   const effortSteps = () => availableEffortSteps(props.effort.steps)
   const effortIndex = () => selectedEffortIndex(effortSteps(), props.effort.current())
@@ -282,17 +278,21 @@ export const ModelEffortPicker: Component<ModelEffortPickerProps> = (props) => {
             <div class="mep-model-list" ref={modelListRef} tabindex="-1">
               <For each={browseModels()}>
                 {(model) => (
-                  <button type="button" class="mep-model-row" onClick={() => props.onModelSelect(model)}>
+                  <button
+                    type="button"
+                    class="mep-model-row"
+                    onClick={() => props.onModelSelect({ providerID: model.provider.id, modelID: model.id })}
+                  >
                     <span class="m-name">{model.name}</span>
                     <span class="mep-row-tags">
-                      <Show when={isFree(model.providerID, model.cost)}>
+                      <Show when={isFreeModel(model.provider.id, model.cost)}>
                         <Tag>{language.t("model.tag.free")}</Tag>
                       </Show>
                       <Show when={model.latest}>
                         <Tag>{language.t("model.tag.latest")}</Tag>
                       </Show>
                     </span>
-                    <Show when={current()?.providerID === model.providerID && current()?.modelID === model.modelID}>
+                    <Show when={current()?.providerID === model.provider.id && current()?.modelID === model.id}>
                       <span class="m-ok" aria-hidden="true">
                         <Icon name="check-small" size="small" />
                       </span>

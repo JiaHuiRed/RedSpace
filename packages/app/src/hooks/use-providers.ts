@@ -4,16 +4,10 @@ import { useParams } from "@solidjs/router"
 import { mergeProviderMaps } from "@/context/global-sync/utils"
 import { Iterable, pipe } from "effect"
 import { createMemo } from "solid-js"
+import { popularProviders } from "@/utils/model-picker"
 
-export const popularProviders = [
-  "opencode-go",
-  "anthropic",
-  "github-copilot",
-  "openai",
-  "google",
-  "openrouter",
-  "vercel",
-]
+export { popularProviders }
+
 const popularProviderSet = new Set(popularProviders)
 
 export function useProviders(directory?: () => string | undefined) {
