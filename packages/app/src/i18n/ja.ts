@@ -1368,6 +1368,8 @@ export const dict = {
   "notification.compacted.description": "{{before}} から {{after}} に圧縮しました",
   "home.title": "ホーム",
   "home.projects": "プロジェクト",
+  "home.projects.recent": "最近のプロジェクト",
+  "home.projects.all": "すべてのプロジェクト",
   "home.project.add": "プロジェクトを追加",
   "home.project.revealInExplorer": "ファイルマネージャーで表示",
   "home.sessions.search.placeholder": "セッションを検索",

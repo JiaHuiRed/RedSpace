@@ -40,6 +40,19 @@ import { HomeUsagePanel, readHomeUsageCollapsed } from "@/pages/home-usage"
 
 // 260710 Red 上游从 15 提到 64，修复"只显示 5 个会话"
 const HOME_SESSION_LIMIT = 64
+// 261123 Karina 侧栏「最近常用」默认展示数
+const HOME_PROJECT_RECENT_LIMIT = 5
+// 261123 Karina 分组的展开态走显式 localStorage（与 home-usage 的折叠态同一套）：
+// persisted() 在 web dev 下实测刷新后读不回，而这条状态必须跨刷新保留。
+const HOME_PROJECTS_EXPANDED_KEY = "redcode-home-projects-expanded"
+function readProjectsExpanded() {
+  if (typeof localStorage === "undefined") return false
+  return localStorage.getItem(HOME_PROJECTS_EXPANDED_KEY) === "1"
+}
+function writeProjectsExpanded(expanded: boolean) {
+  if (typeof localStorage === "undefined") return
+  localStorage.setItem(HOME_PROJECTS_EXPANDED_KEY, expanded ? "1" : "0")
+}
 const HOME_ROW =
   "flex min-w-0 w-full shrink-0 cursor-default items-center rounded-[6px] border-0 bg-transparent text-left [font-weight:530] text-v2-text-text-muted transition-colors duration-[120ms] ease-in-out hover:bg-v2-overlay-simple-overlay-hover focus-visible:bg-v2-overlay-simple-overlay-hover focus-visible:outline-none"
 const HOME_PROJECT_NAV_ROW = `${HOME_ROW} h-8 gap-1.5 px-2 [&>span]:min-w-0 [&>span]:overflow-hidden [&>span]:text-ellipsis [&>span]:whitespace-nowrap`
@@ -578,6 +591,69 @@ function HomeProjectColumn(props: {
   statsSessions: Session[]
 }) {
   const platform = usePlatform()
+
+  // 261123 Karina 项目列表分组：最近常用 + 全部折叠。
+  // 顺序直接沿用 server.projects 的 touch 冒泡（最近打开在前），不新增数据源。
+  // 三条边界：选中项掉出前 5 时强制补位（选中态已有品牌描边，不再加「当前」标签）；
+  // 展开后不重复前 5；项目 ≤5 时整个分组隐藏。
+  const [projectsExpanded, setProjectsExpanded] = createSignal(readProjectsExpanded())
+  const toggleProjectsExpanded = () => {
+    const next = !projectsExpanded()
+    setProjectsExpanded(next)
+    writeProjectsExpanded(next)
+  }
+  const recent = createMemo(() => {
+    const all = props.projects
+    if (all.length <= HOME_PROJECT_RECENT_LIMIT) return all
+    const head = all.slice(0, HOME_PROJECT_RECENT_LIMIT)
+    if (!props.selected || head.some((project) => project.worktree === props.selected)) return head
+    const current = all.find((project) => project.worktree === props.selected)
+    return current ? [...all.slice(0, HOME_PROJECT_RECENT_LIMIT - 1), current] : head
+  })
+  const rest = createMemo(() => {
+    const shown = new Set(recent().map((project) => project.worktree))
+    return props.projects.filter((project) => !shown.has(project.worktree))
+  })
+  const grouped = createMemo(() => rest().length > 0)
+  const renderProject = (project: LocalProject) => (
+    <ContextMenu>
+      <ContextMenu.Trigger
+        as="button"
+        type="button"
+        data-component="home-project-row"
+        data-action="home-project-row"
+        data-project={base64Encode(project.worktree)}
+        class={HOME_PROJECT_NAV_ROW}
+        classList={{ "bg-v2-overlay-simple-overlay-hover": props.selected === project.worktree }}
+        data-selected={props.selected === project.worktree ? "" : undefined}
+        aria-current={props.selected === project.worktree ? "page" : undefined}
+        onClick={() => props.selectProject(project.worktree)}
+      >
+        <HomeProjectAvatar project={project} />
+        <span>{displayName(project)}</span>
+        <HomeProjectStatus project={project} />
+      </ContextMenu.Trigger>
+      <ContextMenu.Portal>
+        <ContextMenu.Content>
+          {/* 260710 Red 在文件管理器中打开项目目录 */}
+          <ContextMenu.Item
+            data-action="home-project-reveal"
+            data-project={base64Encode(project.worktree)}
+            onSelect={() => platform.openPath?.(project.worktree)}
+          >
+            <ContextMenu.ItemLabel>{props.language.t("home.project.revealInExplorer")}</ContextMenu.ItemLabel>
+          </ContextMenu.Item>
+          <ContextMenu.Item
+            data-action="home-project-remove"
+            data-project={base64Encode(project.worktree)}
+            onSelect={() => props.removeProject(project)}
+          >
+            <ContextMenu.ItemLabel>{props.language.t("common.delete")}</ContextMenu.ItemLabel>
+          </ContextMenu.Item>
+        </ContextMenu.Content>
+      </ContextMenu.Portal>
+    </ContextMenu>
+  )
   return (
     // 260829 cc 侧栏从「贴边到底的柱子」改成浮起的卡片。
     //   起因：哥哥说看板卡片的玻璃质感明显比侧栏好，而看板卡片**根本没有玻璃**
@@ -632,47 +708,44 @@ function HomeProjectColumn(props: {
             </button>
           }
         >
-          <For each={props.projects}>
-            {(project) => (
-              <ContextMenu>
-                <ContextMenu.Trigger
-                  as="button"
-                  type="button"
-                  data-component="home-project-row"
-                  data-action="home-project-row"
-                  data-project={base64Encode(project.worktree)}
-                  class={HOME_PROJECT_NAV_ROW}
-                  classList={{ "bg-v2-overlay-simple-overlay-hover": props.selected === project.worktree }}
-                  data-selected={props.selected === project.worktree ? "" : undefined}
-                  aria-current={props.selected === project.worktree ? "page" : undefined}
-                  onClick={() => props.selectProject(project.worktree)}
-                >
-                  <HomeProjectAvatar project={project} />
-                  <span>{displayName(project)}</span>
-                  <HomeProjectStatus project={project} />
-                </ContextMenu.Trigger>
-                <ContextMenu.Portal>
-                  <ContextMenu.Content>
-                    {/* 260710 Red 在文件管理器中打开项目目录 */}
-                    <ContextMenu.Item
-                      data-action="home-project-reveal"
-                      data-project={base64Encode(project.worktree)}
-                      onSelect={() => platform.openPath?.(project.worktree)}
-                    >
-                      <ContextMenu.ItemLabel>{props.language.t("home.project.revealInExplorer")}</ContextMenu.ItemLabel>
-                    </ContextMenu.Item>
-                    <ContextMenu.Item
-                      data-action="home-project-remove"
-                      data-project={base64Encode(project.worktree)}
-                      onSelect={() => props.removeProject(project)}
-                    >
-                      <ContextMenu.ItemLabel>{props.language.t("common.delete")}</ContextMenu.ItemLabel>
-                    </ContextMenu.Item>
-                  </ContextMenu.Content>
-                </ContextMenu.Portal>
-              </ContextMenu>
-            )}
-          </For>
+          <Show when={grouped()}>
+            <div class="px-2 pb-1 pt-1 text-[11px] [font-weight:440] text-v2-text-text-faint">
+              {props.language.t("home.projects.recent")}
+            </div>
+          </Show>
+          <For each={recent()}>{renderProject}</For>
+          <Show when={grouped()}>
+            <button
+              type="button"
+              data-action="home-projects-toggle"
+              class={`${HOME_PROJECT_NAV_ROW} text-v2-text-text-faint`}
+              aria-expanded={projectsExpanded()}
+              onClick={toggleProjectsExpanded}
+            >
+              <span>{props.language.t("home.projects.all")}</span>
+              <span class="shrink-0 rounded-full bg-v2-overlay-simple-overlay-hover px-1.5 text-[10px] tabular-nums">
+                {rest().length}
+              </span>
+              <svg
+                aria-hidden="true"
+                viewBox="0 0 20 20"
+                class="ml-auto size-3 shrink-0 transition-transform duration-[160ms]"
+                classList={{ "rotate-180": projectsExpanded() }}
+              >
+                <path
+                  d="M5.5 8l4.5 4.5L14.5 8"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.6"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                />
+              </svg>
+            </button>
+             <Show when={projectsExpanded()}>
+              <For each={rest()}>{renderProject}</For>
+            </Show>
+          </Show>
         </Show>
       </div>
       {/* 260709 Red 左栏底部吸底：StatsPanel + 设置按钮固定在左栏最下方，不随项目列表滚动 */}

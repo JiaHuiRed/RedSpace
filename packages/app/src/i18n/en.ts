@@ -717,6 +717,8 @@ export const dict = {
   "home.empty.description": "Get started by opening a local project",
   "home.title": "Home",
   "home.projects": "Projects",
+  "home.projects.recent": "Recent",
+  "home.projects.all": "All projects",
   "home.project.add": "Add project",
   "home.project.revealInExplorer": "Reveal in file manager",
   "home.sessions.search.placeholder": "Search sessions",

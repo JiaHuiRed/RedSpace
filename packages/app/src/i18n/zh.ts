@@ -677,6 +677,8 @@ export const dict = {
   "home.empty.description": "通过打开本地项目开始使用",
   "home.title": "主页",
   "home.projects": "项目",
+  "home.projects.recent": "最近常用",
+  "home.projects.all": "全部项目",
   "home.project.add": "添加项目",
   "home.project.revealInExplorer": "在文件管理器中打开",
   "home.sessions.search.placeholder": "搜索会话",
