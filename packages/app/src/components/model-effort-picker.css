@@ -102,6 +102,7 @@
 .mep-panel-providers::-webkit-scrollbar-thumb {
   background: var(--border-weak-base);
   border-radius: 999px;
+  corner-shape: round;
   border: 2px solid transparent;
   background-clip: padding-box;
 }

@@ -273,7 +273,9 @@
 }
 .companion-frame [data-component="avatar"] {
   border-radius: 50%;
+  corner-shape: round;
   overflow: hidden;
+}
 }
 .companion-home-composer,
 .companion-frame [data-component="session-composer"] {
@@ -309,6 +311,7 @@
   width: 34px;
   height: 34px;
   border-radius: 50%;
+  corner-shape: round;
   padding: 7px;
   color: var(--chat-send-ready-ink);
   background: var(--chat-send-ready) !important;
