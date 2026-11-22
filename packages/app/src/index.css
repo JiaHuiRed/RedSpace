@@ -341,6 +341,17 @@
       本仓主色是浅色底，0.04 实测放大五倍才勉强可见，0.1 在 1x 下刚好是"有质感不脏"。 */
    --frost-noise: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.82' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3CfeComponentTransfer%3E%3CfeFuncA type='linear' slope='0.1'/%3E%3C/feComponentTransfer%3E%3C/filter%3E%3Crect width='180' height='180' filter='url(%23n)'/%3E%3C/svg%3E");
 
+  /* 261122 Karina 品牌泛光：卡片外侧一圈品牌色光晕，参照琉璃 --ll-glow-brand 的公式。
+     强度 0.5 = glow-compare.html 里 30% 那档在真实界面里的视觉等效：HTML 的卡片更透、
+     间距更大，实仓卡片 alpha 更高且只隔 8px，同一数值会被吃掉一档。0 = 关闭，
+     只剩中性阴影；嫌弱/嫌浓只动这一个数。
+     用 color-mix 而不是 rgba 三元组，跟本仓 token 体系一致。只给有独立边缘的面板，
+     main 壁纸模式满贴、没有边缘可发光，故意不加。 */
+  --frost-glow: 0.5;
+  --frost-glow-shadow:
+    0 0 calc(8px + 26px * var(--frost-glow))
+      color-mix(in srgb, var(--surface-brand-base) calc(var(--frost-glow) * 55%), transparent);
+
   /* 261029 Red 交互玻璃共用边缘与浮层底，不改变壁纸磨砂分档。 */
   --glass-edge: var(--frost-edge-highlight);
   --glass-border: var(--v2-border-border-base);
@@ -611,7 +622,9 @@
    box-shadow 不叠加：composer 自带 shadow-[var(--v2-elevation-raised)]，这里必须
    把它一起写回来，否则悬浮阴影会被这条规则整个顶掉。 ---------- */
 [data-app-frost] [data-frost-surface="titlebar"] {
-  box-shadow: inset 0 1px 0 var(--frost-edge-highlight);
+  box-shadow:
+    inset 0 1px 0 var(--frost-edge-highlight),
+    var(--frost-glow-shadow);
 }
 
 /* 侧栏是浮起卡片，自带 --v2-elevation-floating；box-shadow 不叠加，必须一起写回来。 */
@@ -619,6 +632,7 @@
 [data-app-frost] [data-frost-surface="home-usage"] {
   box-shadow:
     inset 0 1px 0 var(--frost-edge-highlight),
+    var(--frost-glow-shadow),
     var(--v2-elevation-floating);
 }
 
@@ -677,6 +691,19 @@
     var(--v2-elevation-raised);
 }
 
+/* 261122 Karina 品牌泛光：壁纸模式的主按钮外圈一层品牌色光晕，与卡片同一套语言。
+   首页「新建会话」是 ButtonV2 的 contrast 变体，它自带 --v2-elevation-button-contrast，
+   覆盖时必须一起写回；primary 没有固有阴影。 */
+[data-app-frost] [data-component="button"][data-variant="primary"] {
+  box-shadow: var(--frost-glow-shadow);
+}
+
+[data-app-frost] [data-component="button-v2"][data-variant="contrast"] {
+  box-shadow:
+    var(--frost-glow-shadow),
+    var(--v2-elevation-button-contrast);
+}
+
 /* 261029 Red 外壳和卡片用边缘光，不给密集列表或正文叠加模糊。 */
 [data-component="home-dashboard"],
 [data-component="session-new-design"] {
@@ -705,7 +732,10 @@
 
 [data-component="home-project-row"][data-selected] {
   background-color: var(--glass-control-fill);
-  box-shadow: inset 0 1px 0 var(--glass-edge);
+  box-shadow:
+    inset 0 1px 0 var(--glass-edge),
+    inset 0 0 0 1px color-mix(in srgb, var(--surface-brand-base) calc(var(--frost-glow) * 140%), transparent),
+    var(--frost-glow-shadow);
 }
 
 [data-component="home-session-row"]:hover,
@@ -772,6 +802,11 @@
 }
 
 @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  :root {
+    /* 261122 Karina 无障碍档关闭品牌泛光：与磨砂一起退成实面，不留装饰性光晕。 */
+    --frost-glow: 0;
+  }
+
   :root [data-component="popover-content"],
   :root [data-component="select-content"],
   :root [data-component="dropdown-menu-content"],
@@ -815,6 +850,7 @@
   border: 1px solid var(--v2-border-border-base);
   box-shadow:
     inset 0 1px 0 var(--frost-edge-highlight),
+    var(--frost-glow-shadow),
     var(--v2-elevation-floating);
 }
 
