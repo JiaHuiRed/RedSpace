@@ -3,13 +3,11 @@ import { Show, createMemo, createSignal, type Component } from "solid-js"
 import { Button } from "@redcode-ai/ui/button"
 import { Icon } from "@redcode-ai/ui/icon"
 import { ProviderIcon } from "@redcode-ai/ui/provider-icon"
-import { availableEffortSteps } from "@redcode-ai/ui/v2/components/effort-slider-v2.jsx"
 import { useModels, type ModelKey } from "@/context/models"
 import { useProviders } from "@/hooks/use-providers"
 import { useServerSync } from "@/context/server-sync"
 import { useLanguage } from "@/context/language"
-import { ModelEffortPicker, type PickerModel, type PickerProvider } from "./model-effort-picker"
-import { popularFirstProviders, recentProviderIDs } from "@/utils/model-recents"
+import { ModelEffortPicker } from "./model-effort-picker"
 
 export const ChatComposerTools: Component<{
   disabled?: boolean
@@ -40,17 +38,6 @@ export const ChatComposerTools: Component<{
   }
 
   const current = createMemo(() => (props.model ? props.catalog.find(props.model) : undefined))
-  const steps = createMemo(() => availableEffortSteps(Object.keys(current()?.variants ?? {})))
-
-  const providersList = (): PickerProvider[] =>
-    popularFirstProviders(providers.connected().map((p) => ({ id: p.id, name: p.name, source: p.source })))
-  const recentList = () => recentProviderIDs(models.recent.list().map(models.find), (item) => item.provider.id)
-  const modelsFor = (providerID: string): PickerModel[] =>
-    props.catalog
-      .list()
-      .filter((m) => m.provider.id === providerID && props.catalog.visible({ providerID: m.provider.id, modelID: m.id }))
-      .map((m) => ({ providerID: m.provider.id, modelID: m.id, name: m.name, cost: m.cost, latest: m.latest }))
-
   return (
     <div class={`flex min-w-0 flex-wrap items-center gap-1 ${props.class ?? ""}`}>
       <Kobalte open={open()} onOpenChange={openPicker} placement="top-start" gutter={8}>
@@ -75,16 +62,13 @@ export const ChatComposerTools: Component<{
           >
             <ModelEffortPicker
               open={open}
-              providers={providersList}
-              recentProviderIDs={recentList}
-              models={modelsFor}
-              currentModel={() =>
-                props.model ? { providerID: props.model.providerID, modelID: props.model.modelID } : undefined
-              }
+              providers={providers.connected}
+              recentModels={() => models.recent.list().map(models.find)}
+              catalog={props.catalog}
+              currentModel={() => props.model}
               onModelSelect={(picked) => {
-                // 选中即记入最近使用，与 Code 选择器一致；「默认模型」重置不记。
-                models.recent.push({ providerID: picked.providerID, modelID: picked.modelID })
-                props.onModelChange({ providerID: picked.providerID, modelID: picked.modelID })
+                models.recent.push(picked)
+                props.onModelChange(picked)
                 setOpen(false)
               }}
               onReset={() => {
@@ -94,7 +78,7 @@ export const ChatComposerTools: Component<{
               onManage={props.onManage}
               onConnect={props.onConnect}
               effort={{
-                steps: steps(),
+                steps: Object.keys(current()?.variants ?? {}),
                 current: () => props.variant,
                 onChange: props.onVariantChange,
                 unselectedLabel: language.t("prompt.variant.modelDefault"),

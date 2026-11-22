@@ -11,18 +11,10 @@ import { Dialog } from "@redcode-ai/ui/dialog"
 import { List } from "@redcode-ai/ui/list"
 import { Tooltip } from "@redcode-ai/ui/tooltip"
 import { ModelTooltip } from "./model-tooltip"
-import { ModelEffortPicker, type PickerModel, type PickerProvider } from "./model-effort-picker"
+import { ModelEffortPicker } from "./model-effort-picker"
 import { useLanguage } from "@/context/language"
 import { useServerSync } from "@/context/server-sync"
-import {
-  mergeRecentItems,
-  popularFirstProviders,
-  recentProviderIDs,
-  sortGroupsRecentFirst,
-} from "@/utils/model-recents"
-
-const isFree = (provider: string, cost: { input: number } | undefined) =>
-  provider === "redcode" && (!cost || cost.input === 0)
+import { isFreeModel, mergeRecentItems, sortGroupsRecentFirst } from "@/utils/model-picker"
 
 type ModelState = ReturnType<typeof useLocal>["model"]
 
@@ -40,19 +32,11 @@ const ModelList: Component<{
 
   // 261114 Red UX-05：最近使用前排——复用 local.model.recent（已解析的模型列表，
   // 按 provider+model 去重），失效/隐藏的记录静默跳过；主列表去重不重复出现。
-  const recents = createMemo((): ModelItem[] => {
-    const out: ModelItem[] = []
-    const seen = new Set<string>()
-    for (const entry of model.recent()) {
-      if (!entry) continue
-      const id = `${entry.provider.id}:${entry.id}`
-      if (seen.has(id)) continue
-      if (!model.visible({ modelID: entry.id, providerID: entry.provider.id })) continue
-      seen.add(id)
-      out.push({ ...entry, recent: true })
-    }
-    return out
-  })
+  const recents = createMemo((): ModelItem[] =>
+    model.recent().flatMap((entry) =>
+      entry && model.visible({ modelID: entry.id, providerID: entry.provider.id }) ? [{ ...entry, recent: true }] : [],
+    ),
+  )
 
   const models = createMemo((): ModelItem[] => {
     const base = model
@@ -86,7 +70,7 @@ const ModelList: Component<{
           placement="right-start"
           gutter={12}
           openDelay={0}
-          value={<ModelTooltip model={item} latest={item.latest} free={isFree(item.provider.id, item.cost)} />}
+          value={<ModelTooltip model={item} latest={item.latest} free={isFreeModel(item.provider.id, item.cost)} />}
         >
           {node}
         </Tooltip>
@@ -101,7 +85,7 @@ const ModelList: Component<{
       {(i) => (
         <div class="w-full flex items-center gap-x-2 text-13-regular">
           <span class="truncate">{i.name}</span>
-          <Show when={isFree(i.provider.id, i.cost)}>
+          <Show when={isFreeModel(i.provider.id, i.cost)}>
             <Tag>{language.t("model.tag.free")}</Tag>
           </Show>
           <Show when={i.latest}>
@@ -176,16 +160,6 @@ export function ModelSelectorPopover(props: {
     })
   }
 
-  // 261121 Red 供应商飞出层数据：已连接供应商按常用清单排序；「最近使用」由模型
-  // 最近记录推导（recentProviderIDs），不下真实供应商级 recency。
-  const providersList = (): PickerProvider[] =>
-    popularFirstProviders(providers.connected().map((p) => ({ id: p.id, name: p.name, source: p.source })))
-  const recentList = () => recentProviderIDs(model.recent(), (item) => item.provider.id)
-  const modelsFor = (providerID: string): PickerModel[] =>
-    model
-      .list()
-      .filter((m) => m.provider.id === providerID && model.visible({ modelID: m.id, providerID: m.provider.id }))
-      .map((m) => ({ providerID: m.provider.id, modelID: m.id, name: m.name, cost: m.cost, latest: m.latest }))
   const currentKey = () => {
     const item = model.current()
     return item ? { providerID: item.provider.id, modelID: item.id } : undefined
@@ -244,12 +218,12 @@ export function ModelSelectorPopover(props: {
           <Kobalte.Title class="sr-only">{language.t("dialog.model.select.title")}</Kobalte.Title>
           <ModelEffortPicker
             open={() => store.open}
-            providers={providersList}
-            recentProviderIDs={recentList}
-            models={modelsFor}
+            providers={providers.connected}
+            recentModels={model.recent}
+            catalog={model}
             currentModel={currentKey}
             onModelSelect={(picked) => {
-              model.set({ providerID: picked.providerID, modelID: picked.modelID }, { recent: true })
+              model.set(picked, { recent: true })
               close("select")
             }}
             onManage={handleManage}

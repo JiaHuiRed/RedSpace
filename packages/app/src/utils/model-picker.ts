@@ -1,13 +1,19 @@
-import { popularProviders } from "@/hooks/use-providers"
+export const popularProviders = [
+  "opencode-go",
+  "anthropic",
+  "github-copilot",
+  "openai",
+  "google",
+  "openrouter",
+  "vercel",
+]
 
-export type RecentModelItem = { recent?: boolean }
+export const isFreeModel = (providerID: string, cost: { input: number } | undefined) =>
+  providerID === "redcode" && (!cost || cost.input === 0)
 
-/**
- * 261121 Red 模型列表「最近使用」前排的共享逻辑，Code 会话选择器（dialog-select-model）
- * 与 Chat 首页选择器（chat-composer-tools）共用。最近条目须由调用方先解析并通过可见性
- * 过滤，这里只负责与主列表去重合并、让最近条目排在前排不重复出现。key 是 provider+model
- * 的稳定去重键——两侧模型对象形状不同（Code 是嵌套 provider 对象），由调用方给出。
- */
+type RecentModelItem = { recent?: boolean }
+
+/** 全量选择对话框把可见的最近模型排在前面。旧存档可能含重复的最近记录。 */
 export function mergeRecentItems<T>(recents: T[], models: T[], key: (item: T) => string): T[] {
   const seen = new Set<string>()
   const out: T[] = []
@@ -41,17 +47,8 @@ export function sortGroupsRecentFirst<T extends RecentModelItem>(
  * 261121 Red 供应商飞出层的「最近使用」分组：模型最近记录逐条取供应商 ID，去重保序。
  * 解析不到的条目（模型已下线等）静默跳过——recency 推导不该比主列表更响。
  */
-export function recentProviderIDs<T>(recent: readonly (T | undefined)[], providerID: (item: T) => string): string[] {
-  const out: string[] = []
-  const seen = new Set<string>()
-  for (const item of recent) {
-    if (!item) continue
-    const id = providerID(item)
-    if (seen.has(id)) continue
-    seen.add(id)
-    out.push(id)
-  }
-  return out
+export function recentProviderIDs(recent: readonly ({ provider: { id: string } } | undefined)[]): string[] {
+  return [...new Set(recent.flatMap((model) => model ? [model.provider.id] : []))]
 }
 
 /** 供应商飞出层的「全部供应商」排序：常用清单在前列表内保持相对顺序，其余按名称。 */

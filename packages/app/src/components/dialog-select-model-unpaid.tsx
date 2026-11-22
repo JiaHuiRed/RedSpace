@@ -8,6 +8,7 @@ import { Tooltip } from "@redcode-ai/ui/tooltip"
 import { type Component, Show } from "solid-js"
 import { useLocal } from "@/context/local"
 import { popularProviders, useProviders } from "@/hooks/use-providers"
+import { isFreeModel } from "@/utils/model-picker"
 import { ModelTooltip } from "./model-tooltip"
 import { useLanguage } from "@/context/language"
 import { useServerSync } from "@/context/server-sync"
@@ -62,7 +63,7 @@ export const DialogSelectModelUnpaid: Component<{ model?: ModelState }> = (props
                 <ModelTooltip
                   model={item}
                   latest={item.latest}
-                  free={item.provider.id === "redcode" && (!item.cost || item.cost.input === 0)}
+                  free={isFreeModel(item.provider.id, item.cost)}
                 />
               }
             >
