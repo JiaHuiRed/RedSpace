@@ -144,24 +144,69 @@ type HighlightRegistry = { set(name: string, value: unknown): void; delete(name:
 const highlightRegistry = () => (globalThis as { CSS?: { highlights?: HighlightRegistry } }).CSS?.highlights
 
 // 与后端搜索同为字面、区分大小写的子串；不改写 Solid 管理的正文。
-function highlightRanges(host: HTMLElement, query: string) {
+// 261122 Red 第三批：跨文本节点匹配。语法着色会把一段文本拆成多个 span，逐节点
+// indexOf 找不到 "git" + " status" 这类跨节点字面量。先在按文档序拼接的文本里定位，
+// 再把区间映射回首尾文本节点（Range 的起止可以落在不同节点上）。
+export function highlightRanges(host: HTMLElement, query: string) {
+  if (!query) return []
   const doc = host.ownerDocument
   const walker = doc.createTreeWalker(host, NodeFilter.SHOW_TEXT)
-  const ranges: Range[] = []
-  for (let node = walker.nextNode(); node && ranges.length < 200; node = walker.nextNode()) {
-    const value = node.nodeValue ?? ""
-    for (let from = 0; ranges.length < 200; ) {
-      const index = value.indexOf(query, from)
-      if (index === -1) break
-      const range = doc.createRange()
-      range.setStart(node, index)
-      range.setEnd(node, index + query.length)
-      ranges.push(range)
-      from = index + query.length
+  const nodes: Text[] = []
+  const starts: number[] = []
+  let text = ""
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    // 261122 Red 第三批：工具操作栏（折叠 trigger、按钮）与正文之间插入分隔符，
+    // 避免把「Read」+「 file.ts」这种跨区域的文字拼成一次假命中。
+    if (controlText(node)) {
+      text += "\u0000"
+      continue
     }
+    const value = node.nodeValue ?? ""
+    // 空节点不占区间，跳过才能保证 starts 严格递增、二分可靠
+    if (!value) continue
+    nodes.push(node as Text)
+    starts.push(text.length)
+    text += value
+  }
+  // 找到覆盖 index 的节点下标（starts 严格递增，二分）
+  const nodeAt = (index: number) => {
+    let low = 0
+    let high = nodes.length - 1
+    while (low <= high) {
+      const mid = (low + high) >> 1
+      const start = starts[mid]!
+      const length = nodes[mid]!.nodeValue?.length ?? 0
+      if (index < start) high = mid - 1
+      else if (index >= start + length) low = mid + 1
+      else return mid
+    }
+    return -1
+  }
+  const rangeFor = (from: number, to: number) => {
+    const first = nodeAt(from)
+    const last = nodeAt(to - 1)
+    if (first < 0 || last < 0) return undefined
+    const range = doc.createRange()
+    range.setStart(nodes[first]!, from - starts[first]!)
+    range.setEnd(nodes[last]!, to - starts[last]!)
+    return range
+  }
+  const ranges: Range[] = []
+  for (let cursor = 0; ranges.length < 200; ) {
+    const index = text.indexOf(query, cursor)
+    if (index === -1) break
+    const range = rangeFor(index, index + query.length)
+    if (!range) break
+    ranges.push(range)
+    cursor = index + query.length
   }
   return ranges
 }
+
+const controlText = (node: Node) =>
+  !!node.parentElement?.closest(
+    'button, [data-slot="collapsible-trigger"], [data-slot="accordion-trigger"], [data-component="context-tool-group-trigger"]',
+  )
 
 export const findPartHost = (root: ParentNode, partID: string) => {
   for (const el of root.querySelectorAll<HTMLElement>("[data-timeline-part-id]")) {

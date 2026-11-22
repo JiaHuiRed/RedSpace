@@ -37,6 +37,7 @@ import { pickGreetingKey } from "@/utils/greeting"
 import { sessionPermissionRequest } from "@/pages/session/composer/session-request-tree"
 import { HomeKanban } from "@/pages/home-kanban"
 import { HomeUsagePanel, readHomeUsageCollapsed } from "@/pages/home-usage"
+import { focusProjectRow } from "@/pages/home-focus"
 
 // 260710 Red 上游从 15 提到 64，修复"只显示 5 个会话"
 const HOME_SESSION_LIMIT = 64
@@ -615,6 +616,15 @@ function HomeProjectColumn(props: {
     return props.projects.filter((project) => !shown.has(project.worktree))
   })
   const grouped = createMemo(() => rest().length > 0)
+  // 261122 Red 第三批：键盘（或鼠标）激活「全部项目」里的条目后，选中态会让它补位到
+  // 「最近常用」，原按钮随分组迁移卸载，焦点掉回 body。重排后把焦点交给同一项目的新
+  // 按钮；用户已经点去别处时不抢（判据见 home-focus.ts）。
+  const restoreProjectFocus = (worktree: string) => {
+    const directory = base64Encode(worktree)
+    requestAnimationFrame(() => {
+      focusProjectRow(directory)
+    })
+  }
   const renderProject = (project: LocalProject) => (
     <ContextMenu>
       <ContextMenu.Trigger
@@ -627,7 +637,10 @@ function HomeProjectColumn(props: {
         classList={{ "bg-v2-overlay-simple-overlay-hover": props.selected === project.worktree }}
         data-selected={props.selected === project.worktree ? "" : undefined}
         aria-current={props.selected === project.worktree ? "page" : undefined}
-        onClick={() => props.selectProject(project.worktree)}
+        onClick={() => {
+          restoreProjectFocus(project.worktree)
+          props.selectProject(project.worktree)
+        }}
       >
         <HomeProjectAvatar project={project} />
         <span>{displayName(project)}</span>

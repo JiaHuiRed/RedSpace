@@ -4,6 +4,7 @@ import {
   createTimelineLocator,
   findGroupHost,
   findPartHost,
+  highlightRanges,
   openGroupTrigger,
   revealWithinHost,
   textMounted,
@@ -252,5 +253,34 @@ describe("timeline locate selectors", () => {
     const host = document.createElement("div")
     host.innerHTML = `<div data-component="collapsible"><button data-slot="collapsible-trigger"></button></div>`
     expect(toolBodyTrigger(host)).toBeUndefined()
+  })
+})
+
+describe("highlightRanges", () => {
+  test("matches a literal across text nodes split by syntax highlighting", () => {
+    const host = document.createElement("div")
+    host.innerHTML = `<span>git</span><span> status</span>`
+    const ranges = highlightRanges(host, "git status")
+    expect(ranges).toHaveLength(1)
+    expect(ranges[0]!.toString()).toBe("git status")
+  })
+
+  test("keeps separate ranges for repeated matches in one node", () => {
+    const host = document.createElement("div")
+    host.textContent = "needle and needle"
+    const ranges = highlightRanges(host, "needle")
+    expect(ranges).toHaveLength(2)
+    expect(ranges.map((range) => range.toString())).toEqual(["needle", "needle"])
+  })
+
+  test("does not join toolbar text with body text into one match", () => {
+    const host = document.createElement("div")
+    const trigger = document.createElement("button")
+    trigger.textContent = "git"
+    const body = document.createElement("div")
+    body.textContent = " status"
+    host.append(trigger, body)
+    expect(highlightRanges(host, "git status")).toHaveLength(0)
+    expect(highlightRanges(host, "status")).toHaveLength(1)
   })
 })
