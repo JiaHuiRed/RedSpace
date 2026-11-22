@@ -19,7 +19,9 @@ const it = testEffect(Layer.mergeAll(TestLLMServer.layer, CrossSpawnSpawner.defa
 // 各阶段耗时打进日志，Nightly 再超时可直接对账是哪段卡住。
 // 261115 Red Nightly 上 120s 也超了（本地 33s，CI 慢机约 3.6 倍），抬到 240s 留足
 // 余量——真卡死时日志里的 stage 时间戳仍能指出停在哪一段。
-const STAGE_BUDGET_MS = 240_000
+// 261122 Red Nightly 240s 仍是套件里唯一打满预算的用例（本地 35s，nightly 并行下
+// 慢机倍数已被压到 7x 量级），抬到 480s；再满就说明是真卡死，按 stage 日志定位。
+const STAGE_BUDGET_MS = 480_000
 const workerT0 = Date.now()
 const stage = (label: string) => console.log(`[project-worker] ${label} +${((Date.now() - workerT0) / 1000).toFixed(1)}s`)
 

@@ -31,12 +31,15 @@ describe("redcode run (non-interactive subprocess)", () => {
     "exits nonzero promptly when the model is unknown (regression for #27371)",
     ({ redcode }) =>
       Effect.gen(function* () {
+        // 30s harness budget: a hang is killed at the budget and reports a
+        // duration at or past it, so `< 30s` still means "exited on its own".
+        // Windows CI cold-starts the CLI in ~16s; 15s left no margin.
         const result = yield* redcode.run("say hi", {
           model: "test/nonexistent-model",
-          timeoutMs: 15_000,
+          timeoutMs: 30_000,
         })
         expect(result.exitCode).not.toBe(0)
-        expect(result.durationMs).toBeLessThan(15_000)
+        expect(result.durationMs).toBeLessThan(30_000)
       }),
     30_000,
   )
