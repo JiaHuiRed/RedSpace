@@ -35,6 +35,10 @@ import { RequestEvidence } from "./request-evidence"
 const log = Log.create({ service: "llm" })
 export const OUTPUT_TOKEN_MAX = ProviderTransform.OUTPUT_TOKEN_MAX
 
+// 261122 Red 第二批：本地准备（provider/config/auth 解析 + 请求组装）的慢阈值。
+// 超过即 warn，供默认 WARN 级日志区分本地管线与上游等待。
+const SLOW_SETUP_MS = 5_000
+
 // 260818 Red response headers are exposed with provider-dependent casing and the legacy
 // FreeLLMAPI name was `_routed_via`; normalize both forms before persisting the route marker.
 export function routedVia(headers: HeadersInit | undefined) {
@@ -46,6 +50,8 @@ export type StreamInput = {
   user: MessageV2.User
   sessionID: string
   parentSessionID?: string
+  // 261122 Red 第二批：本次流对应的助手消息 ID，进日志关联号（llm.setup / llm.ttft / llm.slow）。
+  messageID?: string
   model: Provider.Model
   agent: Agent.Info
   permission?: Permission.Ruleset
@@ -91,7 +97,7 @@ const live: Layer.Layer<
     const flags = yield* RuntimeFlags.Service
 
     const run = Effect.fn("LLM.run")(function* (input: StreamRequest) {
-      const l = log
+      const base = log
         .clone()
         .tag("providerID", input.model.providerID)
         .tag("modelID", input.model.id)
@@ -99,6 +105,8 @@ const live: Layer.Layer<
         .tag("small", (input.small ?? false).toString())
         .tag("agent", input.agent.name)
         .tag("mode", input.agent.mode)
+      // 261122 Red 第二批：消息级关联号。缺省（标题/压缩等无消息上下文的调用）保持原样。
+      const l = input.messageID ? base.tag("messageID", input.messageID) : base
       l.info("stream", {
         modelID: input.model.id,
         providerID: input.model.providerID,
@@ -143,6 +151,18 @@ const live: Layer.Layer<
         modelID: input.model.id,
         ms: Math.round(tPrepEnd - tResolveEnd),
       })
+      // 261122 Red 第二批：桌面默认 WARN 级，上面两条 info 不落盘。本地准备（resolve+prep）
+      // 超过慢阈值时用 warn 记一条，默认配置也能区分"本地管线慢"与"上游没响应"。
+      const setupMs = Math.round(tPrepEnd - tResolveStart)
+      if (setupMs >= SLOW_SETUP_MS) {
+        l.warn("llm.setup.slow", {
+          providerID: input.model.providerID,
+          modelID: input.model.id,
+          ms: setupMs,
+          resolveMs: Math.round(tResolveEnd - tResolveStart),
+          prepMs: Math.round(tPrepEnd - tResolveEnd),
+        })
+      }
 
       // Wire up toolExecutor for DWS workflow models so that tool calls
       // from the workflow service are executed via redcode's tool system

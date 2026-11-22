@@ -131,6 +131,10 @@ const byteLength = (text: string) => new TextEncoder().encode(text).length
 const TOOL_INPUT_PUSH_INTERVAL = 400
 const TOOL_INPUT_PUSH_CHARS = 2048
 
+// 261122 Red 第二批：慢轮次摘要阈值。桌面 sidecar 默认 WARN 级日志，info 的 llm.setup/ttft
+// 不会落盘；超过该阈值的 step 用 warn 记一条有界摘要（关联号 + 各段耗时），默认配置就能取证。
+const SLOW_TURN_MS = 30_000
+
 interface ProcessorContext extends Input {
   toolcalls: Record<string, ToolCall>
   shouldBreak: boolean
@@ -183,6 +187,9 @@ interface ProcessorContext extends Input {
   // 消息对象在事件之间会被替换成新对象，写在它上面的守卫会失效、导致重复记录（实测同一条
   // 消息打了 4 次、ms 递增，落库的是最后一次，把 TTFT 高估了几秒）。
   firstChunkAt: number | undefined
+  // 261122 Red 第二批：首段非空正文的时刻。首事件可能是 reasoning-start 或结构事件，
+  // 与「用户看到第一段字」不是同一件事，分开量才能回答"思考后卡住"还是"上游没动静"。
+  firstTextAt: number | undefined
 }
 
 type StreamEvent = LLMEvent
@@ -254,6 +261,7 @@ export const layer = Layer.effect(
         needsCompaction: false,
         currentText: undefined,
         firstChunkAt: undefined,
+        firstTextAt: undefined,
         reasoningMap: {},
         // 260710 Red n-gram 文本重复检测
         ngramDetector: new NgramDetector(),
@@ -654,7 +662,12 @@ export const layer = Layer.effect(
         // 这正是要回答"首次交互为什么慢"时该看的口径。
         if (ctx.firstChunkAt === undefined) {
           ctx.firstChunkAt = Date.now()
-          slog.info("llm.ttft", { ms: ctx.firstChunkAt - ctx.assistantMessage.time.created })
+          // 261122 Red 第二批：带关联号，便于与 llm.setup / llm.slow / 客户端提交耗时对齐。
+          slog.info("llm.ttft", {
+            ms: ctx.firstChunkAt - ctx.assistantMessage.time.created,
+            sessionID: ctx.sessionID,
+            messageID: ctx.assistantMessage.id,
+          })
         }
         // 每次都写回：消息对象可能被换成新的，只写一次会丢；值取自 ctx 所以不会漂移
         ctx.assistantMessage.time.firstChunk = ctx.firstChunkAt
@@ -1153,6 +1166,17 @@ export const layer = Layer.effect(
           case "text-delta": {
             // 261113 Red 估算口径按「已消费的模型输出字节」计（与 adapter 的 textBytes 同义）。
             ctx.streamedTextBytes += byteLength(value.text)
+            // 261122 Red 第二批：首段非空正文到达。与 llm.ttft 分开，回答"首事件之后多久
+            // 用户才看到字"——思考型模型这两段可以差出几十秒。
+            if (ctx.firstTextAt === undefined && value.text.length > 0) {
+              ctx.firstTextAt = Date.now()
+              slog.info("llm.firstText", {
+                ms: ctx.firstTextAt - ctx.assistantMessage.time.created,
+                ...(ctx.firstChunkAt ? { sinceEventMs: ctx.firstTextAt - ctx.firstChunkAt } : {}),
+                sessionID: ctx.sessionID,
+                messageID: ctx.assistantMessage.id,
+              })
+            }
             if (!ctx.currentText) return
             let delta = value.text
             while (true) {
@@ -1431,6 +1455,8 @@ export const layer = Layer.effect(
         streamInput: LLM.StreamInput,
         onResponse?: Effect.Effect<void>,
       ) {
+        // 261122 Red 第二批：慢轮次摘要按 step 自身计，不把前几个 step 的时间算进来。
+        const stepStartedAt = Date.now()
         slog.info("process")
         ctx.needsCompaction = false
         let responseReceived = false
@@ -1445,6 +1471,23 @@ export const layer = Layer.effect(
         // 一次 process() = 一个 step = 一条流（见 prompt.ts），断流必发生在 step-finish 之前，
         // 故失败那次不会改 message.cost/tokens，无需回滚计费；仅需清掉它落库的 part 与在途追踪。
         const baseline = new Set(MessageV2.parts(ctx.assistantMessage.id).map((p) => p.id))
+        // 261122 Red 第二批：step 出口的有界慢轮次摘要（WARN 级，默认桌面日志可见）。
+        // 只在总耗时超过阈值时记一条，带关联号与首事件/首正文节点；中断与失败也经过这里。
+        const summarizeTiming = Effect.sync(() => {
+          const totalMs = Date.now() - stepStartedAt
+          if (totalMs < SLOW_TURN_MS) return
+          // 首事件/首正文只在它们确实发生在本 step 时带上，避免多 step 时把上一步的旧时刻
+          // 算成这一步的耗时。
+          const firstEventMs = ctx.firstChunkAt && ctx.firstChunkAt >= stepStartedAt ? ctx.firstChunkAt - stepStartedAt : undefined
+          const firstTextMs = ctx.firstTextAt && ctx.firstTextAt >= stepStartedAt ? ctx.firstTextAt - stepStartedAt : undefined
+          slog.warn("llm.slow", {
+            sessionID: ctx.sessionID,
+            messageID: ctx.assistantMessage.id,
+            totalMs,
+            ...(firstEventMs !== undefined ? { firstEventMs } : {}),
+            ...(firstTextMs !== undefined ? { firstTextMs } : {}),
+          })
+        })
         return yield* Effect.gen(function* () {
           yield* Effect.gen(function* () {
             // 重试前清理上一次失败遗留的 part：从头重跑会重新生成全部内容，
@@ -1662,7 +1705,7 @@ export const layer = Layer.effect(
             return "stop"
           }
           return "continue"
-        })
+        }).pipe(Effect.ensuring(summarizeTiming))
       })
 
       return {

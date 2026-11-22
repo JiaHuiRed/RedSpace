@@ -2657,6 +2657,8 @@ export const layer = Layer.effect(
               permission: stepSettings.session.permission,
               sessionID,
               parentSessionID: stepSettings.session.parentID,
+              // 261122 Red 第二批：助手消息 ID 沿流带进日志，慢轮次摘要据此与客户端提交对齐。
+              messageID: handle.message.id,
               system,
               messages: outgoing,
               tools: sortedTools,
