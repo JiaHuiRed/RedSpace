@@ -80,3 +80,81 @@ test("the old new-session URL opens the same workspace and preserves its deep-li
   await expect(page.locator('[data-component="home-compose-section"] [data-component="prompt-input"]')).toHaveText("Carry this draft")
   await expect(page.locator('[data-component="home-board-section"]')).toBeVisible()
 })
+
+for (const selectLinked of [false, true]) {
+  test(`linked-session plus restores its own draft and sends to ${selectLinked ? "linked worktree" : "main"}`, async ({ page }) => {
+    const linked = "C:/RedCode/SmokeLinkedWorktree"
+    const dirSlug = base64Encode(linked)
+    const linkedSession = { ...fixture.sessions[0]!, directory: linked }
+    const sessions = [linkedSession]
+    const worktreeEntry = `/${dirSlug}/session`
+    await page.addInitScript(({ root, linked }) => {
+      if (localStorage.getItem("draft-scope-seeded")) return
+      localStorage.setItem("draft-scope-seeded", "true")
+      localStorage.setItem("RedCode.global.dat:server", JSON.stringify({
+        projects: { local: [{ worktree: root, expanded: true }] },
+      }))
+      for (const [key, content] of [[root, "Root draft"], [linked, "Linked draft"]]) {
+        const slug = btoa(key).replaceAll("+", "-").replaceAll("/", "_").replace(/=+$/, "")
+        localStorage.setItem(`${slug}/prompt.v2`, JSON.stringify({
+          prompt: [{ type: "text", content, start: 0, end: content.length }],
+          cursor: content.length,
+          context: { items: [] },
+        }))
+      }
+    }, { root: fixture.directory, linked })
+    await mockRedCodeServer(page, {
+      ...fixture,
+      project: { ...fixture.project, sandboxes: [linked] },
+      sessions,
+      pageMessages: () => ({ items: [] }),
+    })
+    const created: string[] = []
+    const target = selectLinked ? linked : fixture.directory
+    const session = { ...newSession, directory: target }
+    const serverPort = process.env.PLAYWRIGHT_SERVER_PORT ?? "4096"
+    await page.route((url) => url.port === serverPort, async (route) => {
+      const url = new URL(route.request().url())
+      if (url.pathname === "/path") {
+        const directory = url.searchParams.get("directory") ?? fixture.directory
+        return route.fulfill({ json: { state: directory, config: directory, worktree: fixture.directory, directory, home: "C:/RedCode" } })
+      }
+      if (url.pathname === "/experimental/session") return route.fulfill({ json: sessions })
+      if (url.pathname === "/session" && route.request().method() === "POST") {
+        created.push(decodeURIComponent(route.request().headers()["x-redcode-directory"] ?? ""))
+        sessions.push(session)
+        return route.fulfill({ json: session })
+      }
+      if (url.pathname === `/session/${session.id}/prompt_async`) return route.fulfill({ status: 204 })
+      if (url.pathname === "/config/providers") return route.fulfill({ json: { providers: fixture.provider.all } })
+      if (url.pathname === "/companion") return route.fulfill({ json: [] })
+      return route.fallback()
+    })
+    await page.goto(`${worktreeEntry}/${linkedSession.id}`)
+    const plus = page.getByRole("button", { name: "New session", exact: true }).first()
+    await expect(plus).toHaveAttribute("href", worktreeEntry)
+    await plus.click()
+    await expect(page).toHaveURL(new RegExp(`${worktreeEntry}$`))
+    const composer = page.locator('[data-component="home-compose-section"]')
+    const editor = composer.getByRole("textbox")
+    await expect(editor).toHaveText("Linked draft")
+    const workspace = composer.locator('[data-action="prompt-workspace"]')
+    await expect(workspace).toHaveText("main")
+    if (selectLinked) {
+      await workspace.click()
+      await page.getByRole("option", { name: "SmokeLinkedWorktree" }).click()
+      await expect(workspace).toHaveText("SmokeLinkedWorktree")
+    } else {
+      await workspace.click()
+      await page.getByRole("option", { name: "SmokeLinkedWorktree" }).click()
+      await workspace.click()
+      await page.getByRole("option", { name: "main", exact: true }).click()
+    }
+    await expect(editor).toHaveText("Linked draft")
+    await editor.press("Enter")
+    await expect.poll(() => created).toEqual([target])
+    await expect(page).toHaveURL(new RegExp(`/${base64Encode(target)}/session/${session.id}$`))
+    await page.goto(homeEntry)
+    await expect(composer.getByRole("textbox")).toHaveText("Root draft")
+  })
+}

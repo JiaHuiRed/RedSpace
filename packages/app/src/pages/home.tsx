@@ -114,18 +114,17 @@ export default function Home(props: { initialDirectory?: string }) {
   })
 
   const projects = createMemo(() => layout.projects.list())
-  const routeProject = createMemo(() => {
-    const directory = props.initialDirectory
-    if (!directory) return
-    return projects().find((project) => project.worktree === directory || project.sandboxes?.includes(directory))
-  })
+  const projectForDirectory = (directory: string | undefined) =>
+    projects().find((project) => project.worktree === directory || (directory && project.sandboxes?.includes(directory)))
+  const routeProject = createMemo(() => projectForDirectory(props.initialDirectory))
+  const explicitProject = createMemo(() => projects().find((project) => project.worktree === pickedProject()))
   const selectedProject = createMemo(() => {
-    const picked = projects().find((project) => project.worktree === pickedProject())
+    const picked = explicitProject()
     if (picked) return picked
     if (props.initialDirectory) return routeProject()
     return projects().find((project) => project.worktree === state.project) ?? projects()[0]
   })
-  const composerDirectory = () => selectedProject()?.worktree ?? props.initialDirectory
+  const composerDirectory = () => explicitProject()?.worktree ?? props.initialDirectory ?? selectedProject()?.worktree
   const projectDirectories = createMemo(() => {
     const project = selectedProject()
     if (!project) return []
@@ -411,8 +410,9 @@ export default function Home(props: { initialDirectory?: string }) {
                   directory={directory}
                   onProjectChange={selectProject}
                   onSubmit={() => {
-                    layout.projects.open(directory)
-                    server.projects.touch(directory)
+                    const project = projectForDirectory(directory)?.worktree ?? directory
+                    layout.projects.open(project)
+                    server.projects.touch(project)
                   }}
                   focusRequest={focusRequest()}
                 />
