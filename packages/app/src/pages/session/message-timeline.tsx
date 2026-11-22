@@ -60,6 +60,7 @@ import { showToast } from "@redcode-ai/ui/toast"
 import { Binary } from "@redcode-ai/core/util/binary"
 import { getDirectory, getFilename } from "@redcode-ai/core/util/path"
 import { Popover as KobaltePopover } from "@kobalte/core/popover"
+import type { SummaryDiff } from "@redcode-ai/ui/session-turn-data"
 import { normalize } from "@redcode-ai/ui/session-diff"
 import { useFileComponent, useFileOpen } from "@redcode-ai/ui/context/file"
 import { shouldMarkBoundaryGesture, normalizeWheelDelta } from "@/pages/session/message-gesture"
@@ -82,11 +83,9 @@ import { guiDiagnostics } from "@/context/gui-diagnostics"
 import { makeTimer } from "@solid-primitives/timer"
 import {
   MessageComment,
-  SummaryDiff,
   Timeline,
   TimelineCache,
   TimelineRow,
-  TimelineRowMap,
 } from "./message-timeline.data"
 import type { CompactionState } from "./compaction-state"
 import { collectTurnDeliverables, type TurnDeliverable } from "./turn-deliverables"
@@ -2177,7 +2176,7 @@ export function MessageTimeline(props: {
     )
   }
 
-  const renderAssistantPartGroup = (row: Accessor<TimelineRowMap["AssistantPart"]>) => {
+  const renderAssistantPartGroup = (row: Accessor<TimelineRowByTag<"AssistantPart">>) => {
     if (row().group.type !== "part") {
       const kind = createMemo(() => {
         const group = row().group

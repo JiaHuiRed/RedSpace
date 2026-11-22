@@ -15,6 +15,7 @@
     "./pet-host": "./src/pet/pet-host-protocol.ts",
     "./pet-host-client": "./src/pet/pet-host-client.ts",
     "./pet-host-files": "./src/pet/pet-host-files.ts",
+    "./session-turn-data": "./src/components/session-turn-data.ts",
     "./session-diff": "./src/components/session-diff.ts",
     "./i18n/*": "./src/i18n/*.ts",
     "./pierre": "./src/pierre/index.ts",

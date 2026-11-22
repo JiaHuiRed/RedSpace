@@ -1,53 +1,10 @@
 import { parseCommentNote, readCommentMetadata } from "@/utils/comment-note"
-import { AssistantMessage, Part, SessionStatus, SnapshotFileDiff, UserMessage } from "@redcode-ai/sdk/v2"
+import { AssistantMessage, Part, SessionStatus, UserMessage } from "@redcode-ai/sdk/v2"
 import { groupParts, PartGroup, renderable } from "@redcode-ai/ui/message-part"
+import { latestFileDiffs, reasoningHeading, unwrapErrorMessage, type SummaryDiff } from "@redcode-ai/ui/session-turn-data"
 import { Data, Equal } from "effect"
 import { createMemo } from "solid-js"
 import { resolveCompactionState, type CompactionState } from "./compaction-state"
-
-export type SummaryDiff = SnapshotFileDiff & { file: string }
-
-export type TimelineRowMap = {
-  CommentStrip: {
-    userMessageID: string
-    previousUserMessage: boolean
-  }
-  UserMessage: {
-    userMessageID: string
-    anchor: boolean
-    previousUserMessage: boolean
-  }
-  TurnDivider: {
-    userMessageID: string
-    label: "compaction" | "interrupted" | "truncated"
-    // 261013 Red 压缩四态（success/failed/canceled/pending/incomplete），仅 label
-    //   "compaction" 的分割线有值；state/attemptStarted 参与 key()，否则 cacheReusable
-    //   命中旧行、状态变化时 fold 不刷新
-    state?: CompactionState
-    attemptStarted?: boolean
-    tokensBefore?: number
-    tokensAfter?: number
-    reason?: string
-  }
-  AssistantPart: {
-    userMessageID: string
-    group: PartGroup
-    previousAssistantPart: boolean
-    /**
-     * 261113 Red 同一连续工作段不重复署名：只有「工具/思考接着工具/思考」才算延续段。
-     * 正文（text）是边界——模型开口就是新的一段说话，重新署名。
-     * 此前按「整轮只署一次」切，一长串工具调用左侧空掉一整列，读起来像没加载完。
-     * 决策与配色 seed 反解 → docs/notes/implemented/feature/2026-11-13-ui-redesign-phase-1-2.md。
-     */
-    repeatSignature: boolean
-  }
-  Thinking: { userMessageID: string; reasoningHeading?: string }
-  Retry: { userMessageID: string }
-  DiffSummary: { userMessageID: string; diffs: SummaryDiff[] }
-  Error: { userMessageID: string; text: string }
-  AssistantPending: { userMessageID: string }
-  BottomSpacer: {}
-}
 
 export namespace TimelineRow {
   export class CommentStrip extends Data.TaggedClass("CommentStrip")<{
@@ -62,6 +19,7 @@ export namespace TimelineRow {
   export class TurnDivider extends Data.TaggedClass("TurnDivider")<{
     userMessageID: string
     label: "compaction" | "interrupted" | "truncated"
+    // 压缩状态与 attemptStarted 参与行键，避免复用旧的分割线。
     state?: CompactionState
     attemptStarted?: boolean
     tokensBefore?: number
@@ -72,6 +30,12 @@ export namespace TimelineRow {
     userMessageID: string
     group: PartGroup
     previousAssistantPart: boolean
+    /**
+     * 261113 Red 同一连续工作段不重复署名：只有「工具/思考接着工具/思考」才算延续段。
+     * 正文（text）是边界——模型开口就是新的一段说话，重新署名。
+     * 此前按「整轮只署一次」切，一长串工具调用左侧空掉一整列，读起来像没加载完。
+     * 决策与配色 seed 反解 → docs/notes/implemented/feature/2026-11-13-ui-redesign-phase-1-2.md。
+     */
     repeatSignature: boolean
   }> {}
   export class Thinking extends Data.TaggedClass("Thinking")<{
@@ -476,15 +440,7 @@ export namespace Timeline {
     if (isActive && status === "retry") rows.push(new TimelineRow.Retry({ userMessageID: userMessage.id }))
 
     if (status === "idle" || !isActive) {
-      const seen = new Set<string>()
-      const diffs = (userMessage.summary?.diffs ?? [])
-        .reduceRight<SummaryDiff[]>((result, diff) => {
-          if (!isSummaryDiff(diff) || seen.has(diff.file)) return result
-          seen.add(diff.file)
-          result.push(diff)
-          return result
-        }, [])
-        .reverse()
+      const diffs = latestFileDiffs(userMessage.summary?.diffs ?? [])
       if (diffs.length > 0)
         rows.push(
           new TimelineRow.DiffSummary({
@@ -514,10 +470,6 @@ export namespace Timeline {
     return rows
   }
 
-  function isSummaryDiff(value: SnapshotFileDiff): value is SummaryDiff {
-    return typeof value.file === "string"
-  }
-
   // 261106 Red busy 期间活跃轮 memo 每 flush（16ms 帧合并）重算一次 heading：
   // 未命中标题的 reasoning 全文会被 4 个正则整扫，找不到时永远不命中缓存外层也没有缓存。
   // 按 part 对象 + text.length 记忆化（reasoning 文本只追加，长度不变即文本未变）；
@@ -531,92 +483,6 @@ export namespace Timeline {
     const value = reasoningHeading(text)
     reasoningHeadingCache.set(part, { length: text.length, value })
     return value
-  }
-
-  function reasoningHeading(text: string) {
-    const markdown = text.replace(/\r\n?/g, "\n")
-    const html = markdown.match(/<h[1-6][^>]*>([\s\S]*?)<\/h[1-6]>/i)
-    if (html?.[1]) {
-      const value = cleanHeading(html[1].replace(/<[^>]+>/g, " "))
-      if (value) return value
-    }
-
-    const atx = markdown.match(/^\s{0,3}#{1,6}[ \t]+(.+?)(?:[ \t]+#+[ \t]*)?$/m)
-    if (atx?.[1]) {
-      const value = cleanHeading(atx[1])
-      if (value) return value
-    }
-
-    const setext = markdown.match(/^([^\n]+)\n(?:=+|-+)\s*$/m)
-    if (setext?.[1]) {
-      const value = cleanHeading(setext[1])
-      if (value) return value
-    }
-
-    const strong = markdown.match(/^\s*(?:\*\*|__)(.+?)(?:\*\*|__)\s*$/m)
-    if (strong?.[1]) {
-      const value = cleanHeading(strong[1])
-      if (value) return value
-    }
-  }
-
-  function cleanHeading(value: string) {
-    return value
-      .replace(/`([^`]+)`/g, "$1")
-      .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
-      .replace(/[*_~]+/g, "")
-      .trim()
-  }
-
-  function unwrapErrorMessage(message: string) {
-    const text = message.replace(/^Error:\s*/, "").trim()
-
-    const parse = (value: string) => {
-      try {
-        return JSON.parse(value) as unknown
-      } catch {
-        return undefined
-      }
-    }
-
-    const read = (value: string) => {
-      const first = parse(value)
-      if (typeof first !== "string") return first
-      return parse(first.trim())
-    }
-
-    let json = read(text)
-
-    if (json === undefined) {
-      const start = text.indexOf("{")
-      const end = text.lastIndexOf("}")
-      if (start !== -1 && end > start) json = read(text.slice(start, end + 1))
-    }
-
-    if (!record(json)) return message
-
-    const err = record(json.error) ? json.error : undefined
-    if (err) {
-      const type = typeof err.type === "string" ? err.type : undefined
-      const msg = typeof err.message === "string" ? err.message : undefined
-      if (type && msg) return `${type}: ${msg}`
-      if (msg) return msg
-      if (type) return type
-      const code = typeof err.code === "string" ? err.code : undefined
-      if (code) return code
-    }
-
-    const msg = typeof json.message === "string" ? json.message : undefined
-    if (msg) return msg
-
-    const reason = typeof json.error === "string" ? json.error : undefined
-    if (reason) return reason
-
-    return message
-  }
-
-  function record(value: unknown): value is Record<string, unknown> {
-    return !!value && typeof value === "object" && !Array.isArray(value)
   }
 }
 
