@@ -170,13 +170,15 @@ describe("prompt-pin", () => {
     expect(pin!.nativeRevision).toBeUndefined()
   })
 
-  // 261117 Red F-07：compaction 结算只丢消息快照，tools 与 mcpGuide 继续复用
-  test("dropMessages 只清消息快照，保留 tools 与 mcpGuide", async () => {
+  test("dropMessages 只清消息快照，保留系统段、tools 与 mcpGuide", async () => {
+    const system = { scope: "test", env: ["environment"], instructions: ["instructions"] }
     PromptPin.save({
       sessionID: "ses_m",
       tools: defs(),
       mcpGuide: "guide",
+      system,
       messages: new Map([["msg_a", [{ type: "text", text: "x" }]]]),
+      transformed: new Set(["msg_a"]),
       nativeRevision: "rev-1",
     })
     await PromptPin.flush()
@@ -185,7 +187,9 @@ describe("prompt-pin", () => {
     const pin = PromptPin.load("ses_m")
     expect(pin).toBeDefined()
     expect(pin!.messages).toBeUndefined()
+    expect(pin!.transformed).toBeUndefined()
     expect(pin!.nativeRevision).toBeUndefined()
+    expect(pin!.system).toEqual(system)
     expect(pin!.mcpGuide).toBe("guide")
     expect(JSON.stringify(pin!.tools)).toBe(JSON.stringify(Object.fromEntries(defs())))
   })
@@ -196,9 +200,7 @@ describe("prompt-pin", () => {
     expect(PromptPin.load("ses_never")).toBeUndefined()
   })
 
-  // 261117 Red F-07 体积红线：msgPin 钉的是完整 parts（含 tool 结果），DB 实测单会话
-  // part 总量最高 289MB。超 512KB 只保留最近的消息——它们才是被插件追加重写的那批。
-  test("消息快照超上限只保留最近的，至少保留一条", async () => {
+  test("没有改写时，消息快照超上限继续保留近期正文", async () => {
     const chunk = "x".repeat(200 * 1024)
     const parts = new Map<string, unknown[]>([
       ["msg_old", [{ type: "text", text: chunk }]],
@@ -211,6 +213,26 @@ describe("prompt-pin", () => {
     const kept = Object.keys(pin!.messages!)
     // 200KB × 3 = 600KB > 512KB：保留最近两条，丢掉最老的
     expect(kept).toEqual(["msg_mid", "msg_new"])
+  })
+
+  test("消息快照优先保留最早的改写，仍按完整 JSON 计算上限", async () => {
+    const chunk = "字".repeat(90 * 1024)
+    PromptPin.save({
+      sessionID: "ses_big",
+      tools: defs(),
+      mcpGuide: undefined,
+      messages: new Map([
+        ["msg_first", [{ type: "text", text: chunk }]],
+        ["msg_next", [{ type: "text", text: chunk }]],
+        ["msg_recent", [{ type: "text", text: "recent" }]],
+      ]),
+      transformed: new Set(["msg_first", "msg_next"]),
+    })
+    await PromptPin.flush()
+    const pin = PromptPin.load("ses_big")!
+    expect(Object.keys(pin.messages!)).toEqual(["msg_first", "msg_recent"])
+    expect(pin.transformed).toEqual(["msg_first"])
+    expect(Buffer.byteLength(JSON.stringify(pin.messages))).toBeLessThanOrEqual(512 * 1024)
   })
 
   // 261118 Red 硬上限收紧：单条自身超限直接放弃，不让「至少保留一条」突破上限吃 GB 级磁盘

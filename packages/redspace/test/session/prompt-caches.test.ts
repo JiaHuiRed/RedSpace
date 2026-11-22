@@ -25,7 +25,11 @@ function sent(sessionID: string, modelKey = "p/m"): RequestSnapshot {
 }
 
 function seed(sessionID: string) {
-  PromptCaches.msgPin.set(sessionID, { sessionID, messages: new Map([["m1", [{ type: "text", text: "hi" }]]]) })
+  PromptCaches.msgPin.set(sessionID, {
+    sessionID,
+    messages: new Map([["m1", [{ type: "text", text: "hi" }]]]),
+    transformed: new Set(),
+  })
   PromptCaches.modelMsgs.set(
     sessionID,
     new Map([["p/m", { sessionID, modelKey: "p/m", messages: [{ role: "user", content: "hi" }] }]]),
@@ -35,7 +39,7 @@ function seed(sessionID: string) {
     new Map([
       [
         "p/m",
-        { sessionID, modelKey: "p/m", skills: undefined, env: ["env"], instructions: ["ins"], mcpGuide: undefined },
+        { sessionID, modelKey: "p/m", scope: "test", env: ["env"], instructions: ["ins"], mcpGuide: undefined },
       ],
     ]),
   )

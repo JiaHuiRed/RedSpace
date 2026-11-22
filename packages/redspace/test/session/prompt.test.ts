@@ -1661,6 +1661,8 @@ itColdResume.instance("cold resume restores pinned message bytes instead of repl
     // 模拟新进程：进程内缓存与插件会话状态都丢失，磁盘 pin 保留。
     // msgPin 与 modelMsgs 两个缓存都要清——只清前者会让本轮直接复用缓存的模型消息，
     // 掩盖历史重钉的真实行为（假绿）。
+    PromptCaches.system.delete(chat.id)
+    PromptCaches.tools.delete(chat.id)
     PromptCaches.msgPin.delete(chat.id)
     PromptCaches.modelMsgs.delete(chat.id)
     recallSeen.clear()

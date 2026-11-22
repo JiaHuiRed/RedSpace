@@ -1,6 +1,7 @@
 import fs from "node:fs"
 import fsp from "node:fs/promises"
 import path from "node:path"
+import { AppFileSystem } from "@redcode-ai/core/filesystem"
 import { Global } from "@redcode-ai/core/global"
 
 // 261029 Red 会话级 prompt 钉住的磁盘延伸：把冷组装定型的工具定义与 MCP guide 落盘，
@@ -26,10 +27,16 @@ import { Global } from "@redcode-ai/core/global"
 // 决策：docs/notes/implemented/feature/2026-11-17-prompt-pin-messages.md
 const VERSION = 3
 
-// 单会话消息快照硬上限。msgPin 钉的是完整 parts（含 tool 结果），DB 实测单会话
-// part 总量最高 289MB；原样落盘 × DISK_MAX(500) 会吃掉 GB 级磁盘。超限只保留最近的
-// 消息——它们正是被插件追加重写、最需要跨进程稳定的那批。
+// 261122 Red 会话消息与系统快照分别限额。系统快照超限时由冷组装重建，截断会改变前缀。
 const MESSAGE_BYTES_MAX = 512 * 1024
+const SYSTEM_BYTES_MAX = 256 * 1024
+
+export type SystemPin = {
+  scope: string
+  env: string[]
+  instructions: string[]
+  skills?: string
+}
 
 export interface Pin {
   version: number
@@ -37,8 +44,10 @@ export interface Pin {
   savedAt: number
   tools: Record<string, { description: string; inputSchema: unknown }>
   mcpGuide?: string
+  system?: SystemPin
   /** 已钉住消息的 parts 快照，按消息 ID 索引。冷恢复灌回 msgPin，避免重新 transform。 */
   messages?: Record<string, unknown[]>
+  transformed?: string[]
   /** 快照对应的 native compaction 版本；不匹配时整份消息快照作废。 */
   nativeRevision?: string
 }
@@ -83,17 +92,34 @@ export function load(sessionID: string): Pin | undefined {
       )
     )
       return undefined
+    if (parsed.system !== undefined && !isSystemPin(parsed.system)) delete parsed.system
     // 261117 Red 消息快照是可选增量：结构不对就单独丢掉，不影响工具 pin 的复用
     if (parsed.messages !== undefined) {
       if (typeof parsed.messages !== "object" || parsed.messages === null || Array.isArray(parsed.messages))
         delete parsed.messages
       else if (!Object.values(parsed.messages).every((parts) => Array.isArray(parts))) delete parsed.messages
     }
+    if (!parsed.messages || !isStringArray(parsed.transformed)) delete parsed.transformed
     return parsed
   } catch {
     // 损坏的 pin 直接弃用：下次冷组装会用新内容覆盖它
     return undefined
   }
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string")
+}
+
+function isSystemPin(system: SystemPin | null) {
+  return (
+    system !== null &&
+    typeof system.scope === "string" &&
+    isStringArray(system.env) &&
+    isStringArray(system.instructions) &&
+    (system.skills === undefined || typeof system.skills === "string") &&
+    Buffer.byteLength(JSON.stringify(system)) <= SYSTEM_BYTES_MAX
+  )
 }
 
 // 261029 Red inputSchema 运行时是 AI SDK Schema 对象（Symbol 标记 + getter + validate），
@@ -108,33 +134,41 @@ function extractSchema(value: unknown): unknown {
   return value
 }
 
-// 261117 Red 消息快照按体积裁剪：从最近的消息往前累计，超过上限就停。
-// 261118 Red 收紧为严格硬上限：单条自身超限直接放弃该条，不再「至少保留一条」无限突破——
-// DB 实测单会话 part 曾达 289MB，原样落盘会吃掉 GB 级磁盘；512KB 必须是真上限而非软目标。
+// 261122 Red 优先保存数据库无法复原的改写，从历史开头开始以保住最长前缀。
+// 剩余空间仍给近期消息。比可用空间大的改写会被跳过，后面的较小改写仍可入盘。
 // 决策更新：docs/notes/implemented/feature/2026-11-17-prompt-pin-messages.md「体积硬上限」节
-function packMessages(messages: Map<string, unknown[]>): Record<string, unknown[]> | undefined {
+function packMessages(messages: Map<string, unknown[]>, transformed?: ReadonlySet<string>) {
   const entries = [...messages]
-  if (!entries.length) return undefined
-  const kept: [string, unknown[]][] = []
-  let bytes = 0
-  for (let index = entries.length - 1; index >= 0; index--) {
-    const size = Buffer.byteLength(JSON.stringify(entries[index][1]))
-    if (size > MESSAGE_BYTES_MAX) continue
-    if (bytes + size > MESSAGE_BYTES_MAX) break
+  const changed = entries.filter(([id]) => transformed?.has(id))
+  const recent = entries.filter(([id]) => !transformed?.has(id)).reverse()
+  const kept = new Set<string>()
+  let bytes = 2
+  for (const [id, parts] of [...changed, ...recent]) {
+    const size = Buffer.byteLength(JSON.stringify(id)) + Buffer.byteLength(JSON.stringify(parts)) + 2
+    if (size + 2 > MESSAGE_BYTES_MAX) continue
+    if (bytes + size > MESSAGE_BYTES_MAX) {
+      if (transformed?.has(id)) continue
+      break
+    }
     bytes += size
-    kept.push(entries[index])
+    kept.add(id)
   }
-  return kept.length ? Object.fromEntries(kept.reverse()) : undefined
+  if (kept.size === 0) return {}
+  return {
+    messages: Object.fromEntries(entries.filter(([id]) => kept.has(id))),
+    transformed: changed.flatMap(([id]) => (kept.has(id) ? [id] : [])),
+  }
 }
 
 export function save(input: {
   sessionID: string
   tools: Map<string, { description: string; inputSchema: unknown }>
   mcpGuide: string | undefined
+  system?: SystemPin
   messages?: Map<string, unknown[]>
+  transformed?: ReadonlySet<string>
   nativeRevision?: string
 }): void {
-  const messages = input.messages ? packMessages(input.messages) : undefined
   const pin: Pin = {
     version: VERSION,
     sessionID: input.sessionID,
@@ -143,7 +177,8 @@ export function save(input: {
       [...input.tools].map(([k, t]) => [k, { description: t.description, inputSchema: extractSchema(t.inputSchema) }]),
     ),
     ...(input.mcpGuide !== undefined ? { mcpGuide: input.mcpGuide } : {}),
-    ...(messages !== undefined ? { messages } : {}),
+    ...(input.system && isSystemPin(input.system) ? { system: input.system } : {}),
+    ...(input.messages ? packMessages(input.messages, input.transformed) : {}),
     ...(input.nativeRevision !== undefined ? { nativeRevision: input.nativeRevision } : {}),
   }
   writes++
@@ -152,8 +187,7 @@ export function save(input: {
   const shouldPrune = writes % PRUNE_EVERY === 0
   writeChain = writeChain
     .then(async () => {
-      await fsp.mkdir(dir(), { recursive: true })
-      await fsp.writeFile(file(input.sessionID), JSON.stringify(pin), "utf-8")
+      await AppFileSystem.writeFileAtomic(file(input.sessionID), JSON.stringify(pin), 0o600)
       if (shouldPrune) await prune()
     })
     .catch(() => {}) // 写失败不影响请求主路径：最坏下次重启没有 pin，多付一次全价重建（即部署前行为）
@@ -177,9 +211,10 @@ export function dropMessages(sessionID: string): void {
       const pin = load(sessionID)
       if (!pin?.messages) return
       delete pin.messages
+      delete pin.transformed
       delete pin.nativeRevision
       pin.savedAt = Date.now()
-      await fsp.writeFile(file(sessionID), JSON.stringify(pin), "utf-8")
+      await AppFileSystem.writeFileAtomic(file(sessionID), JSON.stringify(pin), 0o600)
     })
     .catch(() => {}) // 清失败最坏是冷恢复钉回旧快照，与部署前行为一致
 }

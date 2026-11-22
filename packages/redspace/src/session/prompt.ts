@@ -10,6 +10,7 @@ import { ContextSnapshot } from "./context-snapshot"
 import { PrefixProbe } from "./prefix-probe"
 import * as Log from "@redcode-ai/core/util/log"
 import { Global } from "@redcode-ai/core/global"
+import { InstallationVersion } from "@redcode-ai/core/installation/version"
 import { SessionRevert } from "./revert"
 import * as Session from "./session"
 import { Agent } from "../agent/agent"
@@ -1923,6 +1924,55 @@ export const layer = Layer.effect(
           break
         }
         if (nativeSpec.enabled) msgs = NativeRuntime.project(sessionID, msgs, nativeSpec, nativeBlocks)
+        touchSession(sessionID)
+        const modelKey = `${model.providerID}/${model.id}`
+        // 261122 Red 重启沿用当前会话的系统段。新会话、升级、目录/模式或显式指令配置变化会重新组装。
+        // 决策：docs/notes/implemented/feature/2026-11-17-prompt-pin-messages.md
+        const systemScope = String(
+          Bun.hash(
+            JSON.stringify([
+              InstallationVersion,
+              modelKey,
+              ctx.directory,
+              ctx.worktree,
+              process.platform,
+              chatMode,
+              nativeConfig.instructions,
+              nativeConfig.instruction_budget,
+            ]),
+          ),
+        )
+        const sessionSystem = _caches.system.get(sessionID)
+        const systemBucket = sessionSystem?.get(modelKey)
+        const cachedSystem = systemBucket?.scope === systemScope ? systemBucket : undefined
+        const coldPin =
+          cachedSystem && _caches.tools.has(sessionID) ? undefined : PromptPin.load(sessionID)
+        const restoredSystem = coldPin?.system?.scope === systemScope ? coldPin.system : undefined
+        const pinnedSystem = cachedSystem ?? restoredSystem
+        // 261122 Red 内存系统段还在而消息缓存已清空，是压缩结算。磁盘删除可能尚未写完。
+        const diskMessages = !sessionSystem && coldPin?.nativeRevision === nativeRevision ? coldPin : undefined
+        const pinnedMessages = _caches.msgPin.get(sessionID) ?? {
+          sessionID,
+          messages: new Map(Object.entries(diskMessages?.messages ?? {})),
+          transformed: new Set(diskMessages?.transformed),
+          nativeRevision,
+        }
+        _caches.msgPin.set(sessionID, pinnedMessages)
+
+        // 261122 Red 旧 v3 文件还没有标记。首次续接时对照本轮刚读到的库内 parts 补上。
+        if (diskMessages?.messages && !diskMessages.transformed) {
+          for (const message of msgs) {
+            const saved = pinnedMessages.messages.get(message.info.id)
+            if (saved && !Bun.deepEquals(saved, message.parts)) pinnedMessages.transformed.add(message.info.id)
+          }
+        }
+
+        // 261122 Red 只为尚未钉住的消息取原始指纹，区分插件/提醒改写与能从库里复原的正文。
+        const originalParts = new Map(
+          msgs
+            .filter((message) => !pinnedMessages.messages.has(message.info.id))
+            .map((message) => [message.info.id, Bun.hash(JSON.stringify(message.parts))]),
+        )
         msgs = yield* SessionReminders.apply({ messages: msgs, agent, session: stepSettings.session }).pipe(
           Effect.provideService(RuntimeFlags.Service, flags),
           Effect.provideService(AppFileSystem.Service, fsys),
@@ -2014,7 +2064,7 @@ export const layer = Layer.effect(
             // 261029 Red 重启续接：进程内钉住随旧进程丢失时，从磁盘 pin 恢复上一进程首轮的
             // 工具定义并当作钉住初值，本轮立即 overlay 生效——否则 MCP 服务器升级后重建会
             // 拿到新版 schema，续接首请求全价重建。无 pin（新会话）保持原样建立。
-            const pin = PromptPin.load(sessionID)
+            const pin = coldPin
             const defs = pin
               ? new Map(
                   Object.entries(pin.tools).map(([k, t]) => [
@@ -2130,27 +2180,6 @@ export const layer = Layer.effect(
           // By restoring already-sent messages from cache, the prefix stays identical across turns.
           let newlyPinned = 0
           {
-            // 260819 cc audit：登记本会话活跃时刻并顺手回收冷会话。四个缓存此前只增不减
-            // （settle 只管 msgPin/modelMsgs，system/tools 无删除点），长驻的 GUI sidecar /
-            // serve 进程按会话数持续堆积。回收口径与阈值见 prompt-caches.ts。
-            touchSession(sessionID)
-            // 261117 Red F-07：冷恢复（重启续接 / 进程缓存被回收）时优先复用磁盘消息快照。
-            // 没有它，历史会在 transform 之后再钉一遍；而插件注入非幂等（会话 seen 去重），
-            // 同一条消息两次 pin 长度不同 → 历史中段改写、整段 prefix 全价重建。
-            // 只在内存缓存缺失时读盘，热路径零额外 IO。
-            if (!_caches.msgPin.has(sessionID)) {
-              const diskPin = PromptPin.load(sessionID)
-              const seeded =
-                diskPin?.messages && (diskPin.nativeRevision ?? undefined) === (nativeRevision ?? undefined)
-                  ? diskPin.messages
-                  : undefined
-              _caches.msgPin.set(sessionID, {
-                sessionID,
-                messages: new Map(seeded ? Object.entries(seeded) : []),
-                nativeRevision,
-              })
-            }
-            const pinnedMessages = _caches.msgPin.get(sessionID)!
             let pinned = 0,
               cached = 0
             for (const msg of msgs) {
@@ -2163,6 +2192,7 @@ export const layer = Layer.effect(
                 pinned++
               } else {
                 pinnedMessages.messages.set(mid, structuredClone(msg.parts))
+                if (originalParts.get(mid) !== Bun.hash(JSON.stringify(msg.parts))) pinnedMessages.transformed.add(mid)
                 cached++
                 if (msg.info.role === "user")
                   log.info("msg-pin first", {
@@ -2188,18 +2218,12 @@ export const layer = Layer.effect(
           // demotes reasoning for messages generated by a different model), producing a mixed-prefix
           // the target provider has never cached → full rebuild → prolonged low cache-hit rate.
           // Key uses the same stable string as toUIMessages' differentModel check (`providerID/model.id`).
-          const modelKey = `${model.providerID}/${model.id}`
-          const cachedSystem = _caches.system.get(sessionID)?.get(modelKey)
           // Only an explicit profile save refreshes personal context. Each model bucket checks
           // its own revision; instructions, tools and the pinned Soul remain cached.
           const companionRevision = personalChat
             ? yield* companions.contextRevision(stepSettings.session.companionID!).pipe(Effect.orDie)
             : undefined
           const refreshCompanion = personalChat && cachedSystem?.companionRevision !== companionRevision
-          // 261029 Red 冷组装（重启续接 / 进程内缓存被回收后首轮）时读一次磁盘 pin，
-          // 供本轮 tools 与 mcpGuide 恢复上一进程钉住的内容；cachedSystem 命中时短路。
-          // 命名避开下方 msgPin 循环的计数器 pinned。
-          const coldPin = cachedSystem ? undefined : PromptPin.load(sessionID)
           // 260814 Red queue 模式：本轮中途新到的 user 消息对模型隐藏（只从模型可见消息里
           // 滤掉整条，不动 msgs 本体——compaction/reminder/msgPin 仍按全量算），留到轮末
           // 续跑边界作为新轮输入。steer 模式恒等于 msgs。
@@ -2228,10 +2252,10 @@ export const layer = Layer.effect(
           const mediaOptions =
             mediaEviction?.enabled === false ? undefined : { keepRecentMedia: mediaEviction?.keepRecent ?? 5 }
           const [skills, env, instructions, mcpGuide, modelMsgs, soul, companion, companionAgents] = yield* Effect.all([
-            cachedSystem ? Effect.succeed(cachedSystem.skills) : sys.skills(agent),
-            cachedSystem ? Effect.succeed(cachedSystem.env) : sys.environment(model),
-            cachedSystem
-              ? Effect.succeed(cachedSystem.instructions)
+            pinnedSystem ? Effect.succeed(pinnedSystem.skills) : sys.skills(agent),
+            pinnedSystem ? Effect.succeed(pinnedSystem.env) : sys.environment(model),
+            pinnedSystem
+              ? Effect.succeed(pinnedSystem.instructions)
               : instruction.system({ memory: !chatMode, agents: !chatMode }).pipe(Effect.orDie),
             // 260904 cc MCP 服务器自报的用途说明。跟 env/instructions/skills 一样按会话缓存：
             // 服务器是后台连接的（STARTUP_GRACE 之后陆续连上），不缓存的话同一会话里这段会
@@ -2274,6 +2298,7 @@ export const layer = Layer.effect(
             const systemCache = {
               sessionID,
               modelKey,
+              scope: systemScope,
               skills,
               env,
               instructions,
@@ -2281,27 +2306,23 @@ export const layer = Layer.effect(
               companion,
               companionRevision,
             }
-            const sessionSystem = _caches.system.get(sessionID)
             if (sessionSystem) sessionSystem.set(modelKey, systemCache)
             else _caches.system.set(sessionID, new Map([[modelKey, systemCache]]))
-            // 261029 Red 冷组装定型后把工具定义与 MCP guide 落盘（prompt-pin），重启续接时
-            // 恢复同一份内容——否则 MCP 服务器升级后续接重建会拿到新版定义，供应商逐字节
-            // 比对失败，续接首请求全价重建（261029 实测 321k token 全冷，见 prompt-pin.ts）。
-            PromptPin.save({ sessionID, tools: _caches.tools.get(sessionID)!.defs, mcpGuide })
           } else if (refreshCompanion) {
             cachedSystem.companion = companion
             cachedSystem.companionRevision = companionRevision
           }
-          // 261117 Red F-07：本轮有新钉住的消息就把快照落盘。写在 mcpGuide 可用的位置，
-          // 避免用 undefined 覆盖文件里已有的 MCP guide。tools 缓存缺失时跳过（下轮冷组装补写）。
-          if (newlyPinned > 0) {
+          // 261122 Red 冷组装和消息更新只写一次，把同一轮的系统段、工具和历史一起替换。
+          if (!cachedSystem || newlyPinned > 0) {
             const tools = _caches.tools.get(sessionID)?.defs
             if (tools)
               PromptPin.save({
                 sessionID,
                 tools,
                 mcpGuide,
-                messages: _caches.msgPin.get(sessionID)?.messages,
+                system: { scope: systemScope, skills, env, instructions },
+                messages: pinnedMessages.messages,
+                transformed: pinnedMessages.transformed,
                 nativeRevision,
               })
           }

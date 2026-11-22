@@ -1,25 +1,27 @@
 import type { ModelMessage, Tool } from "ai"
 import * as Log from "@redcode-ai/core/util/log"
 import { MAX_SESSIONS, SESSION_TTL_MS, sessionEvictor } from "@/util/session-evictor"
-import { PromptPin } from "./prompt-pin"
+import { PromptPin, type SystemPin } from "./prompt-pin"
 import type { Snapshot as SoulSnapshot } from "./soul"
 import type { StreamInput } from "./llm"
 
 const log = Log.create({ service: "prompt-caches" })
 
-type SystemCache = {
+type SystemCache = SystemPin & {
   sessionID: string
   modelKey: string
-  skills: string | undefined
-  env: string[]
-  instructions: string[]
   companion?: string
   companionRevision?: string
   // 260904 cc MCP 服务器自报的用途说明块。与上面几项同样按会话缓存——MCP 是后台连接的，
   // 不缓存的话这段会在会话中途出现，把前缀缓存打掉。没有服务器提供说明时为 undefined。
   mcpGuide: string | undefined
 }
-type MessagePinCache = { sessionID: string; messages: Map<string, unknown[]>; nativeRevision?: string }
+type MessagePinCache = {
+  sessionID: string
+  messages: Map<string, unknown[]>
+  transformed: Set<string>
+  nativeRevision?: string
+}
 type ModelMessagesCache = { sessionID: string; modelKey: string; messages: ModelMessage[] }
 type ToolCache = { sessionID: string; defs: Map<string, { description: string; inputSchema: unknown }> }
 // 261104 Red 已收到模型响应的主请求快照；modelMsgs 只是下轮组装缓存，不能当作已发送。
@@ -107,7 +109,7 @@ export function recordRequest(input: RequestSnapshot) {
 export function settlePromptCaches(sessionID: string, reason: string) {
   // 261117 Red F-07：消息快照必须同步作废。压缩改写在内存结算后于下一轮生效，
   // 磁盘快照若留着，冷恢复会把它钉回去——压缩白做且可能撑爆上下文预算。
-  // tools/mcpGuide 与消息历史无关，不参与结算（见 prompt-pin.ts）。
+  // system/tools/mcpGuide 与消息历史无关，不参与结算（见 prompt-pin.ts）。
   PromptPin.dropMessages(sessionID)
   let dropped = 0
   const msgPin = PromptCaches.msgPin.get(sessionID)
