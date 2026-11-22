@@ -8,17 +8,21 @@ import { useLanguage } from "@/context/language"
 import { useQueryOptions } from "@/context/server-sync"
 import { useSDK } from "@/context/sdk"
 import { pathKey } from "@/utils/path-key"
-import type { SessionOutlineResponse, SessionQueryResponses } from "@redcode-ai/sdk/v2/client"
+import type { SessionOutlineResponse } from "@redcode-ai/sdk/v2/client"
+import {
+  createSearchScopes,
+  searchScopeKey,
+  type SearchState,
+  type SessionSearchHit,
+} from "./search-scope"
 
 type Entry = SessionOutlineResponse["entries"][number]
-// SDK codegen 把 Schema.Number 展开成 number | "Infinity" | … 联合，这里沿用生成形状。
-export type SessionSearchHit = SessionQueryResponses[200]["results"][number]
 const EMPTY: Entry[] = []
 
 // 261116 Red B05：搜索状态按会话留在模块级缓存里——跳到命中消息、切标签或收/开面板后
 // 回来仍能看到同一份关键词、分页游标与结果滚动位置，不必重新扫一遍历史。
-type SearchCacheEntry = { input: string; state: SearchState | undefined; scrollTop: number }
-const searchCache = new Map<string, SearchCacheEntry>()
+// 261122 Red 第一批：缓存键扩到「连接 + 目录 + 会话」作用域（见 search-scope.ts）。
+const searchScopes = createSearchScopes()
 
 /**
  * 取数容器。**只在「轮次」标签真的被激活时才挂载** —— side panel 的
@@ -35,6 +39,11 @@ export function SessionTurnOutline(props: {
   onSearchHit?: (hit: SessionSearchHit, query: string) => void
 }) {
   const options = useQueryOptions()
+  const sdk = useSDK()
+  // 261122 Red 第一批：搜索面板实例绑定作用域，切换会话/目录/连接即重建，从各自缓存恢复。
+  const searchScope = createMemo(() =>
+    searchScopeKey({ url: sdk.url, directory: props.directory, sessionID: props.sessionID }),
+  )
   const query = useQuery(() => ({
     ...options.sessionOutline(pathKey(props.directory), props.sessionID),
     enabled: !!props.sessionID,
@@ -53,11 +62,16 @@ export function SessionTurnOutline(props: {
       busy={props.busy}
       onJump={props.onJump}
       toolbar={
-        <SessionSearchPanel
-          sessionID={props.sessionID}
-          busy={props.busy}
-          onHit={props.onSearchHit ?? ((hit) => props.onJump(hit.messageID))}
-        />
+        <Show when={searchScope()} keyed>
+          {(scope) => (
+            <SessionSearchPanel
+              scope={scope}
+              sessionID={props.sessionID}
+              busy={props.busy}
+              onHit={props.onSearchHit ?? ((hit) => props.onJump(hit.messageID))}
+            />
+          )}
+        </Show>
       }
     />
   )
@@ -68,36 +82,31 @@ export function SessionTurnOutline(props: {
 // 这里 Enter 触发（不逐键扫描），命中显示片段 + 角色 + 时间，点击交给 onHit 精确落到
 // 命中消息/片段；有 nextCursor 时「继续搜索」续传——空一页不等于全部没有，扫描预算
 // 未覆盖的部分要用户显式追。
-type SearchState = {
-  q: string
-  hits: SessionSearchHit[]
-  scannedParts: number
-  nextCursor?: string
-  error?: string
-}
-
-function SessionSearchPanel(props: {
+export function SessionSearchPanel(props: {
+  /** 连接 + 目录 + 会话；实例生命周期等于一个作用域（父层 keyed 重建）。 */
+  scope: string
   sessionID: string
   busy: boolean
   onHit: (hit: SessionSearchHit, query: string) => void
 }) {
   const sdk = useSDK()
   const language = useLanguage()
-  const cached = searchCache.get(props.sessionID)
+  const cached = searchScopes.get(props.scope)
   const [input, setInput] = createSignal(cached?.input ?? "")
   const [state, setState] = createSignal<SearchState | undefined>(cached?.state)
   const [running, setRunning] = createSignal(false)
   let resultScrollTop = cached?.scrollTop ?? 0
   let resultsEl: HTMLDivElement | undefined
 
-  createEffect(() => {
-    searchCache.set(props.sessionID, { input: input(), state: state(), scrollTop: resultScrollTop })
-  })
+  const save = () =>
+    searchScopes.save(props.scope, { input: input(), state: state(), scrollTop: resultScrollTop })
+  createEffect(save)
 
   // 261115 Red UX-15 复审：分页锚定已执行查询的关键词——用户在结果页改了输入框再点
   // 「继续搜索」，仍按首次查询的 q + 旧游标续传，不把新词混进旧结果；新搜索（无游标）
-  // 覆写整份 state，旧分页随之作废。running 守卫保证同一时刻只有一个在途请求，
-  // 旧请求不会迟到覆盖新结果。
+  // 覆写整份 state，旧分页随之作废。running 守卫保证同一实例同一时刻只有一个在途请求。
+  // 261122 Red 第一批：请求固定发起时的作用域与版本。组件随作用域重建，切走后的迟到响应
+  // 只写自己的缓存；同一作用域的新搜索让旧响应作废，不碰当前状态。
   const runSearch = async (cursor?: string) => {
     const q = cursor ? (state()?.q ?? "") : input().trim()
     if (!q || running()) return
@@ -106,9 +115,15 @@ function SessionSearchPanel(props: {
       resultScrollTop = 0
       if (resultsEl) resultsEl.scrollTop = 0
     }
+    const version = searchScopes.begin(props.scope)
+    const owns = () => searchScopes.owns(props.scope, version)
     setRunning(true)
     try {
-      const response = await sdk.client.session.query({ sessionID: props.sessionID, q, cursor }, { throwOnError: true })
+      const response = await sdk.client.session.query(
+        { sessionID: props.sessionID, q, cursor },
+        { throwOnError: true },
+      )
+      if (!owns()) return
       const data = response.data
       setState((prev) =>
         cursor && prev
@@ -125,15 +140,18 @@ function SessionSearchPanel(props: {
               nextCursor: data?.nextCursor,
             },
       )
+      save()
     } catch (error) {
+      if (!owns()) return
       setState((prev) => ({
         q,
         hits: prev?.hits ?? [],
         scannedParts: prev?.scannedParts ?? 0,
         error: error instanceof Error ? error.message : String(error),
       }))
+      save()
     } finally {
-      setRunning(false)
+      if (owns()) setRunning(false)
     }
   }
 
@@ -185,7 +203,7 @@ function SessionSearchPanel(props: {
                   setInput("")
                   setState(undefined)
                   resultScrollTop = 0
-                  searchCache.delete(props.sessionID)
+                  searchScopes.clear(props.scope)
                 }}
               >
                 ← {language.t("session.search.backToOutline")}
@@ -204,8 +222,7 @@ function SessionSearchPanel(props: {
               }}
               onScroll={(event) => {
                 resultScrollTop = event.currentTarget.scrollTop
-                const current = state()
-                if (current) searchCache.set(props.sessionID, { input: input(), state: current, scrollTop: resultScrollTop })
+                if (state()) save()
               }}
             >
               <Show

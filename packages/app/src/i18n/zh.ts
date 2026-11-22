@@ -758,6 +758,7 @@ export const dict = {
   "session.outline.empty": "这个会话还没有轮次",
   "session.outline.noPrompt": "（无文字）",
   "session.outline.unreachable": "翻不到那一轮——历史可能已被压缩",
+  "session.outline.locating": "正在定位，请稍候再试",
   "session.panel.workspace": "会话工作区",
   "session.panel.expand": "展开面板",
   "session.panel.collapse": "收起面板",

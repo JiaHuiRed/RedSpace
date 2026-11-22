@@ -798,6 +798,7 @@ export const dict = {
   "session.outline.empty": "No turns in this session yet",
   "session.outline.noPrompt": "(no text)",
   "session.outline.unreachable": "Could not page back to that turn — the history may have been compacted",
+  "session.outline.locating": "Locating — try again in a moment",
   "session.panel.workspace": "Session workspace",
   "session.panel.expand": "Expand panel",
   "session.panel.collapse": "Collapse panel",

@@ -64,6 +64,7 @@ import { anonKey, guiDiagnostics, hashId } from "@/context/gui-diagnostics"
 import { createSessionKeyboard } from "@/pages/session/session-keyboard"
 import { MessageTimeline, type FileOpenSource } from "@/pages/session/message-timeline"
 import type { RevealTarget, TimelineLocator } from "@/pages/session/timeline-locate"
+import { createLocateOwnership } from "@/pages/session/locate-owner"
 import { type DiffStyle, SessionReviewTab, type SessionReviewTabProps } from "@/pages/session/review-tab"
 import { useSessionLayout } from "@/context/session-layout"
 import { SessionMessageRail, SessionTurnOutline } from "@/pages/session/turn-outline"
@@ -987,8 +988,9 @@ export default function Page() {
   const returnToFileSource = () => {
     const source = view().fileReturn.current()
     if (!source) return
-    view().fileReturn.set(undefined)
     // 261116 Red B06：工具来源与搜索命中共用同一条加载/滚动/展开链（含阅读位置兜底）。
+    // 261122 Red 第一批：定位成功才消费这次点击捕获的来源。此前先清来源再尝试跳转，
+    // 定位忙或目标不可达时按钮已消失，用户没有重试入口。
     if (source.kind === "tool") {
       if (!source.messageID) return
       void jumpToTarget({
@@ -996,9 +998,26 @@ export default function Page() {
         partID: source.partID,
         userMessageID: source.userMessageID,
         scrollTop: source.scrollTop,
+      }).then((result) => {
+        if (result === "busy") {
+          showToast({ title: language.t("session.outline.locating") })
+          return
+        }
+        // 仍未定位成功时来源保持原位，返回入口留给用户重试。
+        if (result !== "located") return
+        const current = view().fileReturn.current()
+        if (
+          current &&
+          current.tab === source.tab &&
+          current.file === source.file &&
+          current.messageID === source.messageID &&
+          current.partID === source.partID
+        )
+          view().fileReturn.set(undefined)
       })
       return
     }
+    view().fileReturn.set(undefined)
     if (reviewTab()) tabs().setActive("review")
     else view().reviewPanel.open()
     focusReviewDiff(source.file)
@@ -1414,6 +1433,11 @@ export default function Page() {
     scroller: () => scroller,
   })
 
+  // 261122 Red 第一批：定位锁归到发起它的会话——(scope, token) 见 locate-owner.ts。
+  // 切会话即作废旧操作；旧操作的 finally 也不会再释放新会话的锁。同会话重复点击仍防重。
+  const jumping = createLocateOwnership()
+  createEffect(on(sessionKey, () => jumping.release(), { defer: true }))
+
   /**
    * 轮次导航栏的跳转：先把目标翻进已加载窗口，再滚过去。
    *
@@ -1425,15 +1449,12 @@ export default function Page() {
    * 滚动放在 rAF 里：prepend 刚插进来的行还没被 virtua 测量，同一拍里 scrollToIndex
    * 用的是估算尺寸（message-timeline.tsx:656 那条注释记的就是这个坑）。
    */
-  const [jumpingTurn, setJumpingTurn] = createSignal(false)
   const jumpToTurn = async (messageID: string) => {
-    if (jumpingTurn()) return
-    const id = params.id
-    const directory = sdk.directory
-    setJumpingTurn(true)
+    const claim = jumping.begin(sessionKey())
+    if (!claim) return
     try {
       const reached = await historyLoader.loadThrough(messageID)
-      if (params.id !== id || sdk.directory !== directory) return
+      if (!jumping.current(claim)) return
       if (!reached) {
         showToast({ variant: "error", title: language.t("session.outline.unreachable") })
         return
@@ -1441,47 +1462,46 @@ export default function Page() {
       // loadThrough 已经确认它进窗口了，这里必然找得到；setActiveMessage 收的是消息对象不是 id。
       nav.setActiveMessage(visibleUserMessages().find((message) => message.id === messageID))
       // 260922 Red：busy 覆盖到真正发出 renderer reveal，避免 rAF 尚未执行时
-      // jumpingTurn 提前释放，长帧/虚拟列表重测量期间可以并发触发第二次跳转。
+      // 定位锁提前释放，长帧/虚拟列表重测量期间可以并发触发第二次跳转。
       await new Promise<void>((resolve) =>
         requestAnimationFrame(() => {
-          if (params.id === id && sdk.directory === directory) revealMessage(messageID)
+          if (jumping.current(claim)) revealMessage(messageID)
           resolve()
         }),
       )
     } finally {
-      setJumpingTurn(false)
+      jumping.end(claim)
     }
   }
 
-  const jumpOwner = createMemo(() => ({ key: sessionKey() }))
   /**
    * 261116 Red B05/B06：搜索命中与「返回工具」共用的精确定位。
    *
    * 与 jumpToTurn 的区别只有第一步：命中可能是助手消息/工具片段，先把命中消息翻进窗口并
    * 解析所属用户轮次（locateTarget，父关系优先），再走同一条 loadThrough → revealMessage →
    * revealPart 链。翻不到、片段找不到都明确提示，不退化成「最近的轮次」。
+   * 261122 Red 第一批：结果交回调用方——「返回工具」只在 located 时消费来源记录。
    */
-  const jumpToTarget = async (target: RevealTarget) => {
-    if (jumpingTurn()) return
-    if (!params.id) return
-    const owner = jumpOwner()
-    const current = () => jumpOwner() === owner
+  const jumpToTarget = async (target: RevealTarget): Promise<"located" | "unreachable" | "busy" | "stale"> => {
+    if (!params.id) return "stale"
+    const claim = jumping.begin(sessionKey())
+    if (!claim) return "busy"
+    const current = () => jumping.current(claim)
     const unreachable = () => showToast({ variant: "error", title: language.t("session.outline.unreachable") })
-    setJumpingTurn(true)
     try {
       const turnID =
         target.userMessageID ??
         (await historyLoader.locateTarget({ messageID: target.messageID, createdAt: target.createdAt }))
-      if (!current()) return
+      if (!current()) return "stale"
       if (!turnID) {
         unreachable()
-        return
+        return "unreachable"
       }
       const loaded = await historyLoader.loadThrough(turnID)
-      if (!current()) return
+      if (!current()) return "stale"
       if (!loaded) {
         unreachable()
-        return
+        return "unreachable"
       }
       // 261122 Red 展开工具正文会改变内容高度，定位时不能让跟底把阅读位置拉走。
       autoScroll.pause()
@@ -1492,12 +1512,18 @@ export default function Page() {
           resolve()
         }),
       )
-      if (!target.partID || !timelineLocator || !current()) return
+      if (!current()) return "stale"
+      if (!target.partID || !timelineLocator) return "located"
       const located = await timelineLocator.revealPart({ ...target, userMessageID: turnID })
+      if (!current()) return "stale"
       // 片段找不到时仍停在所属轮次；提示原因（历史压缩/内容被删），不假装已定位。
-      if (!located && current()) unreachable()
+      if (!located) {
+        unreachable()
+        return "unreachable"
+      }
+      return "located"
     } finally {
-      setJumpingTurn(false)
+      jumping.end(claim)
     }
   }
 
@@ -1506,7 +1532,7 @@ export default function Page() {
       directory={sdk.directory}
       sessionID={params.id ?? ""}
       activeMessageID={store.messageId}
-      busy={jumpingTurn()}
+      busy={jumping.busy(sessionKey())}
       onJump={(id) => void jumpToTurn(id)}
       onSearchHit={(hit, query) =>
         void jumpToTarget({
@@ -2152,7 +2178,7 @@ export default function Page() {
             directory={sdk.directory}
             sessionID={params.id!}
             activeMessageID={store.messageId}
-            busy={jumpingTurn()}
+            busy={jumping.busy(sessionKey())}
             onJump={(id) => void jumpToTurn(id)}
           />
         </Show>
