@@ -17,7 +17,7 @@ const emptyList = new Set([
 const emptyObject = new Set(["/global/config", "/config", "/provider/auth", "/mcp", "/session/status"])
 
 export interface MockServerConfig {
-  provider: unknown
+  provider: { all: unknown[]; connected?: string[]; default?: Record<string, string> }
   directory: string
   project: unknown
   sessions: ({ id: string } & Record<string, unknown>)[]
@@ -27,6 +27,10 @@ export interface MockServerConfig {
 export async function mockRedCodeServer(page: Page, config: MockServerConfig) {
   const staticRoutes: Record<string, unknown> = {
     "/provider": config.provider,
+    // 261122 Red 提交闸门的就绪信号来自 /config/providers（bootstrap 的 loadProvidersQuery）。
+    // 缺这一路时 provider.all 为空 → local.ready() 恒 false、defaultModel() 无返回，
+    // 提交被拦成 toast「Select an agent and model」，表现为 waitForRequest 超时。
+    "/config/providers": { providers: config.provider.all, default: config.provider.default ?? {} },
     "/path": {
       state: config.directory,
       config: config.directory,
