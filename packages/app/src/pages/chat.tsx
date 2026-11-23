@@ -107,7 +107,9 @@ export default function Chat() {
     (!submission()?.sending && submission()?.messageID ? language.t("chat.companion.pendingRetry") : "")
   const initializing = () => !!workspace.submission("default")?.sending
   const ready = () => workspace.ready() && !profiles.isPending && !profiles.error
-  const missing = () => ready() && requestedID() !== undefined && !profile()
+  // 261123 Red 只有 URL 显式指定的伙伴找不到才提示；记忆的旧 id 由 selectCompanion
+  // 回落到第一个可用伙伴，随后的 createEffect 会把失效记忆改写回真实 id。
+  const missing = () => ready() && !!search.companion && !profile()
   const atCapacity = () => (profiles.data?.length ?? 0) >= 2
   const introduction = () => (profile() ? introductionState(profile()!) : "available")
   const updateProfile = (value: CompanionInfo) =>

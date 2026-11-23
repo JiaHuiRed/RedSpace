@@ -6,14 +6,18 @@ export function introductionState(profile: { introduction?: IntroductionState; n
   return profile.introduction ?? (profile.needsSetup === true ? "available" : "complete")
 }
 
-/** Explicit or remembered identities never silently fall back to someone else. */
+/**
+ * 261123 Red 显式身份找不到就不回落（由页面提示重新选择）；记忆的身份可能来自旧档案
+ * 命名（companion-<hash> → 目录名迁移），失配时回落到列表第一个，否则旧 id 会把整个
+ * Chat 页永久卡在「找不到这位伙伴」。
+ */
 export function selectCompanion<T extends { id: string }>(
   profiles: readonly T[],
   requested: string | undefined,
   remembered: string | undefined,
 ) {
-  const id = requested ?? (remembered || undefined)
-  return id === undefined ? profiles[0] : profiles.find((profile) => profile.id === id)
+  if (requested) return profiles.find((profile) => profile.id === requested)
+  return (remembered && profiles.find((profile) => profile.id === remembered)) || profiles[0]
 }
 
 export function upsertCompanion(current: CompanionInfo[] | undefined, profile: CompanionInfo) {
