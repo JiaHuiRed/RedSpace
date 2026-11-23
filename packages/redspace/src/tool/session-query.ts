@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto"
 import path from "node:path"
-import { and, desc, eq, isNull, lt, ne, or, sql } from "drizzle-orm"
+import { and, desc, eq, inArray, isNull, lt, ne, or, sql } from "drizzle-orm"
 import { Effect, Schema } from "effect"
 import { Config } from "@/config/config"
 import { NativeCompaction } from "@/config/native-compaction"
@@ -50,7 +50,11 @@ const SOURCE =
 // ASCII 字符，请求侧此前用 JS toLowerCase() 全量折叠，两端规则不一致——含大写重音的
 // 目录会返回 200 但零命中。Windows 路径保持大小写不敏感（按路径形态判平台），
 // POSIX 目录按原样区分大小写。
-const asciiLower = (value: string) => value.replace(/[A-Z]/g, (char) => char.toLowerCase())
+// 261123 Red Windows 的非 ASCII 大小写仍要折叠：SQLite lower() 做不到，于是 SQL 侧不再
+// 承担折叠——请求侧统一走 NFC + toLowerCase，run() 先取 distinct 原值在 JS 用同一规则
+// 比对再按原值过滤，两端口径只保留这一处。
+const foldPath = (value: string) => value.normalize("NFC").toLowerCase()
+const toSlash = (value: string) => value.replaceAll("\\", "/")
 const isWindowsPath = (value: string) => value[1] === ":" || value.startsWith("\\\\")
 
 export function resolve(
@@ -77,8 +81,8 @@ export function resolve(
       resolved === undefined
         ? "*"
         : windows
-          ? asciiLower(resolved.replaceAll("\\", "/"))
-          : resolved.replaceAll("\\", "/"),
+          ? foldPath(toSlash(resolved))
+          : toSlash(resolved),
     session: args.session_id,
     role: args.role,
     after: args.after,
@@ -128,14 +132,30 @@ const body = sql<string | null>`case
 export const run = Effect.fn("SessionQuery.run")(function* (db: Database.TxOrDb, spec: Spec, signal: AbortSignal) {
   signal.throwIfAborted()
   const role = sql<"user" | "assistant">`json_extract(${MessageTable.data}, '$.role')`
+  // 261123 Red SQLite 的 lower() 折不了 Unicode 大小写，Windows 目录先取库内 distinct 原值，
+  // 用请求侧同一套 foldPath 比对，再按原值 IN 过滤（不能把折叠值直接发给 SQL 比较）。
+  const directories =
+    spec.directory === "*" || spec.directoryCaseSensitive
+      ? undefined
+      : Array.from(
+          new Set(
+            db
+              .select({ directory: SessionTable.directory })
+              .from(SessionTable)
+              .all()
+              .map((row) => row.directory)
+              .filter((directory) => foldPath(toSlash(directory)) === spec.directory),
+          ),
+        )
   const filters = [
-    // 261122 Red 第三批：比较规则与两端口径统一——Windows 走 lower()（只折 ASCII），
-    // POSIX 精确比较。session_id 存在时仍保留目录约束：跨目录会话必须先显式传目录。
+    // 261122 Red 第三批：session_id 存在时仍保留目录约束——跨目录会话必须先显式传目录。
     spec.directory === "*"
       ? undefined
       : spec.directoryCaseSensitive
         ? sql`replace(${SessionTable.directory}, char(92), '/') = ${spec.directory}`
-        : sql`lower(replace(${SessionTable.directory}, char(92), '/')) = ${spec.directory}`,
+        : directories!.length
+          ? inArray(SessionTable.directory, directories!)
+          : sql`0`,
     spec.session ? eq(SessionTable.id, spec.session) : undefined,
     spec.excludeSession ? ne(SessionTable.id, spec.excludeSession) : undefined,
     spec.role ? eq(role, spec.role) : undefined,

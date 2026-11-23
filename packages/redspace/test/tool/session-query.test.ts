@@ -433,14 +433,13 @@ describe("session_query", () => {
     }),
   )
 
-  // 261122 Red 第三批：请求侧只折 ASCII 大小写，与 SQLite lower() 同口径。此前 JS 用
-  // toLowerCase() 全量折叠，É→é 而库内仍是 É，含大写重音的目录返回 200 但零命中。
-  it.instance("matches accented directories under the same rule as sqlite lower()", () =>
+  // 261122 Red 第三批 + 261123 Red：Windows 路径大小写不敏感必须覆盖 Unicode。
+  // SQLite lower() 只折 ASCII，所以请求侧与 run() 共用 foldPath（NFC + toLowerCase），
+  // SQL 只按库内原值 IN 过滤；POSIX 仍保持大小写敏感。
+  it.instance("matches accented Windows directories case-insensitively on both ends", () =>
     Effect.gen(function* () {
       const session = yield* (yield* Session.Service).create({})
       yield* add(session.id, 100, "accent needle", "assistant")
-      // Windows 路径按大小写不敏感比较；POSIX 保持大小写敏感。两平台都必须能搜到
-      // 同一形态的重音目录，不能被 JS/SQLite 的折叠差异吞掉。
       const windows = process.platform === "win32"
       const recorded = windows ? "C:\\CafÉ\\Project" : "/tmp/CafÉ/Project"
       Database.use((db) =>
@@ -451,13 +450,23 @@ describe("session_query", () => {
       expect(exact.results).toHaveLength(1)
 
       if (windows) {
-        // ASCII 部分折叠后仍命中，É 原样保留
-        const folded = yield* query({ operation: "search", query: "accent needle" }, "c:\\cafÉ\\project")
+        // ASCII 与 Unicode 大小写一起折叠：c:\café\project 命中库内 C:\CafÉ\Project
+        const folded = yield* query({ operation: "search", query: "accent needle" }, "c:\\café\\project")
         if (!("results" in folded)) throw new Error("Expected search result")
         expect(folded.results).toHaveLength(1)
+
+        // NFD 组合重音与库里 NFC 视为同一路径
+        const decomposed = yield* query({ operation: "search", query: "accent needle" }, "c:\\cafe\u0301\\project")
+        if (!("results" in decomposed)) throw new Error("Expected search result")
+        expect(decomposed.results).toHaveLength(1)
+      } else {
+        // POSIX 大小写敏感：不同大小写不命中同一份历史
+        const folded = yield* query({ operation: "search", query: "accent needle" }, "/tmp/café/project")
+        if (!("results" in folded)) throw new Error("Expected search result")
+        expect(folded.results).toHaveLength(0)
       }
 
-      // 重音不同的目录不能被当成同一个（É ≠ e）
+      // 去掉重音符号是另一个目录（É ≠ E），任何平台都不能合并
       const other = yield* query(
         { operation: "search", query: "accent needle" },
         windows ? "C:\\Cafe\\Project" : "/tmp/Cafe/Project",
