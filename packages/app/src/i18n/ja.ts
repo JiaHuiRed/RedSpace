@@ -4,6 +4,8 @@ import { settingsDesktop } from "./settings-desktop"
 
 export const dict = {
   "mode.navigation": "Chat と Code",
+  "chat.handoff.action": "Code に渡す",
+  "chat.handoff.project": "下書きを受け取るプロジェクトを選択",
   "chat.title": "ここで、話の続きを。",
   "chat.description": "日々の会話も、一緒に進める作業も。これまでの思い出を引き継いで、次の日々へ。",
   "chat.profile.files": "アーカイブファイル {{count}} 件",

@@ -8,6 +8,8 @@ type Keys = keyof typeof en
 
 export const dict = {
   "mode.navigation": "Chat 与 Code",
+  "chat.handoff.action": "交给 Code",
+  "chat.handoff.project": "选择接收草稿的项目",
   "chat.title": "在这里，接着聊。",
   "chat.description": "聊聊日常，也一起做事。带上已经积累的记忆，继续往后的相处。",
   "chat.profile.files": "{{count}} 份档案文件",

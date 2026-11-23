@@ -4,6 +4,8 @@ import { settingsDesktop } from "./settings-desktop"
 
 export const dict = {
   "mode.navigation": "Chat and Code",
+  "chat.handoff.action": "Send to Code",
+  "chat.handoff.project": "Choose a project for the Code draft",
   "chat.title": "Pick up where you left off.",
   "chat.description":
     "A place for everyday conversations and getting things done, with the memories you have already made together.",

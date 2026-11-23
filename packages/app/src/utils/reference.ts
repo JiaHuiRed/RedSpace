@@ -140,7 +140,7 @@ export function buildReference(input: ReferenceInput): Reference {
   const anchor = input.anchor
   const unknown = input.labels?.unknown ?? "来源不可定位"
   const label = locatable(anchor) ? referenceLabel(anchor, unknown) : unknown
-  const header = `[引用 · ${label} · ${referenceTime(input.at)}${locatable(anchor) ? sourceIDs(anchor) : ""}]`
+  const header = `[引用 · ${label} · ${referenceTime(input.at)}${sourceIDs(anchor)}]`
   const body = text ? quoteBody(text) : "> "
   const note = truncated
     ? input.labels?.truncated?.({ total, shown: text.length, keep }) ??

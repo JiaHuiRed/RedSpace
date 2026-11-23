@@ -1,10 +1,11 @@
 import { base64Encode } from "@redcode-ai/core/util/encode"
-import { useSearchParams } from "@solidjs/router"
-import { createEffect, on, onMount, Show } from "solid-js"
+import { useLocation, useNavigate, useSearchParams } from "@solidjs/router"
+import { createEffect, on, onMount, Show, untrack } from "solid-js"
 import { createStore } from "solid-js/store"
 import { PromptInput } from "@/components/prompt-input"
 import { NewSessionDesignView } from "@/components/session/session-new-design-view"
 import { useLanguage } from "@/context/language"
+import { appendReference, type Reference } from "@/utils/reference"
 import { usePrompt } from "@/context/prompt"
 import { SDKProvider } from "@/context/sdk"
 import { useServerSync } from "@/context/server-sync"
@@ -37,6 +38,17 @@ export default function HomeCompose(props: {
 function HomeComposer(props: Parameters<typeof HomeCompose>[0]) {
   const language = useLanguage()
   const prompt = usePrompt()
+  const navigate = useNavigate()
+  const location = useLocation<{ codeReference?: { directory: string; reference: Reference } }>()
+  createEffect(() => {
+    const handoff = location.state?.codeReference
+    if (!handoff || handoff.directory !== props.directory || !prompt.ready()) return
+    untrack(() => {
+      const draft = appendReference(prompt.current(), handoff.reference)
+      prompt.set(draft.prompt, draft.cursor)
+      navigate(location.pathname + location.search + location.hash, { replace: true, scroll: false, state: {} })
+    })
+  })
   const [searchParams, setSearchParams] = useSearchParams<{ soul?: string; prompt?: string }>()
   const [state, setState] = createStore({ worktree: "main", soul: undefined as string | undefined })
   let editor: HTMLDivElement | undefined

@@ -16,6 +16,11 @@ import {
 } from "solid-js"
 import { createStore, produce } from "solid-js/store"
 import { Dynamic, Portal } from "solid-js/web"
+import { base64Encode } from "@redcode-ai/core/util/encode"
+import { newConversationHref } from "@/utils/product-mode"
+import { useLayout } from "@/context/layout"
+import { useServer } from "@/context/server"
+import { DialogSelectDirectory } from "@/components/dialog-select-directory"
 import { useNavigate } from "@solidjs/router"
 import { useMutation, useQuery } from "@tanstack/solid-query"
 import { Virtualizer, type VirtualizerHandle } from "virtua/solid"
@@ -363,6 +368,8 @@ export function MessageTimeline(props: {
   let touchGesture: number | undefined
 
   const navigate = useNavigate()
+  const layout = useLayout()
+  const server = useServer()
   const serverSDK = useServerSDK()
   const sdk = useSDK()
   const openFile = useFileOpen()
@@ -1066,6 +1073,23 @@ export function MessageTimeline(props: {
     props.onQuote?.()
   }
 
+  const handSelectionToCode = (anchor: ReferenceAnchor, text: string) => {
+    const reference = buildReference({ anchor, text })
+    setSelectionChip(undefined)
+    window.getSelection()?.removeAllRanges()
+    dialog.show(() => (
+      <DialogSelectDirectory
+        title={language.t("chat.handoff.project")}
+        onSelect={(directory) => {
+          if (typeof directory !== "string") return
+          layout.projects.open(directory)
+          server.projects.touch(directory)
+          navigate(newConversationHref("code", base64Encode(directory)), { state: { codeReference: { directory, reference } } })
+        }}
+      />
+    ))
+  }
+
   // 261116 Red A04：草稿旁的「引用来源」轻列表（每会话 8 条、最多 4 个会话）。
   // 终端来源由 TerminalPanel 通过 CustomEvent 接入（terminal → redcode:reference-added；
   // 点击 → redcode:reference-terminal）。导航复用 jumpToTarget，只移动阅读位置。
@@ -1185,7 +1209,7 @@ export function MessageTimeline(props: {
     setSelectionChip({
       anchor,
       text,
-      x: Math.max(8, Math.min(rect.left + rect.width / 2 - 60, window.innerWidth - 136)),
+      x: Math.max(8, Math.min(rect.left + rect.width / 2 - 60, window.innerWidth - (companionChat() ? 265 : 136))),
       y: Math.min(rect.bottom + 8, window.innerHeight - 44),
     })
   }
@@ -2993,16 +3017,34 @@ export function MessageTimeline(props: {
       <Show when={selectionChip()}>
         {(chip) => (
           <Portal>
-            <button
-              type="button"
-              data-action="quote-selection"
-              class="fixed z-[80] rounded-md border border-border-weak-base bg-surface-raised-stronger px-2 py-1 text-sm text-text-strong shadow-md"
+            <div
+              class="fixed z-[80] flex gap-1 rounded-md border border-border-weak-base bg-surface-raised-stronger p-1 text-sm text-text-strong shadow-md"
               style={{ left: `${chip().x}px`, top: `${chip().y}px` }}
-              onMouseDown={(event) => event.preventDefault()}
-              onClick={() => appendQuote(chip().anchor, chip().text)}
+              onMouseDown={(event) => {
+                event.preventDefault()
+                event.stopPropagation()
+              }}
+              onMouseUp={(event) => event.stopPropagation()}
             >
-              {language.t("dialog.background.result.quote")}
-            </button>
+              <button
+                type="button"
+                data-action="quote-selection"
+                class="rounded px-2 py-1 hover:bg-surface-raised-base"
+                onClick={() => appendQuote(chip().anchor, chip().text)}
+              >
+                {language.t("dialog.background.result.quote")}
+              </button>
+              <Show when={companionChat()}>
+                <button
+                  type="button"
+                  data-action="hand-selection-to-code"
+                  class="rounded px-2 py-1 hover:bg-surface-raised-base"
+                  onClick={() => handSelectionToCode(chip().anchor, chip().text)}
+                >
+                  {language.t("chat.handoff.action")}
+                </button>
+              </Show>
+            </div>
           </Portal>
         )}
       </Show>

@@ -769,3 +769,73 @@ test("chat home loads companion directory providers on first entry", async ({ pa
   await menu.getByText("Alpha", { exact: true }).click()
   await expect(homeModel).toContainText("Alpha")
 })
+
+test("a Chat selection appends once to the selected project's existing Code draft", async ({ page }) => {
+  const slug = base64Encode(fixture.directory)
+  const profile = { id: "handoff-friend", soulID: "companion-handoff", name: "Luna", directory: "C:/Chat/Luna" }
+  const chat = {
+    ...fixture.sessions[0]!,
+    id: "ses_handoff",
+    directory: profile.directory,
+    mode: "chat",
+    companionID: profile.id,
+    soul: profile.soulID,
+  }
+  const message = {
+    ...fixture.messages[fixture.sourceID]![0]!,
+    info: { ...fixture.messages[fixture.sourceID]![0]!.info, sessionID: chat.id },
+  }
+  const text = "Keep nine idle sessions and put the board below the composer."
+  const part = { ...message.parts[0]!, sessionID: chat.id, text }
+  await mockRedCodeServer(page, {
+    ...fixture,
+    sessions: [chat],
+    pageMessages: () => ({ items: [{ ...message, parts: [part] }] }),
+  })
+  await page.route("**/companion?*", (route) => json(route, [profile]))
+  await page.route("**/companion", (route) => json(route, [profile]))
+  await page.route(/\/file(?:\?|$)/, (route) => json(route, []))
+  await page.addInitScript(
+    (directory) =>
+      localStorage.setItem(
+        "RedCode.global.dat:server",
+        JSON.stringify({
+          projects: { local: [{ worktree: directory, expanded: true }] },
+          lastProject: { local: directory },
+        }),
+      ),
+    fixture.directory,
+  )
+  const submissions: string[] = []
+  page.on("request", (request) => {
+    if (request.method() === "POST" && /\/(?:session|prompt_async)$/.test(new URL(request.url()).pathname))
+      submissions.push(request.url())
+  })
+  await page.goto(`/${slug}/session`)
+  const editor = page.locator('[data-component="prompt-input"]')
+  await editor.fill("Check the current layout.")
+  await page.locator('a[data-mode="chat"]').click()
+  await page.goto(`/${base64Encode(profile.directory)}/session/${chat.id}`)
+  const source = page.getByText(text, { exact: true }).first()
+  await expect(source).toBeVisible()
+  await source.evaluate((element) => {
+    const node = document.createTreeWalker(element, NodeFilter.SHOW_TEXT).nextNode()!
+    const range = new Range()
+    range.setStart(node, 0)
+    range.setEnd(node, "Keep nine idle sessions".length)
+    window.getSelection()!.removeAllRanges()
+    window.getSelection()!.addRange(range)
+    element.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }))
+  })
+  await page.getByRole("button", { name: "Send to Code" }).click()
+  const picker = page.getByRole("dialog")
+  await picker.getByText("SmokeProject", { exact: true }).first().click()
+  await expect(page).toHaveURL(new RegExp(slug + "/session$"))
+  await expect(editor).toContainText("Check the current layout.")
+  await expect(editor.locator('[data-type="quote"]')).toHaveText(/Keep nine idle sessions/)
+  await expect(editor).not.toContainText("put the board")
+  await page.reload()
+  await expect(editor.locator('[data-type="quote"]')).toHaveCount(1)
+  await expect(editor).toContainText("Check the current layout.")
+  expect(submissions).toEqual([])
+})
