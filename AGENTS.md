@@ -66,7 +66,7 @@
 # 版本与文档
 
 - **单一版本线**：全仓一个版本号，历史双线（TUI ≤0.8.16 / GUI ≤0.7.20）只存在于 CHANGELOG 的 `## TUI`/`## GUI` 两段，**历史条目不改**。
-- **升版 checklist** 完整清单在 bump-version skill 的「项目专属清单：RedCode」节；无该 skill 时按 CHANGELOG 顶部说明 + `script/check-version-consistency.ts` 的断言执行。核心纪律一句话：**升版 = 收编 `[Unreleased]` 并用 `git log <上一版 bump>..HEAD` 逐条对照**；本地 annotated tag `v<版本号>`，不 push。
+- **升版 checklist** 完整清单在 bump-version skill 的「项目专属清单：RedSpace」节；无该 skill 时按 CHANGELOG 顶部说明 + `script/check-version-consistency.ts` 的断言执行。核心纪律一句话：**升版 = 收编 `[Unreleased]` 并用 `git log <上一版 bump>..HEAD` 逐条对照**；本地 annotated tag `v<版本号>`，不 push。
 - 文档（版本号/徽章/CHANGELOG/README）可直接改好。
 - **决策记录 `docs/notes/`，写完必须回链**（规则与模板见其 README；注入项硬上限与模型可见四问见下方专条）。
   - **链**：note 落地时**必须**在对应代码头注释 / CHANGELOG 条目回链其路径。notes 不进上下文，**只能靠链接网被撞见**——没有回链的 note 等于没写。（此处原有「动子系统前先 ls/grep 查一遍」一条，实际读取 0 次，没有触发点，已删除。）
