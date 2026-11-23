@@ -39,15 +39,21 @@ export function codeSoulQueries(client: SoulIdentityClient, url: string) {
   }
 }
 
-/** 只读已加载的缓存解析身份；冷缓存返回 undefined，交给提交路径按需取数。 */
+/** 只读已加载的缓存解析身份；决定身份所需的数据不全时返回 undefined，交给提交路径按需取数。 */
 export function resolveCachedCodeSoul(queryClient: QueryClient, input: { url: string; saved?: string }) {
   const keys = codeSoulKeys(input.url)
   const souls = queryClient.getQueryData<ReadonlyArray<{ id: string }>>(keys.list)
   const companions = queryClient.getQueryData<ReadonlyArray<{ soulID: string }>>(keys.companions)
   if (!souls || !companions) return undefined
+  const bound = new Set(companions.map((profile) => profile.soulID))
+  const savedEligible = !!input.saved && souls.some((soul) => soul.id === input.saved) && !bound.has(input.saved)
+  const desktopDefault = queryClient.getQueryState<{ id?: string }>(keys.desktopDefault)
+  // 261123 Red 没有有效 saved 时，默认值还没落缓存就不能拿「第一个可用 Soul」顶替：
+  // 服务端配置的默认可能另有其人，快速提交会建出错误身份。返回 undefined 让提交路径去取。
+  if (!savedEligible && !desktopDefault) return undefined
   return chooseCodeSoul({
     saved: input.saved,
-    serverDefault: queryClient.getQueryData<{ id: string }>(keys.desktopDefault)?.id,
+    serverDefault: desktopDefault?.data?.id,
     souls,
     companions,
   })

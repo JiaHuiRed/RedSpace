@@ -84,11 +84,38 @@ describe("resolveCachedCodeSoul", () => {
     expect(resolveCachedCodeSoul(queryClient, { url: "u", saved: "karina" })).toBe("karina")
   })
 
-  test("skips bound souls and falls back to the first eligible identity", () => {
+  test("does not guess the first identity while the desktop default is still unknown", () => {
     const queryClient = newClient()
     const keys = codeSoulKeys("u")
     queryClient.setQueryData(keys.list, [{ id: "karina" }, { id: "yuqi" }])
     queryClient.setQueryData(keys.companions, [{ soulID: "karina" }])
+    // saved 已被绑走、默认值未落缓存：不能用第一个可用 Soul 顶替，必须交给提交路径去取
+    expect(resolveCachedCodeSoul(queryClient, { url: "u", saved: "karina" })).toBeUndefined()
+  })
+
+  test("uses the cached desktop default instead of the first eligible identity", () => {
+    const queryClient = newClient()
+    const keys = codeSoulKeys("u")
+    queryClient.setQueryData(keys.list, [{ id: "karina" }, { id: "yuqi" }])
+    queryClient.setQueryData(keys.companions, [{ soulID: "karina" }])
+    queryClient.setQueryData(keys.desktopDefault, { id: "yuqi" })
     expect(resolveCachedCodeSoul(queryClient, { url: "u", saved: "karina" })).toBe("yuqi")
+  })
+
+  test("falls back to the first eligible identity once the desktop default is known to be empty", () => {
+    const queryClient = newClient()
+    const keys = codeSoulKeys("u")
+    queryClient.setQueryData(keys.list, [{ id: "karina" }, { id: "yuqi" }])
+    queryClient.setQueryData(keys.companions, [{ soulID: "karina" }])
+    queryClient.setQueryData(keys.desktopDefault, { id: "" })
+    expect(resolveCachedCodeSoul(queryClient, { url: "u", saved: "karina" })).toBe("yuqi")
+  })
+
+  test("an eligible saved identity still resolves without the desktop default", () => {
+    const queryClient = newClient()
+    const keys = codeSoulKeys("u")
+    queryClient.setQueryData(keys.list, [{ id: "karina" }, { id: "yuqi" }])
+    queryClient.setQueryData(keys.companions, [{ soulID: "yuqi" }])
+    expect(resolveCachedCodeSoul(queryClient, { url: "u", saved: "karina" })).toBe("karina")
   })
 })

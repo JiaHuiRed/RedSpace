@@ -1247,7 +1247,8 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       // 输入区工具栏不再拥挤；提交仍经 lastSoul 通道接 session.create。
       lastSoul: savedSoul,
       // 261122 Red 第二批：已解析出有效身份时直接建会话（暖态零查询）；
-      // 冷缓存返回 undefined，由 submit 只取决定身份所缺的数据。
+      // 261123 Red 默认值未缓存且没有有效 saved 时返回 undefined，由 submit 取默认值再定，
+      // 不能拿第一个可用 Soul 顶替服务端默认。
       confirmedSoul: () => resolveCachedCodeSoul(queryClient, { url: sdk.url, saved: savedSoul() }),
     })
 
