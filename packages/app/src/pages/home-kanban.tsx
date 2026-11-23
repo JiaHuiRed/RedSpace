@@ -97,7 +97,10 @@ export function HomeKanban(props: {
     // 261124 五轮：卡片 355px；idle 容器 355×2+缝10=720。
     const wide = column.id === "idle"
     return (
-    <div class={`flex ${wide ? "w-[720px]" : "w-[355px]"} max-w-full shrink-0 flex-col gap-3`}>
+    // 261123 Red 列宽不再固定 355/720：父容器 max-w-full 缩窄时，固定宽 + shrink-0 会横向溢出。
+    // 两子列改成 flex-1 + 355 basis（第一排容纳不下就 wrap 成纵向），idle 满宽、
+    // 内部卡片网格 auto-fill 自适应列数。
+    <div class={`flex min-w-0 flex-col gap-3 ${wide ? "w-full" : "flex-1 basis-[355px]"}`}>
       <div class="flex items-center gap-2 px-2 h-7 shrink-0">
         <div class="size-2 rounded-full" style={{ "background-color": columnColor(column.id) }} />
         <span class="text-v2-text-text-muted [font-weight:530] text-[13px]">{columnLabel(column.id)}</span>
@@ -113,7 +116,7 @@ export function HomeKanban(props: {
           任意值语法要靠下划线转义，写错了不会报错、只会静默退化成一列。 */}
       <div
         class="pt-2 -mt-2 px-2 -mx-2 grid gap-2.5 auto-rows-min content-start"
-        style={{ "grid-template-columns": wide ? "repeat(2,minmax(0,1fr))" : "minmax(0,1fr)" }}
+        style={{ "grid-template-columns": wide ? "repeat(auto-fill,minmax(240px,1fr))" : "minmax(0,1fr)" }}
       >
         <Show
           when={column.records.length > 0}
@@ -158,7 +161,8 @@ export function HomeKanban(props: {
   return (
     // 261124 八轮：去掉 overflow-x-auto——内容固定 720 宽永远用不上横向滚动，
     // 它自己倒是把滚动条渲染出来了（哥哥：滚动条比不对齐更丑）。
-    <div class="flex min-h-0 flex-col gap-y-6 pl-2 pb-4">
+    // 261123 Red 容器宽随父级收缩（w-full + 728 上限 = 720 内容 + pl-2），窄窗口不再溢出。
+    <div data-component="home-kanban" class="flex min-h-0 w-full max-w-[728px] flex-col gap-y-6 pl-2 pb-4">
       <div class="flex gap-x-2.5">
         {columnBlock(columns()[0]!)}
         {columnBlock(columns()[1]!)}

@@ -80,6 +80,54 @@ test("the old new-session URL opens the same workspace and preserves its deep-li
   await expect(page.locator('[data-component="home-board-section"]')).toBeVisible()
 })
 
+// 261123 Red RS-0204-04：列宽此前固定 355/720 + shrink-0，父列 max-w-full 缩窄时溢出，
+// 窄窗口要横向滚才能看全看板。这里在 1024/900 两个视口上直接量几何：文档不出现横向
+// 滚动，看板根元素的左右边缘都落在视口内。
+for (const width of [1024, 900]) {
+  test(`the kanban band fits a ${width}px viewport without horizontal overflow`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 800 })
+    const sessions = Array.from({ length: 6 }, (_, index) => ({
+      ...fixture.sessions[0]!,
+      id: `ses_home_narrow_${index}`,
+      title: `Narrow task ${index}`,
+      time: { created: 1700000000000 + index, updated: 1700000000000 + index },
+    }))
+    await page.addInitScript((directory) => {
+      localStorage.setItem("RedCode.global.dat:server", JSON.stringify({
+        projects: { local: [{ worktree: directory, expanded: true }] },
+      }))
+    }, fixture.directory)
+    await mockRedCodeServer(page, { ...fixture, sessions, pageMessages: () => ({ items: [] }) })
+    const serverPort = process.env.PLAYWRIGHT_SERVER_PORT ?? "4096"
+    await page.route((url) => url.port === serverPort, async (route) => {
+      const url = new URL(route.request().url())
+      if (url.pathname === "/experimental/session") return route.fulfill({ json: sessions })
+      if (url.pathname === "/config/providers") {
+        const directory = url.searchParams.get("directory")
+        return route.fulfill({ json: directory ? { providers: fixture.provider.all } : { providers: [] } })
+      }
+      if (url.pathname === "/companion") return route.fulfill({ json: [] })
+      return route.fallback()
+    })
+    await page.goto("/")
+    const board = page.locator('[data-component="home-board-section"]')
+    await expect(board.locator('[data-component="kanban-card"]').first()).toBeVisible()
+    const view = await page.evaluate(() => ({
+      scroll: document.documentElement.scrollWidth,
+      client: document.documentElement.clientWidth,
+    }))
+    expect(view.scroll).toBeLessThanOrEqual(view.client)
+    // 看板根不能比父容器宽：固定 355/720 + shrink-0 时这里会超出（负向对照实测 728 > 718）。
+    const fit = await board.locator('[data-component="home-kanban"]').evaluate((el) => {
+      const box = el.getBoundingClientRect()
+      return { width: box.width, parent: el.parentElement!.clientWidth, left: box.left, right: box.right }
+    })
+    expect(fit.width).toBeLessThanOrEqual(fit.parent)
+    expect(fit.left).toBeGreaterThanOrEqual(0)
+    expect(fit.right).toBeLessThanOrEqual(view.client)
+  })
+}
+
 for (const selectLinked of [false, true]) {
   test(`linked-session plus restores its own draft and sends to ${selectLinked ? "linked worktree" : "main"}`, async ({ page }) => {
     const linked = "C:/RedCode/SmokeLinkedWorktree"
