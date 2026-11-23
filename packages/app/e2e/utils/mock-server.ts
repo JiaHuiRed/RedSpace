@@ -14,6 +14,8 @@ const emptyList = new Set([
   // 261013 Red soul 列表未 mock 时会吃到下方兜底的 {}，组件里 soulList.data?.find
   // 对对象取 find 直接 TypeError 崩掉整个 session 页（CI e2e 261008 Soul V1A 起稳定红）。
   "/soul",
+  // 261123 Red 文件树预取走 file.list，兜底 {} 让 (x.data ?? []).map 崩成错误 toast。
+  "/file",
 ])
 const emptyObject = new Set(["/global/config", "/config", "/provider/auth", "/mcp", "/session/status"])
 
