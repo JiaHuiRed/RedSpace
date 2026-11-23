@@ -1045,7 +1045,13 @@ export const toUIMessages = Effect.fn("Message.toUIMessages")(function* (
       //   尾部缓存作废（实测 ses_ffe5e5 三次中段回退共 ≈20k token，383→8363 字符改写）。
       //   跳过后收尾消息以完整形态首次出现，投影保持纯追加。取证与决策：
       //   docs/notes/proposed/bug-fix/2026-10-12-gpt-6.1-sol-cache-instability.md §2026-11-04
-      if (!msg.info.finish && !msg.info.error) continue
+      // 261124 Red 流式中改以 completed 缺失为准：idle 兜底掐流（processor 的
+      //   Stream.timeoutOrElse → Stream.empty）是正常收尾，既没有 finish 事件也不走中断
+      //   error 路径，旧判定把这种「已收尾」消息当在途永久跳过——模型看不到自己上一次
+      //   的输出和工具结果，中断后拿同一份旧历史反复重做同一件事（ses_ffe5df6d 连续五步
+      //   重跑同一条打包命令；全库 48 会话 111 条消息隐身）。收尾必先落 part 再写
+      //   time.completed，所以 completed 才是在途的唯一可靠标志。
+      if (!msg.info.finish && !msg.info.error && !msg.info.time.completed) continue
 
       if (
         msg.info.error &&

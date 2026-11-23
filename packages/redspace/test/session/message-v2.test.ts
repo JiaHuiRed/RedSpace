@@ -232,6 +232,38 @@ describe("session.message-v2.toModelMessage", () => {
     expect(JSON.stringify(out)).toContain("final answer")
   })
 
+  test("projects completed messages that never got a finish or error (idle stream cutoff)", async () => {
+    // 261124 Red idle 兜底掐流（processor 的 Stream.timeoutOrElse → Stream.empty）是正常
+    //   收尾：只写 time.completed，没有 provider finish，也不走中断 error 路径。这类消息
+    //   必须出站，否则模型看不到自己上一次的输出与被中断的工具结果，续跑时拿旧历史重做
+    //   同一件事（ses_ffe5df6d 连续五步重跑同一条打包命令）。
+    const cutoff = [
+      {
+        info: { ...unfinishedAssistantInfo("a-idle-cutoff", "u1"), time: { created: 0, completed: 1 } },
+        parts: [
+          { ...basePart("a-idle-cutoff", "t1"), type: "text", text: "started the build" },
+          {
+            ...basePart("a-idle-cutoff", "c1"),
+            type: "tool",
+            callID: "call-1",
+            tool: "bash",
+            state: {
+              status: "error",
+              input: { command: "build" },
+              error: "Tool execution was interrupted before it settled",
+              metadata: { interrupted: true, output: "APK_BUILD_PID=1\n" },
+              time: { start: 1, end: 2 },
+            },
+          },
+        ] as MessageV2.Part[],
+      },
+    ]
+
+    const out = JSON.stringify(await MessageV2.toModelMessages(cutoff, model))
+    expect(out).toContain("started the build")
+    expect(out).toContain("APK_BUILD_PID=1")
+  })
+
   test("filters out messages with no parts", async () => {
     const input: MessageV2.WithParts[] = [
       {
