@@ -1438,6 +1438,31 @@ describe("tool.shell abort", () => {
     15_000,
   )
 
+  if (process.platform === "win32") {
+    it.live(
+      "returns promptly when a grandchild inherits stdout",
+      () =>
+        runIn(
+          projectRoot,
+          Effect.gen(function* () {
+            // 261124 Red Start-Process 的后台子进程继承宿主 stdout 句柄，pipe 不会随
+            //   pwsh 退出而关闭；旧实现等流自然 EOF，工具一直挂到子进程跑完
+            //   （RedMon 实测 302s，只有 step 级 idle 兜底能收）。
+            const started = Date.now()
+            const result = yield* run({
+              shell: "powershell",
+              command: `$p = Start-Process -FilePath cmd.exe -ArgumentList '/c ping -n 10 127.0.0.1 > nul' -PassThru -WindowStyle Hidden -RedirectStandardOutput "$env:TEMP\\rc-shell-timeout.out"; "PID=$($p.Id)"`,
+              description: "grandchild holds stdout",
+              timeout: 2000,
+            })
+            expect(Date.now() - started).toBeLessThan(5000)
+            expect(result.output).toContain("PID=")
+          }),
+        ),
+      20_000,
+    )
+  }
+
   it.live(
     "uses RuntimeFlags bashDefaultTimeoutMs when timeout is omitted",
     () =>

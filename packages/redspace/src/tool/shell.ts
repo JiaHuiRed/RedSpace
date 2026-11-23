@@ -1,4 +1,4 @@
-import { Effect, Stream } from "effect"
+import { Effect, Fiber, Stream } from "effect"
 import os from "os"
 import { createWriteStream, mkdirSync } from "node:fs"
 import * as Tool from "./tool"
@@ -791,7 +791,7 @@ export const ShellTool = Tool.define(
           yield* Effect.addFinalizer(closeSink)
           const handle = yield* spawner.spawn(cmd(input.shell, input.command, input.cwd, input.env))
 
-          yield* Effect.forkScoped(
+          const reader = yield* Effect.forkDetach(
             Stream.runForEach(Stream.decodeText(handle.all), (chunk) => {
               const size = Buffer.byteLength(chunk, "utf-8")
               list.push({ text: chunk, size })
@@ -869,6 +869,13 @@ export const ShellTool = Tool.define(
               .kill({ forceKillAfter: "3 seconds" })
               .pipe(Effect.catch((error) => Effect.sync(() => log.warn("kill.failed", { reason: "timeout", error }))))
           }
+
+          // 261124 Red 后台子进程继承 stdout 句柄时 pipe 不随宿主退出关闭（Start-Process
+          //   实测：pwsh 已 exit，流仍被孙进程持有到它跑完）。spawn 侧已改为以 exit 收口，
+          //   reader 这里同步处理：先给正常进程 1s 把管道里剩余输出读完，再中断；
+          //   forkDetach 让这个 fiber 不参与 scope 收尾，孙进程握着句柄也不会拖住工具返回。
+          yield* Fiber.await(reader).pipe(Effect.timeout("1 second"), Effect.ignore)
+          yield* Fiber.interrupt(reader).pipe(Effect.timeout("500 millis"), Effect.ignore)
 
           return exit.kind === "exit" ? exit.code : null
         }),

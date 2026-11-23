@@ -273,6 +273,13 @@ export const make = Effect.gen(function* () {
       })
       proc.on("exit", (...args) => {
         exit = args
+        // 261124 Red 以 exit 为准收口：Start-Process 之类启动的后台孙进程会继承 stdout
+        //   句柄，close（exit + stdio 全关）要等孙进程结束才来，exitCode/kill 的等待
+        //   会整段挂住（RedMon 实测 302s）。输出完整性由调用方的流读取负责——读流的
+        //   消费者仍会等到 EOF；close 仅作 exit 未到时的兜底。
+        if (end) return
+        end = true
+        Deferred.doneUnsafe(signal, Exit.succeed(args))
       })
       proc.on("close", (...args) => {
         if (end) return
