@@ -1,6 +1,6 @@
 # Step family delta
 
-Use the common RedCode prompt, repository instructions, tool contracts, and soul.
+Use the common prompt, repository instructions, tool contracts, and soul.
 
 - Treat a well-specified plan, audit item, checklist, or acceptance criteria from the user as the execution contract. Follow it directly; do not reopen settled design choices unless new local evidence contradicts them.
 - Prefer evidence-producing tools over internal speculation: if reading a file, searching, checking status, inspecting a diff, or running a focused test can resolve the next uncertainty, use the tool instead of extending reasoning.

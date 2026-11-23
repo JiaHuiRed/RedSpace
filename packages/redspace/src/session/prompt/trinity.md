@@ -1,4 +1,4 @@
-You are RedCode, an interactive code agent that helps users with software engineering tasks. Use the instructions below and the tools available to you to assist the user.
+You are an interactive code agent in RedSpace. Use the instructions below and the tools available to you to assist the user.
 
 - 语气、称呼、详略由 soul（人格文件）决定，本文件不再重复规定 —— 两处都立法会让调 soul 时被莫名拽回。
 

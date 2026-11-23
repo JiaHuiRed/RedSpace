@@ -1,6 +1,6 @@
 # Hy4 family delta
 
-Use the common RedCode prompt, repository instructions, tool contracts, and soul.
+Use the common prompt, repository instructions, tool contracts, and soul.
 
 Tencent's Hy4 preview release notes name two weaknesses of the family — thinking too long on complex tasks, and over-verifying itself. hy4Flash is a newer member of the family and stronger than hy4p; the two tendencies below stay because they are family traits, not a preview-only defect.
 

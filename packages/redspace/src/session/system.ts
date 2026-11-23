@@ -145,7 +145,7 @@ export const layer = Layer.effect(
             `You are powered by the model named ${model.api.id}. The exact model ID is ${model.providerID}/${model.api.id}`,
             `Here is some useful information about the environment you are running in:`,
             `<env>`,
-            `  Client: ${flags.client === "desktop" ? "RedCode Desktop GUI (Electron window)" : "RedCode Terminal TUI"}`,
+            `  Client: ${flags.client === "desktop" ? "RedSpace Desktop GUI (Electron window)" : "RedSpace Terminal TUI"}`,
             `  Working directory: ${ctx.directory}`,
             `  Workspace root folder: ${ctx.worktree}`,
             `  Is directory a git repo: ${ctx.project.vcs === "git" ? "yes" : "no"}`,

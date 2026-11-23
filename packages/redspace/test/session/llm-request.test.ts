@@ -187,6 +187,7 @@ describe("session.llm.request developer instructions wire shape", () => {
       role: "developer",
       content: expect.stringContaining("BASE INSTRUCTIONS\nEXTRA INSTRUCTIONS"),
     })
+    expect(body.input[0].content).toContain("You operate through RedSpace")
     expect(body.input[1]).toEqual({ role: "user", content: [{ type: "input_text", text: "Hello" }] })
   })
 

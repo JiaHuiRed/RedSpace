@@ -1314,6 +1314,8 @@ it.instance("sends the pinned Soul and scoped engineering memory through each ac
         const requests = (yield* llm.inputs).slice(-2)
         const prefix = (requests[0].messages as { role: string; content: string }[])[0]
         expect(prefix.role).toBe("system")
+        expect(prefix.content).toContain("You operate through RedSpace")
+        expect(prefix.content).toContain("Client: RedSpace Terminal TUI")
         expect(prefix.content.includes(info.content)).toBe(true)
         expect(prefix.content).toContain(`Commit attribution owner: [${info.commitPrefix}]`)
         expect(prefix.content.split(CONVERSATION)).toHaveLength(2)
