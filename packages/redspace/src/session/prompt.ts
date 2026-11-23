@@ -1,6 +1,8 @@
 import { isUserTurn } from "@redcode-ai/core/util/message-turn"
 import path from "path"
 import os from "os"
+import { createHash } from "node:crypto"
+import { isDeepStrictEqual } from "node:util"
 import { SessionID, MessageID, PartID } from "./schema"
 import { MessageV2 } from "./message-v2"
 import { ImageTokens } from "./image-tokens"
@@ -122,6 +124,8 @@ const DEFAULT_MAX_STEPS = 300
 const _caches = PromptCaches
 const decodeMessageInfo = Schema.decodeUnknownExit(MessageV2.Info)
 const decodeMessagePart = Schema.decodeUnknownExit(MessageV2.Part)
+// 261123 Red GUI 侧车跑在 Node 下，Bun.hash/Bun.deepEquals 在主提示路径直接 ReferenceError（发消息即失败）。
+const hashText = (value: string) => createHash("sha256").update(value).digest("hex")
 
 const STRUCTURED_OUTPUT_DESCRIPTION = `Use this tool to return your final response in the requested structured format.
 
@@ -1928,19 +1932,17 @@ export const layer = Layer.effect(
         const modelKey = `${model.providerID}/${model.id}`
         // 261122 Red 重启沿用当前会话的系统段。新会话、升级、目录/模式或显式指令配置变化会重新组装。
         // 决策：docs/notes/implemented/feature/2026-11-17-prompt-pin-messages.md
-        const systemScope = String(
-          Bun.hash(
-            JSON.stringify([
-              InstallationVersion,
-              modelKey,
-              ctx.directory,
-              ctx.worktree,
-              process.platform,
-              chatMode,
-              nativeConfig.instructions,
-              nativeConfig.instruction_budget,
-            ]),
-          ),
+        const systemScope = hashText(
+          JSON.stringify([
+            InstallationVersion,
+            modelKey,
+            ctx.directory,
+            ctx.worktree,
+            process.platform,
+            chatMode,
+            nativeConfig.instructions,
+            nativeConfig.instruction_budget,
+          ]),
         )
         const sessionSystem = _caches.system.get(sessionID)
         const systemBucket = sessionSystem?.get(modelKey)
@@ -1963,7 +1965,7 @@ export const layer = Layer.effect(
         if (diskMessages?.messages && !diskMessages.transformed) {
           for (const message of msgs) {
             const saved = pinnedMessages.messages.get(message.info.id)
-            if (saved && !Bun.deepEquals(saved, message.parts)) pinnedMessages.transformed.add(message.info.id)
+            if (saved && !isDeepStrictEqual(saved, message.parts)) pinnedMessages.transformed.add(message.info.id)
           }
         }
 
@@ -1971,7 +1973,7 @@ export const layer = Layer.effect(
         const originalParts = new Map(
           msgs
             .filter((message) => !pinnedMessages.messages.has(message.info.id))
-            .map((message) => [message.info.id, Bun.hash(JSON.stringify(message.parts))]),
+            .map((message) => [message.info.id, hashText(JSON.stringify(message.parts))]),
         )
         msgs = yield* SessionReminders.apply({ messages: msgs, agent, session: stepSettings.session }).pipe(
           Effect.provideService(RuntimeFlags.Service, flags),
@@ -2192,7 +2194,7 @@ export const layer = Layer.effect(
                 pinned++
               } else {
                 pinnedMessages.messages.set(mid, structuredClone(msg.parts))
-                if (originalParts.get(mid) !== Bun.hash(JSON.stringify(msg.parts))) pinnedMessages.transformed.add(mid)
+                if (originalParts.get(mid) !== hashText(JSON.stringify(msg.parts))) pinnedMessages.transformed.add(mid)
                 cached++
                 if (msg.info.role === "user")
                   log.info("msg-pin first", {
