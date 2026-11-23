@@ -205,8 +205,7 @@ describe("Tool.define", () => {
       const tool = yield* info.init()
       const execute = tool.execute as unknown as (args: unknown, ctx: Tool.Context) => ReturnType<typeof tool.execute>
 
-      // Missing required `question` field on the first questions[] entry.
-      const exit = yield* execute({ questions: [{ options: ["a"] }] }, makeCtx()).pipe(Effect.exit)
+      const exit = yield* execute({ questions: [{ options: [42] }] }, makeCtx()).pipe(Effect.exit)
       expect(Exit.isFailure(exit)).toBe(true)
       if (!Exit.isFailure(exit)) return
 
@@ -219,7 +218,8 @@ describe("Tool.define", () => {
       expect(args.tool).toBe("qtest")
       expect(args.message).toContain("qtest tool was called with invalid arguments")
       expect(args.message).toContain("Please rewrite the input")
-      expect(args.message).toContain(`["questions"][0]["question"]`)
+      expect(args.message).toContain(`- ["questions"][0]["question"]: Missing required parameter`)
+      expect(args.message).toContain(`- ["questions"][0]["options"][0]: Wrong type: Expected string`)
     }),
   )
 })

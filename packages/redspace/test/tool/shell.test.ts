@@ -1472,7 +1472,7 @@ describe("tool.shell abort", () => {
     )
   }
 
-  it.live("returns non-zero exit code", () =>
+  it.live("returns non-zero exit code in output and metadata", () =>
     runIn(
       projectRoot,
       Effect.gen(function* () {
@@ -1481,6 +1481,7 @@ describe("tool.shell abort", () => {
           description: "Non-zero exit",
         })
         expect(result.metadata.exit).toBe(42)
+        expect(result.output).toContain("<shell_metadata>\nExit code 42\n</shell_metadata>")
       }),
     ),
   )

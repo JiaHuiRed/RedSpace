@@ -17,7 +17,7 @@ import { Parameters as Invalid } from "../../src/tool/invalid"
 import { Parameters as Lsp } from "../../src/tool/lsp"
 import { Parameters as Plan } from "../../src/tool/plan"
 import { Parameters as Question } from "../../src/tool/question"
-import { Parameters as Read } from "../../src/tool/read"
+import { Parameters as Read, ReadJsonSchema } from "../../src/tool/read"
 import { Parameters as Shell } from "../../src/tool/shell"
 import { Parameters as Skill } from "../../src/tool/skill"
 import { Parameters as Task } from "../../src/tool/task"
@@ -45,7 +45,7 @@ describe("tool parameters", () => {
     test("lsp", () => expect(toJsonSchema(Lsp)).toMatchSnapshot())
     test("plan", () => expect(toJsonSchema(Plan)).toMatchSnapshot())
     test("question", () => expect(toJsonSchema(Question)).toMatchSnapshot())
-    test("read", () => expect(toJsonSchema(Read)).toMatchSnapshot())
+    test("read", () => expect(ReadJsonSchema).toMatchSnapshot())
     test("skill", () => expect(toJsonSchema(Skill)).toMatchSnapshot())
     test("task", () => expect(toJsonSchema(Task)).toMatchSnapshot())
     test("todo", () => expect(toJsonSchema(Todo)).toMatchSnapshot())
@@ -227,6 +227,23 @@ describe("tool parameters", () => {
       const parsed = parse(Read, { filePath: "/a", offset: 10, limit: 100 })
       expect(parsed.offset).toBe(10)
       expect(parsed.limit).toBe(100)
+    })
+    test("accepts unambiguous line-range arguments", () => {
+      expect(parse(Read, { filePath: "/a", offset: " 10 ", limit: [5] })).toEqual({
+        filePath: "/a",
+        offset: 10,
+        limit: 5,
+      })
+      expect(parse(Read, { filePath: "/a", offset: ["2"], limit: "3" })).toEqual({
+        filePath: "/a",
+        offset: 2,
+        limit: 3,
+      })
+    })
+    test("rejects ambiguous or invalid line-range arguments", () => {
+      for (const value of [null, true, "", "1e3", "1.5", "-1", "9007199254740993", [], [1, 2], [[1]]]) {
+        expect(accepts(Read, { filePath: "/a", limit: value })).toBe(false)
+      }
     })
   })
 

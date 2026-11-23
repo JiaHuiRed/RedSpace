@@ -1,4 +1,4 @@
-import { Effect, Option, Schema, Scope, Stream } from "effect"
+import { Effect, Option, Schema, SchemaGetter, Scope, Stream } from "effect"
 import { NonNegativeInt } from "@redcode-ai/core/schema"
 import * as path from "path"
 import * as Tool from "./tool"
@@ -14,6 +14,7 @@ import { Hash } from "@redcode-ai/core/util/hash"
 import * as Bom from "@/util/bom"
 import { Service as SnippetService, type Snippet } from "@/session/snippet"
 import { FileTime } from "@/file/time"
+import { ToolJsonSchema } from "./json-schema"
 
 const DEFAULT_READ_LIMIT = 2000
 const MAX_LINE_LENGTH = 2000
@@ -187,12 +188,7 @@ function extractSymbols(lines: string[], ext: string): ExtractedSymbol[] {
   return results
 }
 
-// `offset` and `limit` were originally `z.coerce.number()` — the runtime
-// coercion was useful when the tool was called from a shell but serves no
-// purpose in the LLM tool-call path (the model emits typed JSON). The JSON
-// Schema output is identical (`type: "number"`), so the LLM view is
-// unchanged; purely CLI-facing uses must now send numbers rather than strings.
-export const Parameters = Schema.Struct({
+const WireParameters = Schema.Struct({
   filePath: Schema.String.annotate({ description: "The absolute path to the file or directory to read" }),
   offset: Schema.optional(NonNegativeInt).annotate({
     description: "The line number to start reading from (1-indexed)",
@@ -201,6 +197,21 @@ export const Parameters = Schema.Struct({
     description: "The maximum number of lines to read (defaults to 2000)",
   }),
 })
+
+// 261123 Red 声明仍只教模型传数字；执行边界兼容无歧义的十进制整数字符串与单元素数组。
+const RangeScalar = Schema.Union([Schema.Number, Schema.String.check(Schema.isPattern(/^\s*\d+\s*$/))])
+const RangeInput = Schema.Union([RangeScalar, Schema.Tuple([RangeScalar])]).pipe(
+  Schema.decodeTo(NonNegativeInt, {
+    decode: SchemaGetter.transform((value) => Number(typeof value === "object" ? value[0] : value)),
+    encode: SchemaGetter.transform((value) => value),
+  }),
+)
+export const Parameters = WireParameters.mapFields((fields) => ({
+  ...fields,
+  offset: Schema.optional(RangeInput),
+  limit: Schema.optional(RangeInput),
+}))
+export const ReadJsonSchema = ToolJsonSchema.fromSchema(WireParameters)
 
 export const ReadTool = Tool.define(
   "read",
@@ -612,6 +623,7 @@ export const ReadTool = Tool.define(
     return {
       description: DESCRIPTION,
       parameters: Parameters,
+      jsonSchema: ReadJsonSchema,
       execute: (params: Schema.Schema.Type<typeof Parameters>, ctx: Tool.Context) =>
         run(params, ctx).pipe(Effect.orDie),
     }

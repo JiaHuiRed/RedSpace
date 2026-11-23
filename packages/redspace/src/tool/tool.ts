@@ -1,4 +1,4 @@
-import { Effect, Schema } from "effect"
+import { Effect, Schema, SchemaIssue } from "effect"
 import type { JSONSchema7 } from "@ai-sdk/provider"
 import type { MessageV2 } from "../session/message-v2"
 import type { Permission } from "../permission"
@@ -24,8 +24,33 @@ export class InvalidArgumentsError extends Schema.TaggedError<InvalidArgumentsEr
   },
 ) {
   override get message() {
-    return `The ${this.tool} tool was called with invalid arguments: ${this.detail}.\nPlease rewrite the input so it satisfies the expected schema.`
+    return `The ${this.tool} tool was called with invalid arguments:\n${this.detail}\nPlease rewrite the input so it satisfies the expected schema.`
   }
+}
+
+const formatIssues = SchemaIssue.makeFormatterStandardSchemaV1({
+  leafHook(issue) {
+    if (issue._tag === "MissingKey") return "Missing required parameter"
+    if (issue._tag === "UnexpectedKey") return "Unexpected parameter"
+    if (issue._tag === "InvalidType") return `Wrong type: ${SchemaIssue.defaultLeafHook(issue)}`
+    return SchemaIssue.defaultLeafHook(issue)
+  },
+})
+
+function validationDetail(error: Schema.SchemaError) {
+  const { issues } = formatIssues(error.issue)
+  const lines = issues.slice(0, 5).map(({ path, message }) => {
+    const location = path
+      ?.map((segment) => {
+        const key = typeof segment === "object" ? segment.key : segment
+        return typeof key === "number" ? `[${key}]` : `[${JSON.stringify(String(key))}]`
+      })
+      .join("")
+    const line = `- ${location || "input"}: ${message}`
+    return line.length > 160 ? `${line.slice(0, 159)}…` : line
+  })
+  if (issues.length > lines.length) lines.push(`- ${issues.length - lines.length} more issue(s) not shown`)
+  return lines.join("\n")
 }
 
 // 260814 Red 工具级 cooperative 超时（参考 DeepSeek Harness guard/timeout-policy）
@@ -135,12 +160,12 @@ function wrap<Parameters extends Schema.Decoder<unknown>, Result extends Metadat
           ...(ctx.callID ? { "tool.call_id": ctx.callID } : {}),
         }
         return Effect.gen(function* () {
-          const decoded = yield* decode(args).pipe(
+          const decoded = yield* decode(args, { errors: "all", reportInput: false }).pipe(
             Effect.mapError(
               (error) =>
                 new InvalidArgumentsError({
                   tool: id,
-                  detail: toolInfo.formatValidationError ? toolInfo.formatValidationError(error) : String(error),
+                  detail: toolInfo.formatValidationError?.(error).slice(0, 900) ?? validationDetail(error),
                 }),
             ),
           )

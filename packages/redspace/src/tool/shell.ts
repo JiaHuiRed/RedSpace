@@ -875,6 +875,7 @@ export const ShellTool = Tool.define(
       ).pipe(Effect.orDie)
 
       const meta = outcomeNotes({ aborted, expired, timeout: input.timeout })
+      if (code !== null && code !== 0) meta.push(`Exit code ${code}`)
       const raw = list.map((item) => item.text).join("")
       const end = tail(raw, limits.maxLines, limits.maxBytes)
       if (end.cut) cut = true

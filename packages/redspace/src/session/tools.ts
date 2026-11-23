@@ -197,7 +197,10 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
           const unknownKeys = ToolJsonSchema.unknownArgumentKeys(ToolJsonSchema.fromTool(item), args)
           if (unknownKeys.length > 0) {
             // 参数名列表限长：极端幻觉载荷（几十个垃圾字段）不该把错误文本撑成无界注入。
-            const listed = unknownKeys.slice(0, 5).join(", ")
+            const listed = unknownKeys
+              .slice(0, 5)
+              .map((key) => (key.length > 80 ? `${key.slice(0, 79)}…` : key))
+              .join(", ")
             const more = unknownKeys.length > 5 ? ` (+${unknownKeys.length - 5} more)` : ""
             throw new Error(
               `Tool "${item.id}" received unknown argument(s): ${listed}${more}. ` +

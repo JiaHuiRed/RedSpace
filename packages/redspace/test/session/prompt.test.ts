@@ -4085,6 +4085,59 @@ if (Shell.posix(Shell.acceptable()) || Shell.ps(Shell.acceptable())) {
   )
 }
 
+it.instance("returns a non-zero shell exit code to the model as a completed tool result", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({
+      permission: [{ permission: "bash", pattern: "*", action: "allow" }],
+    })
+    yield* llm.tool("bash", { command: "exit 1", description: "Check a non-zero exit status" })
+    yield* llm.text("The command exited with status 1.")
+    yield* user(chat.id, "Check the exit status.")
+    yield* prompt.loop({ sessionID: chat.id })
+    const parts = (yield* MessageV2.filterCompactedEffect(chat.id)).flatMap((message) => message.parts)
+    expect(completedTool(parts)?.state.metadata.exit).toBe(1)
+    expect(yield* llm.inputs).toContainEqual(
+      expect.objectContaining({
+        messages: expect.arrayContaining([
+          expect.objectContaining({ role: "tool", content: expect.stringContaining("Exit code 1") }),
+        ]),
+      }),
+    )
+  }),
+)
+
+it.instance("returns field-level validation errors and accepts corrected Read ranges", () =>
+  Effect.gen(function* () {
+    const { dir, llm } = yield* useServerConfig(providerCfg)
+    const prompt = yield* SessionPrompt.Service
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({
+      permission: [{ permission: "read", pattern: "*", action: "allow" }],
+    })
+    const filePath = path.join(dir, "read-range.txt")
+    yield* writeText(filePath, "unrequested first line\nrequested middle line\nunrequested last line\n")
+    yield* llm.tool("read", { offset: true })
+    yield* llm.tool("read", { filePath, offset: "2", limit: [1] })
+    yield* llm.text("Read the requested line.")
+    yield* user(chat.id, "Read line two.")
+    yield* prompt.loop({ sessionID: chat.id })
+    const parts = (yield* MessageV2.filterCompactedEffect(chat.id))
+      .flatMap((message) => message.parts)
+      .filter((part) => part.type === "tool" && part.tool === "read")
+    const validation = errorTool(parts.slice(0, 1))?.state.error
+    expect(validation).toContain(`["filePath"]: Missing required parameter`)
+    expect(validation).toContain(`["offset"]: Expected number`)
+    const output = completedTool(parts.slice(1))?.state.output
+    expect(output).toContain("2: requested middle line")
+    expect(output).not.toContain("unrequested")
+    const wireMessages = (yield* llm.inputs).map((input) => input.messages)
+    expect(JSON.stringify(wireMessages).includes("Missing required parameter")).toBe(true)
+  }),
+)
+
 it.instance("failed subtask preserves metadata on error tool state", () =>
   Effect.gen(function* () {
     const { llm } = yield* useServerConfig((url) => ({
