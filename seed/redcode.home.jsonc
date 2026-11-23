@@ -141,21 +141,6 @@
         }
       }
     },
-    // models.dev 未收录，config 扩展内置（凭据在 auth.json step_plan）；1M/64k、提示缓存、
-    // reasoning_effort 三档；定价 7/0.35/20 元每 1M，CNY 表在 provider.ts。
-    "stepfun-step-plan": {
-      "models": {
-        "step-5-preview": {
-          "name": "Step 5 Preview",
-          "temperature": true,
-          "reasoning": true,
-          "tool_call": true,
-          "attachment": true,
-          "modalities": { "input": ["text", "image"], "output": ["text"] },
-          "limit": { "context": 1048576, "output": 65536 }
-        }
-      }
-    },
     // 260802 Red 接入 SenseNova：tokenplan 套餐定价全 0。apiKey 走 {env:} 占位符，
     // 值由用户级环境变量 SENSENOVA_API_KEY 提供（setx 设置，配置同步模板时不会泄漏明文 key）。
     // 本模板会反向覆盖 live 配置，两处必须保持一致。
