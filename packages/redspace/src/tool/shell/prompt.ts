@@ -31,6 +31,10 @@ export function parameterSchema(description: string) {
       description:
         "Shell to run the command with. 'default' or omitted uses this tool's configured shell. 'bash' and 'powershell' explicitly pick Git Bash or PowerShell 7+ on Windows; ignored on other platforms.",
     }),
+    background: Schema.optional(Schema.Boolean).annotate({
+      description:
+        "Start the command detached in the background and return immediately with its pid and log path; timeout does not apply. Use for long builds/tests, then poll the log path with a follow-up command instead of starting the same command again.",
+    }),
     description: Schema.String.annotate({ description }),
   })
 }

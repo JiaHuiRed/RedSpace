@@ -1,6 +1,7 @@
 import { Effect, Fiber, Stream } from "effect"
 import os from "os"
-import { createWriteStream, mkdirSync } from "node:fs"
+import { createWriteStream, mkdirSync, openSync, closeSync } from "node:fs"
+import { spawn as nodeSpawn } from "node:child_process"
 import * as Tool from "./tool"
 import path from "path"
 import * as Log from "@redcode-ai/core/util/log"
@@ -560,6 +561,18 @@ function cmd(shell: string, command: string, cwd: string, env: NodeJS.ProcessEnv
     detached: process.platform !== "win32",
   })
 }
+
+// 261124 Red 后台模式直接走 node:child_process：stdout/stderr 指向日志文件、detached +
+// unref，工具返回后子进程继续跑，也不把 stdio 管道留给宿主（正是前台挂住的根源）。
+function backgroundArgv(shell: string, command: string) {
+  if (process.platform === "win32" && Shell.ps(shell))
+    return {
+      file: shell,
+      args: ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", PS_UTF8 + PS_READ_UTF8 + command],
+    }
+  if (Shell.name(shell) === "cmd") return { file: shell, args: ["/d", "/s", "/c", command] }
+  return { file: shell, args: ["-c", command] }
+}
 const parser = lazy(async () => {
   const { Parser } = await import("web-tree-sitter")
   const { default: treeWasm } = await import("web-tree-sitter/tree-sitter.wasm" as string, {
@@ -929,6 +942,58 @@ export const ShellTool = Tool.define(
         const prompt = ShellPrompt.render(name, process.platform, limits, tmpDir)
         log.info("shell tool using shell", { shell })
 
+        const runBackground = (input: {
+          shell: string
+          command: string
+          cwd: string
+          env: NodeJS.ProcessEnv
+          description: string
+        }) =>
+          Effect.gen(function* () {
+            const logPath = path.join(tmpDir, `background-${Date.now()}.log`)
+            const fd = openSync(logPath, "a")
+            const argv = backgroundArgv(input.shell, input.command)
+            const child = nodeSpawn(argv.file, argv.args, {
+              cwd: input.cwd,
+              env: input.env,
+              stdio: ["ignore", fd, fd],
+              // 261124 Red Windows 下 detached 会让 fd 重定向失效（实测日志为空）；
+              // Windows 子进程本来就不随父进程退出，unref 足够放行。Unix 仍需 detached
+              // 脱离父进程组，否则父进程退出时会被一起带走。
+              detached: process.platform !== "win32",
+              windowsHide: true,
+            })
+            // spawn 失败是异步 error 事件；不挂监听会变成未捕获异常。
+            child.on("error", (error) => log.warn("background.spawn.failed", { error }))
+            closeSync(fd)
+            if (child.pid === undefined) throw new Error(`Failed to start background command with ${input.shell}`)
+            child.unref()
+            const pid = child.pid ?? -1
+            const poll = Shell.ps(input.shell)
+              ? `Get-Content -LiteralPath '${logPath}' -Tail 80; Get-Process -Id ${pid} -ErrorAction SilentlyContinue`
+              : `tail -n 80 '${logPath}'; kill -0 ${pid} 2>/dev/null && echo running`
+            return {
+              title: input.description,
+              // 与前台分支保持同一 metadata 形状：Tool 的 Metadata 泛型由返回值推断，
+              // 多一套键会把 execute 的返回类型推成不相容的联合。
+              metadata: {
+                output: `Started in background (pid=${pid}). Log: ${logPath}`,
+                exit: null,
+                shell: Shell.name(input.shell),
+                description: input.description,
+                truncated: false,
+              },
+              output: [
+                "Started in background; this tool call returned without waiting.",
+                `pid: ${pid}`,
+                `log: ${logPath}`,
+                "",
+                "Poll with this same tool (do not start the same command again):",
+                `  ${poll}`,
+              ].join("\n"),
+            }
+          })
+
         return {
           description: prompt.description,
           parameters: prompt.parameters,
@@ -943,10 +1008,10 @@ export const ShellTool = Tool.define(
                   `Shell "${params.shell}" is not available on this machine. Install Git for Windows (bash) or PowerShell 7 (pwsh), or omit the shell parameter to use ${name}.`,
                 )
               }
-              if (startsWithLongSleep(params.command, resolved)) {
+              if (startsWithLongSleep(params.command, resolved) && !params.background) {
                 throw new Error(
                   `Foreground sleep of ${LONG_SLEEP_SECONDS} seconds or more is not allowed. ` +
-                    "Check the condition directly, or use a process-management tool to wait in the background if available.",
+                    "Use background: true for long waits, or check the condition directly.",
                 )
               }
               const instanceCtx = yield* InstanceState.context
@@ -977,6 +1042,16 @@ export const ShellTool = Tool.define(
                   yield* ask(ctx, scan)
                 }),
               )
+
+              if (params.background) {
+                return yield* runBackground({
+                  shell: resolved,
+                  command: params.command,
+                  cwd,
+                  env: yield* shellEnv(ctx, cwd),
+                  description: params.description,
+                })
+              }
 
               return yield* run(
                 {

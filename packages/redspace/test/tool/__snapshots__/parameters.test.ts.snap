@@ -20,6 +20,10 @@ exports[`tool parameters JSON Schema (wire shape) bash 1`] = `
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "properties": {
+    "background": {
+      "description": "Start the command detached in the background and return immediately with its pid and log path; timeout does not apply. Use for long builds/tests, then poll the log path with a follow-up command instead of starting the same command again.",
+      "type": "boolean",
+    },
     "command": {
       "description": "The command to execute",
       "type": "string",

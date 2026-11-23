@@ -16,7 +16,7 @@ import { SessionID, MessageID } from "../../src/session/schema"
 import { CrossSpawnSpawner } from "@redcode-ai/core/cross-spawn-spawner"
 import { AppFileSystem } from "@redcode-ai/core/filesystem"
 import { Plugin } from "../../src/plugin"
-import { testEffect } from "../lib/effect"
+import { testEffect, pollWithTimeout } from "../lib/effect"
 import { Tool } from "@/tool/tool"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { IsolationBoundaryRef } from "@/effect/instance-ref"
@@ -1687,5 +1687,44 @@ describe("tool.shell reserved env", () => {
       // 插件设置的其它变量照常生效，只有保留变量被钉住。
       expect(result.output).toContain('"keep":"ok"')
     }),
+  )
+})
+
+describe("tool.shell background", () => {
+  it.live(
+    "returns immediately and writes output to the log",
+    () =>
+      Effect.gen(function* () {
+        const tmp = yield* tmpdirScoped()
+        yield* runIn(
+          tmp,
+          Effect.gen(function* () {
+            const command =
+              sh() === "cmd"
+                ? "echo bg-started"
+                : sh() === "bash"
+                  ? "echo bg-started; sleep 1"
+                  : "echo bg-started; Start-Sleep 1"
+            const started = Date.now()
+            const result = yield* run({ command, description: "background job", background: true })
+            expect(Date.now() - started).toBeLessThan(3000)
+            expect(result.output).toContain("Started in background")
+            const logPath = /^log: (.+)$/m.exec(result.output)?.[1]
+            if (!logPath) throw new Error(`background log path missing: ${result.output}`)
+
+            const content = yield* pollWithTimeout(
+              Effect.gen(function* () {
+                const text = yield* Effect.promise(() => fs.readFile(logPath, "utf8").catch(() => ""))
+                return text.includes("bg-started") ? text : undefined
+              }),
+              "background log never received output",
+            )
+            expect(content).toContain("bg-started")
+            // 等后台子进程自己退出并释放日志句柄，临时目录才能被 fixture 清掉。
+            yield* Effect.sleep("1500 millis")
+          }),
+        )
+      }),
+    20_000,
   )
 })
