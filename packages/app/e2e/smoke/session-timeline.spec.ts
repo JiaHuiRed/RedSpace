@@ -105,8 +105,11 @@ test.describe("smoke: session timeline", () => {
     const editor = page.locator('[data-component="prompt-input"]')
     await editor.fill("Keep my draft")
     const row = page.locator('[data-timeline-row="UserMessage"]').last()
-    await row.hover()
-    await row.locator('[data-action="quote-row"]').click()
+    // 261123 Red 历史首屏仍可能调整滚动位置，用户行移出指针会卸载悬停按钮。
+    await expect(async () => {
+      await row.hover({ timeout: 2000 })
+      await row.locator('[data-action="quote-row"]').click({ timeout: 2000 })
+    }).toPass({ timeout: 10_000 })
     await expect(editor.locator('[data-type="quote"]')).toBeVisible()
     await expect(editor).toBeFocused()
     await editor.getByRole("button", { name: "Remove quote" }).press("Enter")
