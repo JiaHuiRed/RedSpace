@@ -251,6 +251,7 @@ function fake(
       return msg
     },
     salvagedToolCalls: [],
+    firstTextAt: undefined,
     updateToolCall: Effect.fn("TestSessionProcessor.updateToolCall")(() => Effect.succeed(undefined)),
     completeToolCall: Effect.fn("TestSessionProcessor.completeToolCall")(() => Effect.void),
     process: Effect.fn("TestSessionProcessor.process")(() => {

@@ -1198,6 +1198,50 @@ it.live("session.processor preserves quoted summary markers and subsequent text 
   ),
 )
 
+// 261123 Red RS-0204-05：首字时间必须落在真正下发的正文上。模型先吐一个会被过滤的
+// [History reference: …] 标记时，旧实现到这一刻就记了 llm.firstText，用户其实还没看到字。
+it.live("session.processor records firstTextAt only when real body is delivered", () =>
+  provideTmpdirServer(
+    ({ dir, llm }) =>
+      Effect.gen(function* () {
+        const gate = defer<void>()
+        const { processors, session, provider } = yield* boot()
+        const chat = yield* session.create({})
+        const parent = yield* user(chat.id, "test")
+        const msg = yield* assistant(chat.id, parent.id, path.resolve(dir))
+        const model = yield* provider.getModel(ref.providerID, ref.modelID)
+        const handle = yield* processors.create({ assistantMessage: msg, sessionID: chat.id, model })
+        yield* llm.push(raw({
+          head: [
+            { id: "chatcmpl-test", object: "chat.completion.chunk", choices: [{ delta: { role: "assistant" } }] },
+            { id: "chatcmpl-test", object: "chat.completion.chunk", choices: [{ delta: { content: "[History reference: msg_test]" } }] },
+          ],
+          wait: gate.promise,
+          tail: [
+            { id: "chatcmpl-test", object: "chat.completion.chunk", choices: [{ delta: { content: "正文" } }] },
+            { id: "chatcmpl-test", object: "chat.completion.chunk", choices: [{ delta: {}, finish_reason: "stop" }] },
+          ],
+        }))
+        const run = yield* handle.process({
+          user: parent, sessionID: chat.id, model, agent: agent(), system: [],
+          messages: [{ role: "user" as const, content: "test" }], tools: {},
+        }).pipe(Effect.forkChild)
+        // 标记分片已处理（text part 已建立），此刻还没有任何正文下发
+        yield* waitFor(
+          Effect.sync(() => (MessageV2.parts(msg.id).some((part) => part.type === "text") ? true : undefined)),
+          "waiting for text part",
+        )
+        // 流已停在 gate 上：给标记分片留出确定的消费窗口，旧实现会在这段时间里记下首字
+        yield* Effect.sleep("300 millis")
+        expect(handle.firstTextAt).toBeUndefined()
+        gate.resolve()
+        yield* Fiber.join(run)
+        expect(handle.firstTextAt).toBeDefined()
+      }),
+    { config: (url) => providerCfg(url) },
+  ),
+)
+
 it.live("session.processor releases false summary prefixes and incomplete tails", () =>
   provideTmpdirServer(
     ({ dir, llm }) =>

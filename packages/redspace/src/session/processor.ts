@@ -84,6 +84,8 @@ export interface Handle {
     },
   ) => Effect.Effect<void>
   readonly process: (streamInput: LLM.StreamInput, onResponse?: Effect.Effect<void>) => Effect.Effect<Result>
+  /** 261123 Red 真正下发给用户的第一个正文字片时刻（Date.now()）；首字延迟诊断只看这一个口径。 */
+  readonly firstTextAt: number | undefined
   // 260728 Red 上一次 process() 从正文/思考链里打捞出的文本态工具调用（见 xml-tool-call.ts）
   readonly salvagedToolCalls: readonly XmlToolCall.ParsedCall[]
 }
@@ -673,6 +675,18 @@ export const layer = Layer.effect(
         }
         // 每次都写回：消息对象可能被换成新的，只写一次会丢；值取自 ctx 所以不会漂移
         ctx.assistantMessage.time.firstChunk = ctx.firstChunkAt
+        // 261123 Red 首字口径以「真正下发的正文」为准：原始 text-delta 可能整段是被
+        // leakHold / 引用标记 / 指令回声过滤掉的内容，那一刻用户还没看到任何字。
+        const markFirstText = () => {
+          if (ctx.firstTextAt !== undefined) return
+          ctx.firstTextAt = Date.now()
+          slog.info("llm.firstText", {
+            ms: ctx.firstTextAt - ctx.assistantMessage.time.created,
+            ...(ctx.firstChunkAt ? { sinceEventMs: ctx.firstTextAt - ctx.firstChunkAt } : {}),
+            sessionID: ctx.sessionID,
+            messageID: ctx.assistantMessage.id,
+          })
+        }
         switch (value.type) {
           case "reasoning-start":
             if (value.id in ctx.reasoningMap) return
@@ -1168,17 +1182,6 @@ export const layer = Layer.effect(
           case "text-delta": {
             // 261113 Red 估算口径按「已消费的模型输出字节」计（与 adapter 的 textBytes 同义）。
             ctx.streamedTextBytes += byteLength(value.text)
-            // 261122 Red 第二批：首段非空正文到达。与 llm.ttft 分开，回答"首事件之后多久
-            // 用户才看到字"——思考型模型这两段可以差出几十秒。
-            if (ctx.firstTextAt === undefined && value.text.length > 0) {
-              ctx.firstTextAt = Date.now()
-              slog.info("llm.firstText", {
-                ms: ctx.firstTextAt - ctx.assistantMessage.time.created,
-                ...(ctx.firstChunkAt ? { sinceEventMs: ctx.firstTextAt - ctx.firstChunkAt } : {}),
-                sessionID: ctx.sessionID,
-                messageID: ctx.assistantMessage.id,
-              })
-            }
             if (!ctx.currentText) return
             let delta = value.text
             while (true) {
@@ -1218,13 +1221,16 @@ export const layer = Layer.effect(
                 const prefix = cut.text.startsWith(ctx.currentText.text) ? cut.text.slice(ctx.currentText.text.length) : ""
                 ctx.currentText.text = cut.text
                 ctx.leakHold = InstructionEcho.summaryBodyAnchor(cut.hold) ?? cut.hold
-                if (prefix) yield* session.updatePartDelta({
-                  sessionID: ctx.currentText.sessionID,
-                  messageID: ctx.currentText.messageID,
-                  partID: ctx.currentText.id,
-                  field: "text",
-                  delta: prefix,
-                })
+                if (prefix) {
+                  markFirstText()
+                  yield* session.updatePartDelta({
+                    sessionID: ctx.currentText.sessionID,
+                    messageID: ctx.currentText.messageID,
+                    partID: ctx.currentText.id,
+                    field: "text",
+                    delta: prefix,
+                  })
+                }
                 yield* session.updatePart(ctx.currentText)
                 slog.warn("leak.dcp-reminder", { sessionID: ctx.sessionID, textLen: ctx.currentText.text.length })
                 delta = ""
@@ -1243,6 +1249,7 @@ export const layer = Layer.effect(
            if (/\S/.test(delta)) ctx.referenceMarkers = 0
             ctx.currentText.text += delta
             if (value.providerMetadata) ctx.currentText.metadata = value.providerMetadata
+            markFirstText()
             yield* session.updatePartDelta({
               sessionID: ctx.currentText.sessionID,
               messageID: ctx.currentText.messageID,
@@ -1268,6 +1275,7 @@ export const layer = Layer.effect(
             if (!ctx.currentText) return
             if (ctx.leakPending) {
               ctx.currentText.text += ctx.leakPending
+              markFirstText()
               yield* session.updatePartDelta({
                 sessionID: ctx.currentText.sessionID,
                 messageID: ctx.currentText.messageID,
@@ -1728,6 +1736,9 @@ export const layer = Layer.effect(
           return ctx.ngramTripped || ctx.reasoningNgramTripped
         },
         guardToolCall,
+        get firstTextAt() {
+          return ctx.firstTextAt
+        },
         get salvagedToolCalls() {
           return ctx.salvaged
         },
