@@ -1160,7 +1160,7 @@ export const toUIMessages = Effect.fn("Message.toUIMessages")(function* (
           }
           if (part.state.status === "error") {
             const output = part.state.metadata?.interrupted === true ? part.state.metadata.output : undefined
-            if (typeof output === "string") {
+            if (typeof output === "string" && /\S/.test(output)) {
               assistantMessage.parts.push({
                 type: ("tool-" + part.tool) as `tool-${string}`,
                 state: "output-available",
