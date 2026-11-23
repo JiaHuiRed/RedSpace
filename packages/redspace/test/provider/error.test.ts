@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test"
-import { APICallError } from "ai"
+import { APICallError, streamText } from "ai"
+import { createOpenAICompatible } from "@ai-sdk/openai-compatible"
 import { parseAPICallError, parseStreamError } from "@/provider/error"
+import { MessageV2 } from "@/session/message-v2"
+import { SessionRetry } from "@/session/retry"
 import { ProviderID } from "../../src/provider/schema"
 
 const parse = (message: string) =>
@@ -148,18 +151,27 @@ describe("parseAPICallError subscription usage limits", () => {
     }
   })
 
-  test("zhipu transient rate limit stays retryable", () => {
+  test.each(["1302", 1305])("GLM code %s is retryable even when SDK marks the HTTP error terminal", (code) => {
+    const responseBody = JSON.stringify({ error: { code, message: "Temporary upstream capacity" } })
     const result = parseBody({
       providerID: "zhipuai-coding-plan",
-      message: "Rate limit reached for requests",
-      statusCode: 429,
-      isRetryable: true,
-      responseBody: JSON.stringify({ error: { code: "1302", message: "Rate limit reached for requests" } }),
+      message: "Temporary upstream capacity",
+      statusCode: 400,
+      isRetryable: false,
+      responseBody,
+      responseHeaders: { "retry-after": "4" },
     })
 
-    expect(result.type).toBe("api_error")
-    if (result.type !== "api_error") throw new Error("expected api_error")
-    expect(result.isRetryable).toBe(true)
+    expect(result).toMatchObject({
+      type: "api_error",
+      isRetryable: true,
+      statusCode: 400,
+      responseBody,
+      responseHeaders: { "retry-after": "4" },
+    })
+    expect(parseBody({ providerID: "openai-compatible", statusCode: 400, isRetryable: false, responseBody })).toMatchObject({
+      isRetryable: false,
+    })
   })
 
   test("plain usage-limit wording on a 429 is terminal even without a code", () => {
@@ -173,6 +185,37 @@ describe("parseAPICallError subscription usage limits", () => {
     if (result.type !== "api_error") throw new Error("expected api_error")
     expect(result.isRetryable).toBe(false)
   })
+})
+
+test.each([1302, "1305"])("GLM stream code %s survives SDK parsing and reaches the retry policy", async (code) => {
+  const message = "Temporary upstream capacity"
+  const provider = createOpenAICompatible({
+    name: "zai",
+    baseURL: "https://example.com/v1",
+    fetch: Object.assign(
+      async () =>
+        new Response(`data: ${JSON.stringify({ error: { code, message } })}\n\ndata: [DONE]\n\n`, {
+          headers: { "Content-Type": "text/event-stream" },
+        }),
+      { preconnect: () => undefined },
+    ),
+  })
+  const stream = streamText({
+    model: provider.chatModel("glm-fixture"),
+    prompt: "hello",
+    maxRetries: 0,
+    onError: () => undefined,
+  })
+  for await (const event of stream.fullStream) {
+    if (event.type !== "error") continue
+    expect(event.error).toMatchObject({ code, message })
+    const providerID = ProviderID.make("zai")
+    expect(SessionRetry.retryable(MessageV2.fromError(event.error, { providerID }), providerID)).toEqual({ message })
+    const other = ProviderID.make("openai-compatible")
+    expect(SessionRetry.retryable(MessageV2.fromError(event.error, { providerID: other }), other)).toBeUndefined()
+    return
+  }
+  throw new Error("expected an SDK stream error")
 })
 
 describe("parseAPICallError transient capacity refusals", () => {

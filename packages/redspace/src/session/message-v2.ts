@@ -3,7 +3,14 @@ import { BusEvent } from "@/bus/bus-event"
 import { SessionID, MessageID, PartID } from "./schema"
 import { ImageTokens } from "@/session/image-tokens"
 import { NamedError } from "@redcode-ai/core/util/error"
-import { APICallError, convertToModelMessages, LoadAPIKeyError, type ModelMessage, type UIMessage } from "ai"
+import {
+  APICallError,
+  convertToModelMessages,
+  LoadAPIKeyError,
+  StreamProviderError,
+  type ModelMessage,
+  type UIMessage,
+} from "ai"
 import { LSP } from "@/lsp/lsp"
 import { Snapshot } from "@/snapshot"
 import { SyncEvent } from "../sync"
@@ -1903,6 +1910,12 @@ export function fromError(
           responseBody: parsed.responseBody,
           metadata: parsed.metadata,
         },
+        { cause: e },
+      ).toObject()
+    // 261123 Red AI SDK 包装流内业务错误时保留 code；通用 Error 分支会丢失重试分类。
+    case StreamProviderError.isInstance(e) && ProviderError.isTransientGlmCode(e.code, ctx.providerID):
+      return new APIError(
+        { message: e.message, statusCode: e.statusCode, isRetryable: true, metadata: { code: String(e.code) } },
         { cause: e },
       ).toObject()
     case e instanceof Error:

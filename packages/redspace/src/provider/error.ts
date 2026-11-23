@@ -87,6 +87,12 @@ const USAGE_LIMIT_CODES = new Set([
 // Decision: docs/notes/implemented/bug-fix/2026-11-03-subscription-usage-limit-terminal.md.
 const PREFILL_CAPACITY_MESSAGE = "Upstream model prefill capacity is temporarily full."
 
+const GLM_PROVIDERS = new Set(["zai", "zai-coding-plan", "zhipuai", "zhipuai-coding-plan"])
+
+export function isTransientGlmCode(code: unknown, providerID: ProviderID) {
+  return GLM_PROVIDERS.has(providerID) && (code === "1302" || code === 1302 || code === "1305" || code === 1305)
+}
+
 function isPrefillCapacityRefusal(error: unknown, message: string) {
   const detail = isRecord(error) ? error : undefined
   return (
@@ -409,7 +415,12 @@ export function parseAPICallError(input: { providerID: ProviderID; error: APICal
       metadata: input.error.url ? { url: input.error.url } : undefined,
     }
   }
-  if (isOverflow(m) || input.error.statusCode === 413 || body?.error?.code === "context_length_exceeded") {
+  const glmTransient = isTransientGlmCode(body?.error?.code, input.providerID)
+  if (
+    (!glmTransient && isOverflow(m)) ||
+    input.error.statusCode === 413 ||
+    body?.error?.code === "context_length_exceeded"
+  ) {
     return {
       type: "context_overflow",
       message: m,
@@ -422,7 +433,9 @@ export function parseAPICallError(input: { providerID: ProviderID; error: APICal
     type: "api_error",
     message: humanize(m) ?? m,
     statusCode: input.error.statusCode,
-    isRetryable: input.providerID.startsWith("openai") ? isOpenAiErrorRetryable(input.error) : input.error.isRetryable,
+    isRetryable:
+      glmTransient ||
+      (input.providerID.startsWith("openai") ? isOpenAiErrorRetryable(input.error) : input.error.isRetryable),
     responseHeaders: input.error.responseHeaders,
     responseBody: input.error.responseBody,
     metadata,
