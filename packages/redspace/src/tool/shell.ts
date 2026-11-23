@@ -29,6 +29,7 @@ import { commandName, isWindowsExecutable } from "./command-name"
 export { Parameters } from "./shell/prompt"
 
 const MAX_METADATA_LENGTH = 30_000
+const LONG_SLEEP_SECONDS = 25
 const CWD = new Set(["cd", "chdir", "popd", "pushd", "push-location", "set-location"])
 const FILES = new Set([
   ...CWD,
@@ -220,6 +221,21 @@ export function outcomeNotes(input: { aborted: boolean; expired: boolean; timeou
       "The command was interrupted before it returned. Its exit status is unknown and any process it started may still be running — verify the actual state (port/process) before retrying.",
     )
   return notes
+}
+
+// 261123 Red 只识别开头的字面等待；不解释脚本、变量或后台运算符。
+function startsWithLongSleep(command: string, shell: string) {
+  const text = command.trimStart()
+  if (Shell.ps(shell)) {
+    const match =
+      /^(?:start-sleep|sleep)[ \t]+(?:(-seconds|-milliseconds)[ \t]+)?(\d+(?:\.\d+)?)[ \t]*(?:$|[;\r\n]|&&|\|\|)/i.exec(
+        text,
+      )
+    return !!match && Number(match[2]) >= LONG_SLEEP_SECONDS * (match[1]?.toLowerCase() === "-milliseconds" ? 1000 : 1)
+  }
+  if (!Shell.posix(shell)) return false
+  const match = /^sleep[ \t]+(\d+(?:\.\d+)?)[ \t]*(?:$|[;\r\n]|&&|\|\|)/.exec(text)
+  return !!match && Number(match[1]) >= LONG_SLEEP_SECONDS
 }
 
 const resolveWasm = (asset: string) => {
@@ -917,6 +933,12 @@ export const ShellTool = Tool.define(
               if (!resolved) {
                 throw new Error(
                   `Shell "${params.shell}" is not available on this machine. Install Git for Windows (bash) or PowerShell 7 (pwsh), or omit the shell parameter to use ${name}.`,
+                )
+              }
+              if (startsWithLongSleep(params.command, resolved)) {
+                throw new Error(
+                  `Foreground sleep of ${LONG_SLEEP_SECONDS} seconds or more is not allowed. ` +
+                    "Check the condition directly, or use a process-management tool to wait in the background if available.",
                 )
               }
               const instanceCtx = yield* InstanceState.context

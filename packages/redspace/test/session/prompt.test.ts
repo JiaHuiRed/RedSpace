@@ -4058,6 +4058,33 @@ it.instance(
   { git: true },
 )
 
+if (Shell.posix(Shell.acceptable()) || Shell.ps(Shell.acceptable())) {
+  it.instance("returns the foreground sleep error to the model", () =>
+    Effect.gen(function* () {
+      const { llm } = yield* useServerConfig(providerCfg)
+      const prompt = yield* SessionPrompt.Service
+      const sessions = yield* Session.Service
+      const chat = yield* sessions.create({
+        permission: [{ permission: "bash", pattern: "*", action: "allow" }],
+      })
+      yield* llm.tool("bash", { command: "sleep 25", timeout: 500, description: "Wait before checking the result" })
+      yield* llm.text("I will check the condition directly.")
+      yield* user(chat.id, "Wait before checking the result.")
+      yield* prompt.loop({ sessionID: chat.id })
+      expect(yield* llm.inputs).toContainEqual(
+        expect.objectContaining({
+          messages: expect.arrayContaining([
+            expect.objectContaining({
+              role: "tool",
+              content: expect.stringContaining("Foreground sleep of 25 seconds or more is not allowed."),
+            }),
+          ]),
+        }),
+      )
+    }),
+  )
+}
+
 it.instance("failed subtask preserves metadata on error tool state", () =>
   Effect.gen(function* () {
     const { llm } = yield* useServerConfig((url) => ({

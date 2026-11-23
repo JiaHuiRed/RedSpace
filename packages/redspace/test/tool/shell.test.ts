@@ -1340,6 +1340,50 @@ describe("tool.shell permissions", () => {
   )
 })
 
+describe("tool.shell foreground waits", () => {
+  for (const item of shells) {
+    if (!Shell.ps(item.shell) && !Shell.posix(item.shell)) continue
+    const cases = Shell.ps(item.shell)
+      ? ["Start-Sleep -Seconds 25; echo done", "start-sleep -MILLISECONDS 25000", "sleep 25"]
+      : ["sleep 25", "sleep 25.5 && echo done"]
+    const allowed = Shell.ps(item.shell)
+      ? ["Start-Sleep -Seconds 24", "Start-Sleep -Milliseconds 24999", "echo 'Start-Sleep 25'"]
+      : ["sleep 24", "sleep 25 &", "echo 'sleep 25'"]
+
+    it.live(`rejects a long foreground wait before permission [${item.label}]`, () =>
+      withShell(
+        item,
+        Effect.gen(function* () {
+          const tmp = yield* tmpdirScoped()
+          yield* runIn(
+            tmp,
+            Effect.gen(function* () {
+              const requests: Array<Omit<Permission.Request, "id" | "sessionID" | "tool">> = []
+              const stop = new Error("stop after permission")
+              for (const command of cases) {
+                const error = yield* fail(
+                  { command, description: "Wait before checking the result", timeout: 500 },
+                  capture(requests, stop),
+                )
+                expect(error.message).toContain("Foreground sleep of 25 seconds or more")
+              }
+              expect(requests).toHaveLength(0)
+
+              for (const command of allowed) {
+                const error = yield* fail(
+                  { command, description: "Run an allowed shell command", timeout: 500 },
+                  capture(requests, stop),
+                )
+                expect(error.message).toBe(stop.message)
+              }
+            }),
+          )
+        }),
+      ),
+    )
+  }
+})
+
 describe("tool.shell abort", () => {
   it.live(
     "preserves output when aborted",
