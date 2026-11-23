@@ -155,7 +155,11 @@ export function NewSessionDesignView(props: {
           改成 flex 垂直居中、再用 pb 往上偏一点（输入框略高于正中读起来更稳），跟窗口
           高度走。 */}
       <div class={props.embedded ? "flex flex-col items-center px-2 sm:px-6" : "flex size-full flex-col items-center justify-center px-6 pb-[10vh]"}>
-        <div class="w-full max-w-[720px]">
+        {/* 261124 YuQi 上限走变量：首页 compose 布局重排后由 home.tsx 下传
+            --compose-max-w: 900px；全页新建会话视图（/dir/session 直连）不吃变量，保持 720。
+            输入框与上下文行都是 w-full 流式块，跟随本容器同宽（260828 的「冒出头」问题
+            来自当年输入框的独立约束，现已在 prompt-input 重构中移除）。 */}
+        <div class="w-full max-w-[var(--compose-max-w,720px)]">
           {/* 260828 cc 容器宽度保持 720 —— 试过拓到 820 让模型芯片少截断一点，结果输入框
               有它自己的宽度约束、没跟着变宽，底下的项目/分支那行按外层宽度起头就顶到输入框
               左边去了（哥哥的原话是「冒出头了」）。要放宽得先改输入框自己的约束，不在这一层。 */}
@@ -167,7 +171,8 @@ export function NewSessionDesignView(props: {
           {/* 260828 cc 问候语。字标是品牌、输入框是功能，中间这一句是唯一说人话的地方，
               所以放这儿。字号刻意压在 15px：它是陪衬，抢了输入框的注意力就本末倒置了。 */}
           <h1 class={`${props.embedded ? "mt-3" : "mt-5"} text-center text-[15px] font-[440] text-v2-text-text-muted`}>{language.t(greetingKey())}</h1>
-          <div class={props.embedded ? "mt-4" : "mt-8"}>
+          {/* 261124 YuQi 首页字标→输入区间距 +50px（哥哥：太紧凑）；全页视图不动。 */}
+          <div class={props.embedded ? "mt-[66px]" : "mt-8"}>
             {props.children}
             {/* 260920 Red 把项目选择与当前分支归为一组上下文元信息，和主输入保持一条
                 清晰的分隔线；它们是开始前的选择，不再和提交动作抢同一层级。 */}
@@ -271,7 +276,8 @@ export function NewSessionDesignView(props: {
             {/* 261116 Red B03：最近任务 =「继续已有任务」，与上方输入（开始新任务）分开。
                 只放轻量文本行，不加卡片；加载/为空时整块不渲染，保持字标与输入区的视觉中心。 */}
             <Show when={recentTasks().length > 0}>
-              <div data-component="new-session-recent" class="mt-3" aria-label={language.t("session.new.recent.title")}>
+              {/* 261124 YuQi 与聊天框的间距 +30px（12→42）。 */}
+              <div data-component="new-session-recent" class="mt-[42px]" aria-label={language.t("session.new.recent.title")}>
                 <div class="flex min-w-0 items-baseline gap-2 px-2 pb-0.5">
                   <span class="shrink-0 text-sm [font-weight:530] text-v2-text-text-muted">
                     {language.t("session.new.recent.title")}

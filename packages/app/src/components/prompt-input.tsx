@@ -1978,10 +1978,12 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                 tabIndex={store.mode === "normal" ? undefined : -1}
                 icon={stopping() ? "stop" : store.mode === "shell" ? "arrow-undo-down" : "paper-plane"}
                 variant="primary"
-                class="size-7 rounded-md p-[6px] text-v2-icon-icon-muted shadow-[var(--v2-elevation-button-contrast)]"
+                // 261124 YuQi 发送键淡红（哥哥拍板）：品牌红 55% 透明度替代浓底 bg-contrast，
+                // 图标换亮色保对比度。四个输入框共用本组件，颜色统一生效。
+                class="size-7 rounded-md p-[6px] text-v2-icon-icon-base shadow-[var(--v2-elevation-button-contrast)]"
                 style={{
                   "background-image":
-                    "linear-gradient(180deg,var(--v2-alpha-light-20) 0%,var(--v2-alpha-light-0) 100%),linear-gradient(90deg,var(--v2-background-bg-contrast) 0%,var(--v2-background-bg-contrast) 100%)",
+                    "linear-gradient(180deg,var(--v2-alpha-light-20) 0%,var(--v2-alpha-light-0) 100%),linear-gradient(90deg,color-mix(in srgb,var(--surface-brand-base) 55%,transparent) 0%,color-mix(in srgb,var(--surface-brand-base) 55%,transparent) 100%)",
                 }}
                 aria-label={stopping() ? language.t("prompt.action.stop") : language.t("prompt.action.send")}
               />

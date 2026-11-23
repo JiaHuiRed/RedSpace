@@ -1,5 +1,5 @@
 import type { Session } from "@redcode-ai/sdk/v2/client"
-import { createMemo, createSignal, For, lazy, Match, onCleanup, onMount, Show, Suspense, Switch } from "solid-js"
+import { createMemo, createSignal, For, lazy, onCleanup, onMount, Show, Suspense } from "solid-js"
 import { createStore, produce } from "solid-js/store"
 import { Binary } from "@redcode-ai/core/util/binary"
 import { useQuery } from "@tanstack/solid-query"
@@ -15,7 +15,6 @@ import { getAvatarColors, useLayout, type LocalProject } from "@/context/layout"
 import { useNavigate } from "@solidjs/router"
 import { base64Encode } from "@redcode-ai/core/util/encode"
 import { usePlatform } from "@/context/platform"
-import { DateTime } from "luxon"
 import { useDialog } from "@redcode-ai/ui/context/dialog"
 import { DialogConfirm } from "@/components/dialog-confirm"
 import { DialogSelectDirectory } from "@/components/dialog-select-directory"
@@ -24,17 +23,13 @@ import { persisted } from "@/utils/persist"
 import { useServerSync } from "@/context/server-sync"
 import { useLanguage } from "@/context/language"
 import { useCommand } from "@/context/command"
-import { Tooltip } from "@redcode-ai/ui/tooltip"
 import { notifyServerError } from "@/utils/notify-error"
 import { useNotification } from "@/context/notification"
 import { usePermission } from "@/context/permission"
 import { displayName, getProjectAvatarSource, projectForSession, sortedRootSessions } from "@/utils/session-helpers"
-import { sessionTitle } from "@/utils/session-title"
 import { pathKey } from "@/utils/path-key"
-import { messageAgentColor } from "@/utils/agent"
 import { tallySessionStatus } from "@/utils/session-status"
 import { pickGreetingKey } from "@/utils/greeting"
-import { sessionPermissionRequest } from "@/pages/session/composer/session-request-tree"
 import { HomeKanban } from "@/pages/home-kanban"
 import { HomeUsagePanel, readHomeUsageCollapsed } from "@/pages/home-usage"
 import { focusProjectRow } from "@/pages/home-focus"
@@ -67,12 +62,6 @@ type HomeSessionRecord = {
   projectName: string
 }
 
-type HomeSessionGroup = {
-  id: "today" | "yesterday" | "older"
-  title: string
-  sessions: HomeSessionRecord[]
-}
-
 export default function Home(props: { initialDirectory?: string }) {
   const sync = useServerSync()
   const layout = useLayout()
@@ -83,14 +72,16 @@ export default function Home(props: { initialDirectory?: string }) {
   const language = useLanguage()
   const globalSDK = useGlobalSDK()
   const command = useCommand()
-  // 260616 Red 默认进看板视图（工作中/需关注/空闲），更直观；可切回列表
+  // 260616 Red 默认进看板视图（工作中/需关注/空闲）。
+  // 261123 YuQi 列表视图与「新建会话」按钮下线：新建会话界面已并入首页 compose 区，
+  //   这两个入口只剩「聚焦输入框」一个职责；看板成为唯一视图（view 字段、切换器、
+  //   列表行组件一并移除）。
   // 260814 Red archived：归档只是打 time_archived 时间戳 + 列表默认过滤（session.ts 的 list），
   //   数据一个字节都不删。此前 GUI 只有"归档"没有"看已归档/取消归档"，归档等于单向消失——
   //   实测 432 个会话里只归档过 1 个。这里补齐可见性与撤销。
   const [state, setState] = createStore({
     search: "",
     project: undefined as string | undefined,
-    view: "kanban" as "list" | "kanban",
     archived: false,
     usageCollapsed: readHomeUsageCollapsed(),
   })
@@ -206,7 +197,6 @@ export default function Home(props: { initialDirectory?: string }) {
       })
       .slice(0, HOME_SESSION_LIMIT),
   )
-  const groups = createMemo(() => groupSessions(records(), language))
   // 260701 Red 首页左下角看板用：跟 records() 不一样，不做 15 条截断、不排除子 session
   // （子 agent worktree session 也有独立 cost/tokens，不算进去总花费会偏低）。
   const statsSessions = createMemo(() =>
@@ -402,167 +392,112 @@ export default function Home(props: { initialDirectory?: string }) {
         class="min-h-0 min-w-0 overflow-y-auto pt-6 pr-2"
         aria-label={language.t("sidebar.project.recentSessions")}
       >
-        <div data-component="home-compose-section" class="pb-[clamp(26px,4vh,44px)]">
-          <Show when={composerDirectory()} keyed>
-            {(directory) => (
-              <Suspense fallback={<div class="min-h-40" aria-busy="true" />}>
-                <HomeCompose
-                  directory={directory}
-                  onProjectChange={selectProject}
-                  onSubmit={() => {
-                    const project = projectForDirectory(directory)?.worktree ?? directory
-                    layout.projects.open(project)
-                    server.projects.touch(project)
-                  }}
-                  focusRequest={focusRequest()}
-                />
-              </Suspense>
-            )}
-          </Show>
-        </div>
-        <div data-component="home-board-section">
-          <div class="flex items-center gap-2 pr-2">
-            <HomeSessionSearch
-              ref={(el) => (searchInputRef = el)}
-              value={state.search}
-              placeholder={language.t("home.sessions.search.placeholder")}
-              onInput={(value) => setState("search", value)}
-            />
-            {/* 261022 Red 主操作常驻：原先只有 kanban 视图有个 + 图标，列表视图要靠分组标题
-                里那个 ghost 小按钮，层级太低。统一成一个带文字的 contrast 按钮，两种视图都可见。 */}
-            <ButtonV2
-              data-action="home-new-session"
-              variant="contrast"
-              size="normal"
-              icon="edit"
-              class="shrink-0"
-              onClick={openNewSession}
-            >
-              {language.t("command.session.new")}
-            </ButtonV2>
-            {/* 260814 Red 已归档视图开关：打开后列表换成归档会话（单独请求，见 archivedLoad） */}
-            <IconButtonV2
-              data-action="home-toggle-archived"
-              variant={state.archived ? "contrast" : "ghost-muted"}
-              size="large"
-              icon={<IconV2 name="archive" size="small" />}
-              onClick={() => setState("archived", !state.archived)}
-              aria-label={language.t("home.sessions.archived.toggle")}
-              aria-pressed={state.archived}
-              class="size-7 shrink-0"
-            />
-            <div
-              data-component="home-view-switch"
-              class="flex shrink-0 gap-0.5 rounded-[6px] bg-v2-background-bg-deep p-0.5"
-            >
-              <IconButtonV2
-                data-action="home-view-list"
-                variant={state.view === "list" ? "contrast" : "ghost-muted"}
-                size="large"
-                icon={<IconV2 name="menu" size="small" />}
-                onClick={() => setState("view", "list")}
-                aria-label={language.t("home.view.list")}
-                aria-pressed={state.view === "list"}
-                class="size-7"
+        {/* 261124 六轮（哥哥定稿）：左右整体互换——compose（字标+输入框+继续任务）是主视觉，
+            挪到左侧阅读起点；搜索+归档+用量面板的工作台列挪到右侧。看板带随之靠右
+            （board-section 里 justify-end，右缘与工作台列对齐）。
+            变量 --compose-max-w 由这里下传，session-new-design-view 内部消费。 */}
+        <div class="flex items-start gap-x-6 pr-2">
+          <div
+            data-component="home-compose-section"
+            class="flex min-w-0 flex-1 justify-center pt-10 pb-[clamp(26px,4vh,44px)]"
+            style={{ "--compose-max-w": "900px" }}
+          >
+            <Show when={composerDirectory()} keyed>
+              {(directory) => (
+                <div class="w-full max-w-[var(--compose-max-w,720px)]">
+                  <Suspense fallback={<div class="min-h-40" aria-busy="true" />}>
+                    <HomeCompose
+                      directory={directory}
+                      onProjectChange={selectProject}
+                      onSubmit={() => {
+                        const project = projectForDirectory(directory)?.worktree ?? directory
+                        layout.projects.open(project)
+                        server.projects.touch(project)
+                      }}
+                      focusRequest={focusRequest()}
+                    />
+                  </Suspense>
+                </div>
+              )}
+            </Show>
+          </div>
+          {/* 261124 八轮：列宽 620→720 配合看板带宽——面板左移 100px，右列与看板同宽等右缘。 */}
+          <div class="flex w-[720px] max-w-full shrink-0 flex-col gap-3">
+            <div class="flex items-center gap-2">
+              <HomeSessionSearch
+                ref={(el) => (searchInputRef = el)}
+                value={state.search}
+                placeholder={language.t("home.sessions.search.placeholder")}
+                onInput={(value) => setState("search", value)}
               />
+              {/* 260814 Red 已归档视图开关：打开后看板换成归档会话（单独请求，见 archivedLoad）。
+                  261123 YuQi 搜索栏旁的「新建会话」按钮与视图切换器下线——新建会话界面已并入
+                  首页 compose 区，按钮只剩聚焦输入框；列表视图移除后看板是唯一视图。 */}
               <IconButtonV2
-                data-action="home-view-kanban"
-                variant={state.view === "kanban" ? "contrast" : "ghost-muted"}
+                data-action="home-toggle-archived"
+                variant={state.archived ? "contrast" : "ghost-muted"}
                 size="large"
-                icon={<IconV2 name="grid-plus" size="small" />}
-                onClick={() => setState("view", "kanban")}
-                aria-label={language.t("home.view.kanban")}
-                aria-pressed={state.view === "kanban"}
-                class="size-7"
+                icon={<IconV2 name="archive" size="small" />}
+                onClick={() => setState("archived", !state.archived)}
+                aria-label={language.t("home.sessions.archived.toggle")}
+                aria-pressed={state.archived}
+                class="size-7 shrink-0"
               />
             </div>
-          </div>
-          {/* 260901 cc 用量看板与会话看板曾并排同高。改在这一层而不是塞进 HomeKanban：
-              看板自己是个 flex 行（home-kanban.tsx:87），但它只在 kanban 视图下渲染，
-              塞进去列表视图就没有面板了；放外层两种视图都成立。面板 self-start，只占自己那点高度。
-              260901 cc 宽度分配：面板取固定宽，看板 flex-1 **吃满剩余**。上一版给看板设了
-              max-w 封顶，结果最右边空出一大片死区——要让面板变宽就直接给面板宽度，别限制看板。
-              260920 Red Usage is secondary context; below xl it stacks above the primary Kanban
-              instead of squeezing the board into an unreadable narrow column.
-              261022 Red 折叠摘要按内容收缩；展开时仅 2xl 并排，1366/1440 继续堆叠，避免挤压卡片。 */}
-          <div class={`mt-3 flex min-h-0 flex-col gap-3 pb-5 ${!state.usageCollapsed ? "2xl:flex-row" : ""}`}>
             <HomeUsagePanel
               directory={selectedProject()?.worktree}
               collapsed={state.usageCollapsed}
               onCollapsedChange={(collapsed) => setState("usageCollapsed", collapsed)}
             />
-            <div class="flex min-w-0 flex-1 flex-col">
-              <Show when={!sessionLoad.isLoading} fallback={<HomeSessionSkeleton label={language.t("common.loading")} />}>
-                <Show
-                  when={records().length > 0}
-                  fallback={
-                    <div class="flex min-w-0 flex-col items-center gap-4 py-12">
-                      <div class="flex size-12 items-center justify-center rounded-full bg-v2-background-bg-deep">
-                        <IconV2 name="edit" size="large" class="text-v2-text-text-muted" />
-                      </div>
-                      <div class="flex flex-col items-center gap-1 text-center">
-                        <div class="text-14-normal font-medium text-v2-text-text-base">
-                          {language.t(state.archived ? "home.sessions.archived.empty" : "home.sessions.empty")}
-                        </div>
-                        <Show when={!state.archived}>
-                          <div class="text-12-regular text-v2-text-text-muted">{language.t("command.session.new")}</div>
-                        </Show>
-                      </div>
-                      {/* 归档视图为空时不提示"新建会话"——那不是这个视图该做的事 */}
-                      <Show when={!state.archived}>
-                        <ButtonV2
-                          data-action="home-new-session-empty"
-                          variant="contrast"
-                          size="normal"
-                          icon="edit"
-                          class="mt-2"
-                          onClick={openNewSession}
-                        >
-                          {language.t("command.session.new")}
-                        </ButtonV2>
-                      </Show>
-                    </div>
-                  }
-                >
-                  <Switch>
-                    <Match when={state.view === "kanban"}>
-                      <HomeKanban
-                        records={records()}
-                        selectedProjectName={selectedProject() ? displayName(selectedProject()!) : undefined}
-                        openSession={openSession}
-                        onArchive={archiveSession}
-                        onUnarchive={(session) => void unarchiveSession(session)}
-                        showAllIdle={state.archived || search().length > 0}
-                      />
-                    </Match>
-                    <Match when={state.view === "list"}>
-                      <div class="pt-3 flex flex-col gap-6">
-                        <For each={groups()}>
-                          {(group, index) => (
-                            <div class="flex min-w-0 flex-col gap-4">
-                              <HomeSessionGroupHeader title={group.title} />
-                              <div class="flex min-w-0 flex-col gap-px">
-                                <For each={group.sessions}>
-                                  {(record) => (
-                                    <HomeSessionRow
-                                      record={record}
-                                      openSession={openSession}
-                                      onArchive={archiveSession}
-                                      onUnarchive={(session) => void unarchiveSession(session)}
-                                    />
-                                  )}
-                                </For>
-                              </div>
-                            </div>
-                          )}
-                        </For>
-                      </div>
-                    </Match>
-                  </Switch>
-                </Show>
-              </Show>
-            </div>
           </div>
+        </div>
+        <div data-component="home-board-section" class="pt-2 pb-5">
+          <Show when={!sessionLoad.isLoading} fallback={<HomeSessionSkeleton label={language.t("common.loading")} />}>
+            <Show
+              when={records().length > 0}
+              fallback={
+                <div class="flex min-w-0 flex-col items-center gap-4 py-12">
+                  <div class="flex size-12 items-center justify-center rounded-full bg-v2-background-bg-deep">
+                    <IconV2 name="edit" size="large" class="text-v2-text-text-muted" />
+                  </div>
+                  <div class="flex flex-col items-center gap-1 text-center">
+                    <div class="text-14-normal font-medium text-v2-text-text-base">
+                      {language.t(state.archived ? "home.sessions.archived.empty" : "home.sessions.empty")}
+                    </div>
+                    <Show when={!state.archived}>
+                      <div class="text-12-regular text-v2-text-text-muted">{language.t("command.session.new")}</div>
+                    </Show>
+                  </div>
+                  {/* 归档视图为空时不提示"新建会话"——那不是这个视图该做的事 */}
+                  <Show when={!state.archived}>
+                    <ButtonV2
+                      data-action="home-new-session-empty"
+                      variant="contrast"
+                      size="normal"
+                      icon="edit"
+                      class="mt-2"
+                      onClick={openNewSession}
+                    >
+                      {language.t("command.session.new")}
+                    </ButtonV2>
+                  </Show>
+                </div>
+              }
+            >
+              {/* 261124 六轮：工作台挪右后，看板带靠右（justify-end），右缘与工作台列对齐
+                  （pr-2 对齐顶部行的同一缩进）；空态与骨架保持全宽居中，不跟着靠右。 */}
+              <div class="flex justify-end pr-2">
+                <HomeKanban
+                  records={records()}
+                  selectedProjectName={selectedProject() ? displayName(selectedProject()!) : undefined}
+                  openSession={openSession}
+                  onArchive={archiveSession}
+                  onUnarchive={(session) => void unarchiveSession(session)}
+                  showAllIdle={state.archived || search().length > 0}
+                />
+              </div>
+            </Show>
+          </Show>
         </div>
       </section>
       {/* 260709 Red 首页底部快捷键提示条 */}
@@ -889,7 +824,10 @@ function HomeSessionSearch(props: {
   return (
     <label
       data-component="home-session-search"
-      class="ml-4 flex h-9 min-w-0 flex-1 sticky top-0 inset-x-0 items-center gap-2 rounded-[6px] bg-v2-background-bg-deep px-3 py-1 text-v2-icon-icon-muted transition-[background-color,box-shadow] duration-[120ms] ease-in-out focus-within:bg-v2-background-bg-base focus-within:shadow-[0_0_0_0.5px_var(--v2-border-border-focus),var(--v2-elevation-raised)]"
+      // 261123 YuQi 搜索栏不再横跨整屏。261124 布局重排后宽度由所在列统一控制。
+      // 261124 YuQi 底色对齐用量面板/看板卡片的淡紫层色（bg-layer-01 半透明，透出壁纸），
+      // 聚焦不再切回实色 bg-base，只保留 focus 描边阴影。
+      class="ml-4 flex h-9 min-w-0 flex-1 sticky top-0 inset-x-0 items-center gap-2 rounded-[6px] bg-v2-background-bg-layer-01 px-3 py-1 text-v2-icon-icon-muted transition-[background-color,box-shadow] duration-[120ms] ease-in-out focus-within:shadow-[0_0_0_0.5px_var(--v2-border-border-focus),var(--v2-elevation-raised)]"
     >
       <IconV2 name="magnifying-glass" size="small" />
       <input
@@ -910,120 +848,6 @@ function HomeSessionSearch(props: {
   )
 }
 
-// 261106 Red UX-10：分组标题的 ghost「新建」按钮与搜索栏主按钮重复，只有首组会渲染，
-// 层级低且在同屏已有显式入口；空列表的独立 CTA 保留，删的只是这一处重复。
-function HomeSessionGroupHeader(props: { title: string }) {
-  return (
-    <div class="flex h-7 min-w-0 items-center justify-between px-4">
-      <div class={HOME_SECTION_LABEL}>{props.title}</div>
-    </div>
-  )
-}
-
-function HomeSessionRow(props: {
-  record: HomeSessionRecord
-  openSession: (session: Session) => void
-  onArchive: (session: Session) => void
-  onUnarchive?: (session: Session) => void
-}) {
-  const globalSync = useServerSync()
-  const notification = useNotification()
-  const permission = usePermission()
-  const language = useLanguage()
-  const [sessionStore] = globalSync.child(props.record.session.directory, { bootstrap: false })
-  const title = createMemo(() => sessionTitle(props.record.session.title) || props.record.session.id)
-  const unseenCount = createMemo(() => notification.session.unseenCount(props.record.session.id))
-  const hasError = createMemo(() => notification.session.unseenHasError(props.record.session.id))
-  const hasPermissions = createMemo(
-    () =>
-      !!sessionPermissionRequest(sessionStore.session, sessionStore.permission, props.record.session.id, (item) => {
-        return !permission.autoResponds(item, props.record.session.directory)
-      }),
-  )
-  const isWorking = createMemo(() => {
-    if (hasPermissions()) return false
-    return sessionStore.session_working(props.record.session.id)
-  })
-  const tint = createMemo(() => messageAgentColor(sessionStore.message[props.record.session.id], sessionStore.agent))
-  const showStatus = createMemo(() => isWorking() || hasPermissions() || hasError() || unseenCount() > 0)
-  // 261106 Red UX-05：状态点只给颜色，把已有状态解释成文案，供悬停与读屏使用；
-  // 优先级与上方 Switch 的渲染顺序一致，不额外请求后端。
-  const statusLabel = createMemo(() => {
-    if (isWorking()) return language.t("home.session.status.working")
-    if (hasPermissions()) return language.t("home.session.status.permission")
-    if (hasError()) return language.t("home.session.status.error")
-    if (unseenCount() > 0) return language.t("home.session.status.unseen", { count: unseenCount() })
-    return undefined
-  })
-
-  return (
-    // 260710 Red 会话右键菜单：归档
-    <ContextMenu>
-      <ContextMenu.Trigger
-        as="button"
-        type="button"
-        data-component="home-session-row"
-        class={`${HOME_ROW} h-10 gap-2 px-6 py-3 pl-4`}
-        onClick={() => props.openSession(props.record.session)}
-      >
-        <Show when={showStatus()}>
-          <Tooltip placement="top" value={statusLabel() ?? ""}>
-            <div
-              class="flex size-4 shrink-0 items-center justify-center"
-              style={{ color: tint() ?? "var(--icon-interactive-base)" }}
-              role="img"
-              aria-label={statusLabel()}
-            >
-              <Switch>
-                <Match when={isWorking()}>
-                  <Spinner class="size-[15px]" />
-                </Match>
-                <Match when={hasPermissions()}>
-                  <div class="size-1.5 rounded-full bg-surface-warning-strong" />
-                </Match>
-                <Match when={hasError()}>
-                  <div class="size-1.5 rounded-full bg-text-diff-delete-base" />
-                </Match>
-                <Match when={unseenCount() > 0}>
-                  <div class="size-1.5 rounded-full bg-text-interactive-base" />
-                </Match>
-              </Switch>
-            </div>
-          </Tooltip>
-        </Show>
-        <span
-          class={`min-w-0 overflow-hidden text-ellipsis whitespace-nowrap text-v2-text-text-base [font-weight:530] ${props.record.projectName ? "max-w-[min(70%,480px)] flex-[0_1_auto]" : "flex-[1_1_auto]"}`}
-        >
-          {title()}
-        </span>
-        <Show when={props.record.projectName}>
-          <span class="min-w-0 flex-[1_1_auto] overflow-hidden text-ellipsis whitespace-nowrap text-v2-text-text-muted [font-weight:440]">
-            {props.record.projectName}
-          </span>
-        </Show>
-      </ContextMenu.Trigger>
-      <ContextMenu.Portal>
-        <ContextMenu.Content>
-          {/* 260814 Red 已归档的行给"取消归档"，未归档的给"归档" */}
-          <ContextMenu.Item
-            onSelect={() =>
-              props.record.session.time?.archived
-                ? props.onUnarchive?.(props.record.session)
-                : props.onArchive(props.record.session)
-            }
-          >
-            <ContextMenu.ItemLabel>
-              {language.t(
-                props.record.session.time?.archived ? "command.session.unarchive" : "command.session.archive",
-              )}
-            </ContextMenu.ItemLabel>
-          </ContextMenu.Item>
-        </ContextMenu.Content>
-      </ContextMenu.Portal>
-    </ContextMenu>
-  )
-}
-
 function HomeSessionSkeleton(props: { label: string }) {
   return (
     <div class="flex min-w-0 flex-col gap-4">
@@ -1035,29 +859,4 @@ function HomeSessionSkeleton(props: { label: string }) {
       </div>
     </div>
   )
-}
-
-function groupSessions(records: HomeSessionRecord[], language: ReturnType<typeof useLanguage>): HomeSessionGroup[] {
-  const now = DateTime.local()
-  const yesterday = now.minus({ days: 1 })
-  const todaySessions = records.filter((record) =>
-    DateTime.fromMillis(record.session.time.updated ?? record.session.time.created).hasSame(now, "day"),
-  )
-  const yesterdaySessions = records.filter((record) =>
-    DateTime.fromMillis(record.session.time.updated ?? record.session.time.created).hasSame(yesterday, "day"),
-  )
-  const olderSessions = records.filter((record) => {
-    const time = DateTime.fromMillis(record.session.time.updated ?? record.session.time.created)
-    return !time.hasSame(now, "day") && !time.hasSame(yesterday, "day")
-  })
-  const olderTitle =
-    todaySessions.length === 0 && yesterdaySessions.length === 0
-      ? language.t("sidebar.project.recentSessions")
-      : language.t("home.sessions.group.older")
-
-  return [
-    { id: "today" as const, title: language.t("home.sessions.group.today"), sessions: todaySessions },
-    { id: "yesterday" as const, title: language.t("home.sessions.group.yesterday"), sessions: yesterdaySessions },
-    { id: "older" as const, title: olderTitle, sessions: olderSessions },
-  ].filter((group) => group.sessions.length > 0)
 }

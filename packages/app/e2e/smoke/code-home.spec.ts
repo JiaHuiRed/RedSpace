@@ -6,7 +6,7 @@ import { fixture } from "./session-timeline.fixture"
 const homeEntry = `/${base64Encode(fixture.directory)}/session`
 const newSession = { ...fixture.sessions[0]!, id: "ses_home_first", title: "First from the workspace" }
 
-test("Code workspace puts the composer above usage and caps only unfiltered idle cards", async ({ page }) => {
+test("Code workspace puts the composer beside usage and caps only unfiltered idle cards", async ({ page }) => {
   const sessions = Array.from({ length: 12 }, (_, index) => ({
     ...fixture.sessions[0]!,
     id: `ses_home_card_${String(index).padStart(2, "0")}`,
@@ -47,20 +47,19 @@ test("Code workspace puts the composer above usage and caps only unfiltered idle
   const board = page.locator('[data-component="home-board-section"]')
   const editor = composer.getByRole("textbox")
   await expect(editor).toBeVisible()
-  await expect(board.locator('[data-frost-surface="home-usage"]')).toBeVisible()
+  // 261124 YuQi 布局重排：usage 与 compose 并排在顶部左列，不再属于 board-section。
+  await expect(page.locator('[data-frost-surface="home-usage"]')).toBeVisible()
   expect(await composer.evaluate((el) => el.getBoundingClientRect().bottom)).toBeLessThanOrEqual(
     await board.evaluate((el) => el.getBoundingClientRect().top),
   )
   const cards = board.locator('[data-component="kanban-card"]')
   await expect(cards).toHaveCount(9)
   await expect(cards.first()).toContainText("Code task 11")
-  const search = board.getByRole("textbox")
+  const search = page.getByRole("textbox", { name: "Search sessions" })
   await search.fill("Code task 00")
   await expect(cards).toHaveCount(1)
   await expect(cards.first()).toContainText("Code task 00")
   await search.clear()
-  await board.locator('[data-action="home-new-session"]').click()
-  await expect(editor).toBeFocused()
   await expect(page).toHaveURL(/\/$/)
   expect(created).toHaveLength(0)
   await expect(composer.locator('[data-action="prompt-model"]')).toContainText("Claude Opus 4.6")
@@ -130,11 +129,8 @@ for (const selectLinked of [false, true]) {
       if (url.pathname === "/companion") return route.fulfill({ json: [] })
       return route.fallback()
     })
-    await page.goto(`${worktreeEntry}/${linkedSession.id}`)
-    const plus = page.getByRole("button", { name: "New session", exact: true }).first()
-    await expect(plus).toHaveAttribute("href", worktreeEntry)
-    await plus.click()
-    await expect(page).toHaveURL(new RegExp(`${worktreeEntry}$`))
+    // 261123 YuQi 顶栏「+」已下线，直接进旧新建会话 URL（现渲染首页 compose）验证草稿作用域。
+    await page.goto(worktreeEntry)
     const composer = page.locator('[data-component="home-compose-section"]')
     const editor = composer.getByRole("textbox")
     await expect(editor).toHaveText("Linked draft")

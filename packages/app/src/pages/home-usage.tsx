@@ -250,7 +250,7 @@ function StackedBars(props: {
 }
 
 const USAGE_SURFACE =
-  "flex w-full max-w-[620px] shrink-0 flex-col gap-3 self-start rounded-pane border border-v2-border-border-base bg-v2-background-bg-layer-01 p-3 shadow-[var(--v2-elevation-floating)] xl:w-[620px]"
+  "flex w-full max-w-[720px] shrink-0 flex-col gap-3 self-start rounded-pane border border-v2-border-border-base bg-v2-background-bg-layer-01 p-3 shadow-[var(--v2-elevation-floating)] xl:w-[720px]"
 
 function HomeUsageSkeleton() {
   const language = useLanguage()

@@ -149,7 +149,7 @@ test("imported companion retries a deleted first-chat session and resumes the re
 // 261117 Red Hold both binding reads so cold navigation cannot borrow Code's defaults.
 const coldChatSessionID = "ses_companion_cold_chat"
 
-test("cold-opened bound Chat session keeps new-session entries off the Code route until the binding loads", async ({
+test("cold-opened bound Chat session keeps the new-session keybind off the Code route until the binding loads", async ({
   page,
 }) => {
   test.setTimeout(120_000)
@@ -210,7 +210,6 @@ test("cold-opened bound Chat session keeps new-session entries off the Code rout
 
   const sessionUrl = `/${base64Encode(fixture.directory)}/session/${coldChatSessionID}`
   const mode = page.locator('[data-component="product-mode-switch"]')
-  const newSession = page.locator('[data-frost-surface="titlebar"]').getByLabel("New session", { exact: true })
   const listSeen = page.waitForRequest(
     (request) => request.method() === "GET" && backendPath(request.url()) === "/session",
   )
@@ -221,22 +220,13 @@ test("cold-opened bound Chat session keeps new-session entries off the Code rout
   try {
     await page.goto(sessionUrl)
     await Promise.all([listSeen, detailSeen])
-    await expect(newSession).toBeVisible()
 
-    const codeEntry = `${new URL(page.url()).pathname.replace(/\/session\/[^/]+$/, "")}/session`
-
-    expect(
-      await newSession.getAttribute("href"),
-      "titlebar new-session entry must not target the Code new-session route before the Chat binding loads",
-    ).not.toBe(codeEntry)
-    await expect(newSession).toBeDisabled()
-
+    // 261123 YuQi 顶栏「+」已下线；这条用例剩下的主题是键盘入口——绑定未加载时
+    // Ctrl+Shift+S 不得借 Code 默认值新建或跳转，只能停在当前 Chat 会话上。
     await page.keyboard.press("Control+Shift+s")
     release()
     await expect(page).toHaveURL(new RegExp(`/session/${coldChatSessionID}$`))
     await expect(mode.locator('[data-mode="chat"]')).toHaveAttribute("aria-current", "page")
-    await expect(newSession).toHaveAttribute("href", `/chat?companion=${profile.id}`)
-    await expect(newSession).toBeEnabled()
     expect(errors).toEqual([])
   } finally {
     release()

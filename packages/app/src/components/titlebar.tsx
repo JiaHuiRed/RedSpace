@@ -430,22 +430,9 @@ function V2TitlebarContent(props: { update?: TitlebarUpdate }) {
             )}
           </For>
         </div>
-        <IconButtonV2
-          type="button"
-          variant="ghost-muted"
-          size="large"
-          class="shrink-0"
-          icon={<IconV2 name="plus" />}
-          as="a"
-          href={newSessionHref()}
-          onClick={(event) => {
-            if (mode() !== "code" || params.id || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
-            event.preventDefault()
-            command.trigger("session.new")
-          }}
-          disabled={!mode()}
-          aria-label={language.t("command.session.new")}
-        />
+        {/* 261123 YuQi 顶栏「+」下线：新建会话界面已并入首页 compose 区——首页上它只剩
+            聚焦输入框（与命令面板 session.new 重复），会话页上等价于回首页；Chat 侧的
+            新建对话入口（companion-new 链接）不受影响。 */}
         <Show when={tabsEnriched().length > 0}>
           <DropdownMenu gutter={4} placement="bottom-end">
             <DropdownMenu.Trigger

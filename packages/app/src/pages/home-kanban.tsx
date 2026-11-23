@@ -84,98 +84,86 @@ export function HomeKanban(props: {
     return "var(--v2-text-text-muted, var(--text-weak))"
   }
 
-  // 260901 cc 间距整体收一档（gap-4→3、px-4→2、空列 220→150、卡片网格 340→250）：
-  // 用量看板搬到左侧并排之后横向预算少了 620px，让出来的是外围留白与**空列**的宽度
-  // ——「工作中 0」「需关注 0」两列只装一个列头加一行淡字，150px 够用。
+  // 261124 YuQi 布局重排（哥哥在 layout-planner 摆的终版）：三列横排改为两子列——
+  // 左子列「工作中 + 需关注」竖排，右子列「空闲」。列宽固定 436px（画布 245 × 2560/1440），
+  // 260901 的「按内容量 flex-grow + 空列 150px 地板」随横排一起退役——列宽不再参与分配，
+  // 列内卡片仍走 auto-fill 网格（436px 列宽下自然单列，窄窗口继续退化）。
+  // 260829 的裁剪负边距手法（pt-2 -mt-2 px-2 -mx-2）保留；整带随页面滚动，
+  // 不再做列内纵向滚动（空闲 9 卡竖排一列到底）。
+  const columnBlock = (column: KanbanColumn) => {
+    // 261124 四轮（哥哥反馈）：卡片缩到原宽的 85%（436→370），空闲列一行放两张——
+    // 9 张 idle 卡从 9 行收到 5 行，最后一张不用滚动就能看到。网格不再 auto-fill
+    // 自适应（260901 的封顶三列逻辑随固定列宽退役），列内排布直接定死。
+    // 261124 五轮：卡片 355px；idle 容器 355×2+缝10=720。
+    const wide = column.id === "idle"
+    return (
+    <div class={`flex ${wide ? "w-[720px]" : "w-[355px]"} max-w-full shrink-0 flex-col gap-3`}>
+      <div class="flex items-center gap-2 px-2 h-7 shrink-0">
+        <div class="size-2 rounded-full" style={{ "background-color": columnColor(column.id) }} />
+        <span class="text-v2-text-text-muted [font-weight:530] text-[13px]">{columnLabel(column.id)}</span>
+        {/* 260828 cc 计数改成三列都显示。原来只在 > 0 时给，于是「工作中」「需关注」
+            没数字、「空闲」有个 5，三个列头的信息密度不齐，扫视时会卡一下。
+            而且 0 本身是信息 —— 「需关注 0」是个正面信号，不是没内容。 */}
+        <span class="text-v2-text-text-faint text-[11px] [font-weight:440]">{column.records.length}</span>
+      </div>
+      {/* 260829 cc pt-2 -mt-2：overflow 裁剪边就在这个网格的顶边，hover 抬起的 4px、
+          scale 溢出和向上的阴影全被切平。负边距吃掉列的 gap-3 里的 8px、再由 padding
+          补回来；左右同理（px-2 -mx-2），盖掉 0 8px 16px 阴影的实心段。
+          grid-template-columns 走 style 而不是 Tailwind 任意值：这个值里有空格和括号，
+          任意值语法要靠下划线转义，写错了不会报错、只会静默退化成一列。 */}
+      <div
+        class="pt-2 -mt-2 px-2 -mx-2 grid gap-2.5 auto-rows-min content-start"
+        style={{ "grid-template-columns": wide ? "repeat(2,minmax(0,1fr))" : "minmax(0,1fr)" }}
+      >
+        <Show
+          when={column.records.length > 0}
+          fallback={
+            // 260828 cc 空态从 py-6 的虚线大盒子改成一行淡字。列收窄之后那个盒子
+            // 仍是整屏最显眼的两个矩形之一，而它承载的信息是「这里没有东西」。
+            <div class="px-2 py-1 text-[12px] text-v2-text-text-faint [font-weight:440]">
+              {language.t("home.kanban.empty")}
+            </div>
+          }
+        >
+          <For each={column.records}>
+            {(record) => (
+              <KanbanCard
+                record={record}
+                columnId={column.id}
+                selectedProjectName={props.selectedProjectName}
+                onClick={(focus) => props.openSession(record.session, focus)}
+                onArchive={() => props.onArchive(record.session)}
+                onUnarchive={() => props.onUnarchive?.(record.session)}
+              />
+            )}
+          </For>
+          {/* 260829 Red 折叠提示。静悄悄少给一截卡片是最坏的做法 —— 用户会以为会话丢了
+               （归档入口在右键菜单里，看板又没分页）。一句话说清还有多少、为什么没有。 */}
+          <Show when={column.hidden}>
+            <div class="px-2 pt-0.5 pb-1 text-[11px] text-v2-text-text-faint [font-weight:440]">
+              {language.t("home.kanban.hidden", { count: column.hidden ?? 0 })}
+            </div>
+          </Show>
+        </Show>
+      </div>
+    </div>
+    )
+  }
+
+  // 261124 三轮（哥哥终版）：第一排「工作中 + 需关注」同高并列，空闲单独一排在下。
+  // 261124 七轮（哥哥发现看板与面板右缘错位）：两笔叠加——① 根容器 px-2 的右内缩 8px；
+  // ② 第一排（355×2+48=758）比空闲行（720）宽 38px，flex-col 左对齐把空闲右缘又缩进去。
+  // 修法：第一排列距收到 gap-x-2.5（与空闲两卡缝一致，两排等宽 720、右缘天然齐），
+  // 根容器只保留左侧 px-2 中的 pl-2（260829 网格负边距手法的左补偿）。
   return (
-    <div class="flex gap-3 min-h-0 overflow-x-auto overflow-y-hidden flex-1 px-2 pb-4">
-      <For each={columns()}>
-        {(column) => (
-          // 260828 cc 空列不再与有内容的列等宽。原来每列都是 `flex-1`：宽窗口下
-          // 「工作中」「需关注」各占三分之一全是虚线占位，唯一有内容的列被挤在剩下的
-          // 三分之一里。改成空列只占最小宽度、不参与 grow，横向空间全给有内容的列。
-          <div
-            class="flex flex-col min-w-[150px] gap-3"
-            // 260901 cc 增长权重按**内容量**给，不是有内容就平均分。
-            //   原来是 `1 1 0%`：「工作中」有 1 个会话、「空闲」有 24 个，两列拿到一样宽 ——
-            //   于是空闲被压成一列卡片，而工作中那一列大半是空白。
-            //   权重 = min(条数, 3)：1 条给 1、2 条给 2、3 条以上一律 3。封顶是必要的，
-            //   不封顶的话 24 : 1 会把「工作中」压到 min-w 的地板上，那一列就只剩一条缝。
-            //   空列仍然是 `0 1 150px`（不参与增长），这一档只在该列真的没有会话时生效。
-            style={{
-              flex: column.records.length > 0 ? `${Math.min(column.records.length, 3)} 1 0%` : "0 1 150px",
-            }}
-          >
-            <div class="flex items-center gap-2 px-2 h-7 shrink-0">
-              <div class="size-2 rounded-full" style={{ "background-color": columnColor(column.id) }} />
-              <span class="text-v2-text-text-muted [font-weight:530] text-[13px]">{columnLabel(column.id)}</span>
-              {/* 260828 cc 计数改成三列都显示。原来只在 > 0 时给，于是「工作中」「需关注」
-                  没数字、「空闲」有个 5，三个列头的信息密度不齐，扫视时会卡一下。
-                  而且 0 本身是信息 —— 「需关注 0」是个正面信号，不是没内容。 */}
-              <span class="text-v2-text-text-faint text-[11px] [font-weight:440]">{column.records.length}</span>
-            </div>
-            {/* 260828 cc 卡片列数按可用宽度自适应，不再按记录条数切换。原判据是
-                records.length > 6 才切两列，但决定该排几列的是宽度不是条数：5 张卡在宽列里
-                各占满整行，一张卡 500+px 只装一行标题。auto-fill + minmax 让窄列自然退化成
-                一列、宽列自动铺开，不需要阈值。 */}
-            {/* 260829 cc pt-2 -mt-2：overflow-y-auto 的裁剪边就在这个网格的顶边，而首行卡片
-                content-start 紧贴着它 —— hover 抬起的 4px、scale 溢出和向上的阴影全被切平，
-                读起来是「卡片滑进了上面的东西底下」。负边距吃掉列的 gap-3 里的 8px、再由
-                padding 补回来：静止版式一像素不动，只把裁剪边往上挪 8px。
-                260829 二轮：左右也补上（哥哥说首列卡片左侧仍有裁剪痕迹）。px-2 -mx-2 同款手法。
-                真正要让开的不是 scale 那 2-3px，是阴影——0 8px 16px 没有 x 偏移，左右各够到
-                16px。没给满 16 是因为再宽就把列间 gap-4 整个吃掉、相邻两列的裁剪盒会贴死；
-                8px 覆盖掉形变全部与阴影的实心段，外侧那截 alpha 已经接近 0，看不出来。
-                负横边距只伸进外层那圈 px-4 的 padding 里（overflow 裁在 padding 盒，padding
-                区不裁），所以首列与末列都不会被行容器切掉。
-                已知代价：网格比列宽 16px，auto-fill 的列数会在极窄的临界宽度上提前跳一档。 */}
-            {/* 260901 cc 封顶三列。auto-fill 只看「一格最少多宽」，宽窗口下会一直铺到四列。
-                做法是把每格的最小宽度抬到 max(250px, 容器的三分之一) —— 三分之一以下的宽度
-                永远塞不进第四格，而窄窗口下 250px 这一支仍然生效，会自然退成两列/一列。
-                单纯写死 grid-cols-3 不行：三列都有内容时每列只剩三分之一宽，卡片会被压扁。
-                地板从 300 降到 250：三列本来就比四列每格更宽，300 的地板会让整个看板占得更多，
-                而封顶三列的**目的**是把宽度让给左边的用量面板（见 home.tsx 的并排容器）。
-                grid-template-columns 走 style 而不是 Tailwind 任意值：这个值里有空格和括号，
-                任意值语法要靠下划线转义，写错了不会报错、只会静默退化成一列。
-                减的是 gap-2.5 的两条缝（0.625rem × 2）。 */}
-            <div
-              class="overflow-y-auto flex-1 pt-2 -mt-2 px-2 -mx-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden grid gap-2.5 auto-rows-min content-start"
-              style={{ "grid-template-columns": "repeat(auto-fill,minmax(max(250px,(100% - 1.25rem)/3),1fr))" }}
-            >
-              <Show
-                when={column.records.length > 0}
-                fallback={
-                  // 260828 cc 空态从 py-6 的虚线大盒子改成一行淡字。列收窄之后那个盒子
-                  // 仍是整屏最显眼的两个矩形之一，而它承载的信息是「这里没有东西」。
-                  <div class="px-2 py-1 text-[12px] text-v2-text-text-faint [font-weight:440]">
-                    {language.t("home.kanban.empty")}
-                  </div>
-                }
-              >
-                <For each={column.records}>
-                  {(record) => (
-                    <KanbanCard
-                      record={record}
-                      columnId={column.id}
-                      selectedProjectName={props.selectedProjectName}
-                      onClick={(focus) => props.openSession(record.session, focus)}
-                      onArchive={() => props.onArchive(record.session)}
-                      onUnarchive={() => props.onUnarchive?.(record.session)}
-                    />
-                  )}
-                </For>
-                {/* 260829 Red 折叠提示。静悄悄少给一截卡片是最坏的做法 —— 用户会以为会话丢了
-                     （归档入口在右键菜单里，看板又没分页）。一句话说清还有多少、为什么没有。 */}
-                <Show when={column.hidden}>
-                  <div class="px-2 pt-0.5 pb-1 text-[11px] text-v2-text-text-faint [font-weight:440]">
-                    {language.t("home.kanban.hidden", { count: column.hidden ?? 0 })}
-                  </div>
-                </Show>
-              </Show>
-            </div>
-          </div>
-        )}
-      </For>
+    // 261124 八轮：去掉 overflow-x-auto——内容固定 720 宽永远用不上横向滚动，
+    // 它自己倒是把滚动条渲染出来了（哥哥：滚动条比不对齐更丑）。
+    <div class="flex min-h-0 flex-col gap-y-6 pl-2 pb-4">
+      <div class="flex gap-x-2.5">
+        {columnBlock(columns()[0]!)}
+        {columnBlock(columns()[1]!)}
+      </div>
+      {columnBlock(columns()[2]!)}
     </div>
   )
 }
@@ -252,7 +240,7 @@ function KanbanCard(props: {
         as="button"
         type="button"
         data-component="kanban-card"
-        class="flex flex-col gap-2.5 rounded-[8px] border border-v2-border-border-base bg-v2-background-bg-base px-4 py-3.5 text-left transition-colors duration-[120ms] ease-in-out hover:bg-v2-overlay-simple-overlay-hover focus-visible:bg-v2-overlay-simple-overlay-hover focus-visible:outline-none cursor-default"
+        class="flex flex-col gap-2.5 rounded-[8px] border border-v2-border-border-base bg-v2-background-bg-layer-01 px-4 py-3.5 text-left transition-colors duration-[120ms] ease-in-out hover:bg-v2-overlay-simple-overlay-hover focus-visible:bg-v2-overlay-simple-overlay-hover focus-visible:outline-none cursor-default"
         onClick={() => props.onClick(next()?.focus)}
       >
         <div class="flex items-center gap-2 min-w-0 w-full">
