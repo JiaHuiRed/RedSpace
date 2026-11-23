@@ -24,8 +24,8 @@ export type CompactSubmitInput = { sessionID: string; modelID: string; providerI
 
 // 261011 Red C1（审计 RC-GUI-01）：确认后不再裸 `void summarize`——失败走 onError（组件接
 // toast），在途按 sessionID 去重（同会话 settle 前第二发被挡），A 的在途不挡 B，settle 后恢复。
-// busy 语义（压缩进行中）由服务端 ensureRunning 并发保护兜底，拒绝同样走 onError，客户端不
-// 另起压缩状态机。审计门禁：重复点击只形成一次预期请求、失败显式可见、切会话不串扰。
+// 受理后由服务端合并重复的后台请求，进度沿用 session.time.compacting。
+// 审计门禁：重复点击只形成一次预期请求、失败显式可见、切会话不串扰。
 export function createCompactSubmit(opts: {
   summarize: (input: CompactSubmitInput) => Promise<unknown>
   onError: (error: unknown) => void
@@ -118,7 +118,7 @@ export function SessionContextUsage(props: SessionContextUsageProps) {
   // 261011 Red C1：失败 toast 复用 common.requestFailed（session-header 同款）；
   // 成功不加 toast——压缩摘要出现在消息流（CompactionPart）里，是天然反馈。
   const submitCompact = createCompactSubmit({
-    summarize: (input) => sdk.client.session.summarize(input),
+    summarize: (input) => sdk.client.session.summarize({ ...input, background: true }, { throwOnError: true }),
     onError: (error) =>
       showToast({
         variant: "error",
@@ -270,6 +270,7 @@ export function SessionContextUsage(props: SessionContextUsageProps) {
           variant="ghost"
           class="h-6 shrink-0 gap-1.5 rounded-md px-1.5"
           onClick={compact}
+          disabled={!!(params.id && sync.session.get(params.id)?.time.compacting)}
           aria-label={language.t("command.session.compact")}
         >
           {circle()}

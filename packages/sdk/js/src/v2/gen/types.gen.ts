@@ -8494,6 +8494,10 @@ export type SessionSummarizeData = {
     providerID: string
     modelID: string
     auto?: boolean
+    /**
+     * Return after accepting the job. Observe session state and events for completion.
+     */
+    background?: boolean
   }
   path: {
     sessionID: string
@@ -8520,7 +8524,7 @@ export type SessionSummarizeError = SessionSummarizeErrors[keyof SessionSummariz
 
 export type SessionSummarizeResponses = {
   /**
-   * Summarized session
+   * Summarized session, or accepted a background compaction
    */
   200: boolean
 }

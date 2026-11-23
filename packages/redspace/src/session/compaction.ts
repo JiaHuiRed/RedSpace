@@ -939,8 +939,7 @@ export const layer = Layer.effect(
         yield* bus.publish(Session.Event.Error, { sessionID: input.sessionID, error: failure })
         return "stop" as const
       }
-      // 260824 cc 置起「正在压缩」。这是 session.time.compacting 全仓唯一的写入点 ——
-      // 此前该字段只有搬运与消费（TUI 侧边栏、GUI 看板徽标），两端因此永远不亮。
+      // 261123 Red 后台手动请求受理时已显示准备状态；这里记录实际开始摘要的时刻。
       // 只在真正的全量摘要压缩上置起：prune 档是纯本地裁剪、不调模型、瞬时完成，
       // 给它挂个"压缩中"只会闪一下，没有信息量。
      yield* session.setCompacting({ sessionID: input.sessionID, time: Date.now() })

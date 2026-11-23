@@ -131,6 +131,9 @@ export const SummarizePayload = Schema.Struct({
   providerID: ProviderID,
   modelID: ModelID,
   auto: Schema.optional(Schema.Boolean),
+  background: Schema.optional(
+    described(Schema.Boolean, "Return after accepting the job. Observe session state and events for completion."),
+  ),
 })
 // 260531 Red TTS 朗读功能 payload
 export const TtsPayload = Schema.Struct({
@@ -471,7 +474,7 @@ export const SessionApi = HttpApi.make("session")
           params: { sessionID: SessionID },
           query: WorkspaceRoutingQuery,
           payload: SummarizePayload,
-          success: described(Schema.Boolean, "Summarized session"),
+          success: described(Schema.Boolean, "Summarized session, or accepted a background compaction"),
           error: [HttpApiError.BadRequest, ApiNotFoundError],
         }).annotateMerge(
           OpenApi.annotations({

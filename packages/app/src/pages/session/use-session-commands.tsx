@@ -384,11 +384,24 @@ export const useSessionCommands = (actions: SessionCommandContext) => {
       return
     }
 
-    await sdk.client.session.summarize({
-      sessionID,
-      modelID: model.id,
-      providerID: model.provider.id,
-    })
+    if (info()?.time.compacting) return
+    await sdk.client.session
+      .summarize(
+        {
+          sessionID,
+          modelID: model.id,
+          providerID: model.provider.id,
+          background: true,
+        },
+        { throwOnError: true },
+      )
+      .catch((error: unknown) =>
+        showToast({
+          variant: "error",
+          title: language.t("common.requestFailed"),
+          description: error instanceof Error ? error.message : String(error),
+        }),
+      )
   }
 
   const fork = () => {

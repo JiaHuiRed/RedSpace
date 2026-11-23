@@ -7767,12 +7767,12 @@
         ],
         "responses": {
           "200": {
-            "description": "Summarized session",
+            "description": "Summarized session, or accepted a background compaction",
             "content": {
               "application/json": {
                 "schema": {
                   "type": "boolean",
-                  "description": "Summarized session"
+                  "description": "Summarized session, or accepted a background compaction"
                 }
               }
             }
@@ -7821,6 +7821,10 @@
                   },
                   "auto": {
                     "type": "boolean"
+                  },
+                  "background": {
+                    "type": "boolean",
+                    "description": "Return after accepting the job. Observe session state and events for completion."
                   }
                 },
                 "required": ["providerID", "modelID"],

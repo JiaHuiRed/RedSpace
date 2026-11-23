@@ -27,7 +27,7 @@ import * as SessionUsage from "@/session/usage"
 import { MessageID, PartID, SessionID } from "@/session/schema"
 import { InstanceState } from "@/effect/instance-state"
 import { NamedError } from "@redcode-ai/core/util/error"
-import { Cause, Effect, Option, Schema, Scope } from "effect"
+import { Cause, Effect, Option, Schema, Scope, Semaphore } from "effect"
 import * as Stream from "effect/Stream"
 import { HttpServerRequest, HttpServerResponse } from "effect/http"
 import { HttpApiBuilder, HttpApiError, HttpApiSchema } from "effect/http-api"
@@ -462,7 +462,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       return yield* requireSession(ctx.params.sessionID)
     })
 
-    const summarize = Effect.fn("SessionHttpApi.summarize")(function* (ctx: {
+    const prepareSummary = Effect.fn("SessionHttpApi.prepareSummary")(function* (ctx: {
       params: { sessionID: SessionID }
       payload: typeof SummarizePayload.Type
     }) {
@@ -482,8 +482,53 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
         },
         auto: ctx.payload.auto ?? false,
       })
-      yield* promptSvc.loop({ sessionID: ctx.params.sessionID })
-      return true
+    })
+
+    const summaryAdmission = Semaphore.makeUnsafe(1)
+    const backgroundSummaries = new Set<SessionID>()
+    const summarize = Effect.fn("SessionHttpApi.summarize")(function* (ctx: {
+      params: { sessionID: SessionID }
+      payload: typeof SummarizePayload.Type
+    }) {
+      const { sessionID } = ctx.params
+      if (!ctx.payload.background) {
+        yield* prepareSummary(ctx)
+        yield* promptSvc.loop({ sessionID })
+        return true
+      }
+
+      // 261123 Red 只串行受理，不跨模型调用持锁。请求断开后 runner 仍由服务端持有。
+      return yield* summaryAdmission.withPermits(1)(
+        Effect.gen(function* () {
+          if (backgroundSummaries.has(sessionID)) return true
+          yield* prepareSummary(ctx)
+          const acceptedAt = Date.now()
+          yield* session.setCompacting({ sessionID, time: acceptedAt })
+          backgroundSummaries.add(sessionID)
+          yield* promptSvc.loop({ sessionID }).pipe(
+            Effect.catchCause((cause) =>
+              Cause.hasInterruptsOnly(cause)
+                ? Effect.void
+                : bus.publish(Session.Event.Error, {
+                    sessionID,
+                    error: new NamedError.Unknown({ message: Cause.pretty(cause) }).toObject(),
+                  }),
+            ),
+            Effect.ensuring(
+              Effect.gen(function* () {
+                // The compactor clears its execution timestamp. Clear admission if the loop exited before starting it.
+                const info = yield* session.get(sessionID).pipe(Effect.option)
+                if (Option.isSome(info) && info.value.time.compacting === acceptedAt) {
+                  yield* session.setCompacting({ sessionID, time: null })
+                }
+              }).pipe(Effect.ignore, Effect.ensuring(Effect.sync(() => backgroundSummaries.delete(sessionID)))),
+            ),
+            Effect.interruptible,
+            Effect.forkIn(scope, { startImmediately: true }),
+          )
+          return true
+        }).pipe(Effect.uninterruptible),
+      )
     })
 
     const prompt = Effect.fn("SessionHttpApi.prompt")(function* (ctx: {

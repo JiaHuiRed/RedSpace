@@ -1,5 +1,5 @@
 import { afterEach, describe, expect } from "bun:test"
-import { ConfigProvider, Deferred, Effect, Layer } from "effect"
+import { ConfigProvider, Deferred, Effect, Layer, Schedule } from "effect"
 import type * as Scope from "effect/Scope"
 import { HttpRouter } from "effect/http"
 import { ChildProcessSpawner } from "effect/process"
@@ -745,6 +745,68 @@ describe("HttpApi SDK", () => {
       }),
     ),
   )
+
+  for (const outcome of ["success", "failure", "cancel"] as const) {
+    httpapi(
+      `background compaction survives disconnect and reports ${outcome}`,
+      withFakeLlm("default", ({ sdk, directory, llm }) =>
+        Effect.gen(function* () {
+          const session = yield* call(() =>
+            sdk.session.create({ title: "background compaction" }, { throwOnError: true }),
+          )
+          const sessionID = session.data.id
+          const model = { providerID: "test", modelID: "test-model" }
+          yield* llm.text("Initial reply.")
+          yield* call(() =>
+            sdk.session.prompt(
+              {
+                sessionID,
+                agent: "build",
+                model,
+                parts: [{ type: "text", text: "Prepare this conversation for compaction." }],
+              },
+              { throwOnError: true },
+            ),
+          )
+
+          let release!: () => void
+          const gate = new Promise<void>((resolve) => (release = resolve))
+          yield* Effect.addFinalizer(() => Effect.sync(release))
+          if (outcome === "failure") yield* llm.error(400, { error: { message: "rejected summary" } })
+          else yield* llm.hold("## Goal\nPreserve the initial conversation.", gate)
+          const input = { sessionID, background: true, ...model }
+          const controller = new AbortController()
+          const accepted = yield* call(() =>
+            sdk.session.summarize(input, { signal: controller.signal, throwOnError: true }),
+          )
+          expect(accepted.data).toBe(true)
+          controller.abort()
+
+          const reconnected = client("default", directory)
+          const state = () => reconnected.session.get({ sessionID }, { throwOnError: true })
+          yield* llm.wait(2).pipe(Effect.timeout("10 seconds"))
+          if (outcome !== "failure") {
+            expect((yield* call(state)).data.time.compacting).toBeGreaterThan(0)
+            expect((yield* call(() => reconnected.session.summarize(input, { throwOnError: true }))).data).toBe(true)
+          }
+          if (outcome === "cancel") yield* call(() => reconnected.session.abort({ sessionID }, { throwOnError: true }))
+          release()
+          yield* call(state).pipe(
+            Effect.repeat({ while: (value) => !!value.data.time.compacting, schedule: Schedule.spaced(25) }),
+            Effect.timeout("10 seconds"),
+          )
+          const messages = (yield* call(() => reconnected.session.messages({ sessionID }, { throwOnError: true }))).data
+          const markers = messages.flatMap((item) => item.parts.filter((part) => part.type === "compaction"))
+          expect(markers).toHaveLength(1)
+          if (outcome === "success") expect(markers[0]?.tokens_after).toBeDefined()
+          else {
+            expect(markers[0]?.tokens_after).toBeUndefined()
+            expect(messages.some(({ info }) => info.role === "assistant" && info.summary && info.error)).toBe(true)
+          }
+        }),
+      ),
+    )
+  }
 
   serverPathParity("matches generated SDK prompt streaming through fake LLM", (serverPath) =>
     withFakeLlm(serverPath, ({ sdk, llm }) =>

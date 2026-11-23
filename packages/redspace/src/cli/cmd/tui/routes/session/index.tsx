@@ -991,11 +991,19 @@ export function Session() {
           })
           return
         }
-        void sdk.client.session.summarize({
-          sessionID: route.sessionID,
-          modelID: selectedModel.modelID,
-          providerID: selectedModel.providerID,
-        })
+        void sdk.client.session
+          .summarize(
+            {
+              sessionID: route.sessionID,
+              modelID: selectedModel.modelID,
+              providerID: selectedModel.providerID,
+              background: true,
+            },
+            { throwOnError: true },
+          )
+          .catch((error: unknown) => {
+            toast.show({ variant: "error", message: error instanceof Error ? error.message : String(error) })
+          })
         dialog.clear()
       },
     },
