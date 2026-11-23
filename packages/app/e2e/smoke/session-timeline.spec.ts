@@ -51,6 +51,40 @@ test.describe("smoke: session timeline", () => {
     await expectCanScrollToStart(page, expectedPartIDs, expectedMessageIDs, errors)
   })
 
+  test("cached messages remain readable while version navigation loads on return", async ({ page }) => {
+    await mockRedCodeServer(page, {
+      sessions: fixture.sessions,
+      provider: fixture.provider,
+      directory: fixture.directory,
+      project: fixture.project,
+      pageMessages,
+    })
+    await configureSmokePage(page, fixture.directory)
+    await selectHomeProject(page, fixture.project.name)
+    const card = page.locator('[data-component="home-kanban"]').getByText(fixture.expected.sourceTitle, { exact: true })
+    const row = page.locator('[data-timeline-row="UserMessage"]').last()
+    await card.click()
+    await expect(row).toBeVisible()
+    await page.locator('a[data-mode="code"]').click()
+    await expect(card).toBeVisible()
+
+    const versions = new RegExp("/session/" + fixture.sourceID + "/message-versions(?:\\?|$)")
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => (release = resolve))
+    await page.route(versions, async (route) => {
+      await gate
+      await route.fulfill({ json: [], headers: { "access-control-allow-origin": "*" } })
+    })
+    try {
+      await Promise.all([page.waitForRequest(versions), card.click()])
+      await expect(row).toBeVisible()
+      await expect(page.locator('a[data-mode="code"]')).toBeVisible()
+      await expect(page.locator("[data-splash-surface]")).toBeHidden()
+    } finally {
+      release()
+    }
+  })
+
   test("removing a quote keeps the draft and an empty mention picker does not swallow Enter", async ({ page }) => {
     await mockRedCodeServer(page, {
       sessions: fixture.sessions,

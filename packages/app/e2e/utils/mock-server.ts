@@ -2,6 +2,7 @@ import type { Page, Route } from "@playwright/test"
 import type { SessionContextInspectResponse, SessionUsageResponse } from "@redcode-ai/sdk/v2/client"
 
 const emptyList = new Set([
+  "/companion",
   "/skill",
   "/command",
   "/lsp",

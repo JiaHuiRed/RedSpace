@@ -1928,8 +1928,9 @@ export default function Page() {
   )
 
   const versionsFor = (messageID: string): MessageVersions | undefined => {
+    // 261123 Red 版本导航是可选元数据，首次读取不能挂起已缓存的消息行。
+    if (versionGroups.state !== "ready") return
     const data = versionGroups()
-    if (!data) return
     const group = data.find((item) => item.versions.some((v) => v.messageID === messageID))
     if (!group) return
     const index = group.versions.findIndex((v) => v.messageID === messageID)
