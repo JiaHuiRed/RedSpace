@@ -8,6 +8,7 @@ type QueryCall = {
   sessionID: string
   q: string
   resolve: (value: unknown) => void
+  reject: (error: unknown) => void
 }
 const calls: QueryCall[] = []
 
@@ -21,7 +22,9 @@ mock.module("@/context/sdk", () => ({
     client: {
       session: {
         query: (input: { sessionID: string; q: string }) =>
-          new Promise((resolve) => calls.push({ sessionID: input.sessionID, q: input.q, resolve })),
+          new Promise((resolve, reject) =>
+            calls.push({ sessionID: input.sessionID, q: input.q, resolve, reject }),
+          ),
       },
     },
   }),
@@ -89,4 +92,56 @@ test("a late response from another scope never lands in the current panel", asyn
   expect(back.container.textContent).toContain("needle-a hit")
   back.dispose()
   b.dispose()
+})
+
+const submitButton = (container: HTMLElement) =>
+  container.querySelector('form button[type="submit"]') as HTMLButtonElement
+
+const backToOutline = (container: HTMLElement) =>
+  [...container.querySelectorAll("button")].find((button) => button.textContent?.includes("backToOutline"))!
+
+test("returning to the outline while a search is pending releases the panel", async () => {
+  const panel = mount("scope-c\u0000ses_c", "ses_c")
+  const base = calls.length
+  await search(panel.container, "needle-c")
+  calls[base].resolve(hit("m_c", "needle-c hit"))
+  await flush()
+  expect(panel.container.textContent).toContain("needle-c hit")
+
+  // 第二次搜索挂起时点「返回大纲」
+  await search(panel.container, "needle-c2")
+  expect(calls.length).toBe(base + 2)
+  expect(submitButton(panel.container).disabled).toBe(true)
+  backToOutline(panel.container).click()
+  await flush()
+
+  // 迟到的旧响应既不回写也不卡住运行态
+  calls[base + 1].resolve(hit("m_c2", "stale-c2 hit"))
+  await flush()
+  expect(panel.container.textContent).not.toContain("stale-c2 hit")
+  expect(submitButton(panel.container).disabled).toBe(false)
+
+  // 清空后重新搜索能正常发起并落到面板
+  await search(panel.container, "needle-c3")
+  expect(calls.length).toBe(base + 3)
+  calls[base + 2].resolve(hit("m_c3", "needle-c3 hit"))
+  await flush()
+  expect(panel.container.textContent).toContain("needle-c3 hit")
+  panel.dispose()
+})
+
+test("a failed new search does not leave old hits under the new keyword", async () => {
+  const panel = mount("scope-d\u0000ses_d", "ses_d")
+  const base = calls.length
+  await search(panel.container, "needle-d")
+  calls[base].resolve(hit("m_d", "needle-d hit"))
+  await flush()
+  expect(panel.container.textContent).toContain("needle-d hit")
+
+  await search(panel.container, "needle-d2")
+  calls[base + 1].reject(new Error("boom"))
+  await flush()
+  expect(panel.container.textContent).not.toContain("needle-d hit")
+  expect(panel.container.textContent).toContain("boom")
+  panel.dispose()
 })

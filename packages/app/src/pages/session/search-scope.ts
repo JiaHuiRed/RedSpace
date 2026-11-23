@@ -25,7 +25,9 @@ export function createSearchScopes() {
     },
     clear(scope: string) {
       cache.delete(scope)
-      versions.delete(scope)
+      // 261123 Red 递增而非删除世代：删除会让下一次 begin 从 1 重来，在途旧请求可能撞上同号
+      // （ABA）；且旧请求 finally 的 owns() 恒假，组件 running 卡在 true、按钮永久禁用。
+      versions.set(scope, (versions.get(scope) ?? 0) + 1)
     },
     /** 登记一次新搜索并返回版本；同一作用域内旧版本随即失效。 */
     begin(scope: string) {

@@ -57,4 +57,16 @@ describe("search scopes", () => {
     scopes.clear("A")
     expect(scopes.owns("A", again)).toBe(false)
   })
+
+  test("clear advances the generation so a reused version cannot claim a pending response", () => {
+    const scopes = createSearchScopes()
+    const pending = scopes.begin("A")
+    scopes.clear("A")
+    expect(scopes.owns("A", pending)).toBe(false)
+    // 清空后重新搜索：不能从 1 重来与在途请求撞号（ABA）
+    const next = scopes.begin("A")
+    expect(next).not.toBe(pending)
+    expect(scopes.owns("A", pending)).toBe(false)
+    expect(scopes.owns("A", next)).toBe(true)
+  })
 })

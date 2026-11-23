@@ -143,12 +143,11 @@ export function SessionSearchPanel(props: {
       save()
     } catch (error) {
       if (!owns()) return
-      setState((prev) => ({
-        q,
-        hits: prev?.hits ?? [],
-        scannedParts: prev?.scannedParts ?? 0,
-        error: error instanceof Error ? error.message : String(error),
-      }))
+      const message = error instanceof Error ? error.message : String(error)
+      // 261123 Red 新搜索失败不能保留旧命中（旧结果挂在新关键词下会误导）；续页失败保留原查询。
+      setState((prev) =>
+        cursor && prev ? { ...prev, error: message } : { q, hits: [], scannedParts: 0, error: message },
+      )
       save()
     } finally {
       if (owns()) setRunning(false)
@@ -204,6 +203,8 @@ export function SessionSearchPanel(props: {
                   setState(undefined)
                   resultScrollTop = 0
                   searchScopes.clear(props.scope)
+                  // 261123 Red clear 推进世代后在途请求的 owns() 为假、不会再复位运行态，这里补上。
+                  setRunning(false)
                 }}
               >
                 ← {language.t("session.search.backToOutline")}
