@@ -1,3 +1,4 @@
+import { partForDisplay } from "@redcode-ai/core/util/tool-diagnostics"
 import { Agent } from "@/agent/agent"
 import { Auth } from "@/auth"
 import { Bus } from "@/bus"
@@ -39,6 +40,7 @@ import {
   ForkPayload,
   InitPayload,
   ListQuery,
+  MessageQuery,
   MessagesQuery,
   PermissionResponsePayload,
   PromptPayload,
@@ -50,6 +52,8 @@ import {
 } from "../groups/session"
 import { ConflictError, InvalidRequestError, PermissionNotFoundError, SessionBusyError, notFound } from "../errors"
 import * as SessionError from "./session-errors"
+
+const messageForDisplay = (message: MessageV2.WithParts) => ({ ...message, parts: message.parts.map(partForDisplay) })
 
 const tryParseJson = (text: string) =>
   Effect.try({
@@ -216,7 +220,8 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       if (ctx.query.after !== undefined && !after) return yield* new HttpApiError.BadRequest({})
       yield* requireSession(ctx.params.sessionID)
       if (ctx.query.limit === undefined || ctx.query.limit === 0) {
-        return yield* SessionError.mapStorageNotFound(session.messages({ sessionID: ctx.params.sessionID }))
+        const items = yield* SessionError.mapStorageNotFound(session.messages({ sessionID: ctx.params.sessionID }))
+        return ctx.query.view ? items.map(messageForDisplay) : items
       }
 
       // 260529 Red compacted 会话初始加载只返回 compaction summary 及之后的消息
@@ -231,7 +236,8 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
           direction: after ? "newer" : undefined,
         }),
       )
-      if (!page.cursor) return page.items
+      const items = ctx.query.view ? page.items.map(messageForDisplay) : page.items
+      if (!page.cursor) return items
 
       const request = yield* HttpServerRequest.HttpServerRequest
       // toURL() honors the Host + x-forwarded-proto headers, so the Link
@@ -239,7 +245,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       const url = Option.getOrElse(HttpServerRequest.toURL(request), () => new URL(request.url, "http://localhost"))
       url.searchParams.set("limit", ctx.query.limit.toString())
       url.searchParams.set(after ? "after" : "before", page.cursor)
-      return HttpServerResponse.jsonUnsafe(page.items, {
+      return HttpServerResponse.jsonUnsafe(items, {
         headers: {
           "Access-Control-Expose-Headers": "Link, X-Next-Cursor",
           Link: `<${url.toString()}>; rel="next"`,
@@ -250,10 +256,12 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
 
     const message = Effect.fn("SessionHttpApi.message")(function* (ctx: {
       params: { sessionID: SessionID; messageID: MessageID }
+      query: typeof MessageQuery.Type
     }) {
-      return yield* SessionError.mapStorageNotFound(
+      const item = yield* SessionError.mapStorageNotFound(
         MessageV2.get({ sessionID: ctx.params.sessionID, messageID: ctx.params.messageID }),
       )
+      return ctx.query.view ? messageForDisplay(item) : item
     })
 
     // 261114 Red 消息树分支 Phase 3 切换器。InvalidBranch 是客户端把不可切换的

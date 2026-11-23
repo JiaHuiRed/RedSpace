@@ -1,3 +1,4 @@
+import { visibleFileErrors } from "@redcode-ai/core/util/tool-diagnostics"
 import { isTaskSteerRecord } from "@redcode-ai/core/util/message-turn"
 import {
   Component,
@@ -117,15 +118,6 @@ interface Diagnostic {
   }
   message: string
   severity?: number
-}
-
-function getDiagnostics(
-  diagnosticsByFile: Record<string, Diagnostic[]> | undefined,
-  filePath: string | undefined,
-): Diagnostic[] {
-  if (!diagnosticsByFile || !filePath) return []
-  const diagnostics = diagnosticsByFile[filePath] ?? []
-  return diagnostics.filter((d) => d.severity === 1).slice(0, 3)
 }
 
 function DiagnosticsDisplay(props: { diagnostics: Diagnostic[] }): JSX.Element {
@@ -2419,7 +2411,7 @@ ToolRegistry.register({
     const openFile = useFileOpen()
     const i18n = useI18n()
     const fileComponent = useFileComponent()
-    const diagnostics = createMemo(() => getDiagnostics(props.metadata.diagnostics, props.input.filePath))
+    const diagnostics = createMemo(() => visibleFileErrors<Diagnostic>(props.metadata.diagnostics, props.input.filePath))
     const path = createMemo(() => props.metadata?.filediff?.file || props.input.filePath || "")
     const filename = () => getFilename(props.input.filePath ?? "")
     const pending = () => props.status === "pending" || props.status === "running"
@@ -2516,7 +2508,7 @@ ToolRegistry.register({
     const openFile = useFileOpen()
     const i18n = useI18n()
     const fileComponent = useFileComponent()
-    const diagnostics = createMemo(() => getDiagnostics(props.metadata.diagnostics, props.input.filePath))
+    const diagnostics = createMemo(() => visibleFileErrors<Diagnostic>(props.metadata.diagnostics, props.input.filePath))
     const path = createMemo(() => props.input.filePath || "")
     const filename = () => getFilename(props.input.filePath ?? "")
     const pending = () => props.status === "pending" || props.status === "running"

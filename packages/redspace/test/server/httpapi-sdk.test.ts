@@ -645,6 +645,69 @@ describe("HttpApi SDK", () => {
     ),
   )
 
+  httpapiInstance(
+    "projects large edit diagnostics for display while preserving raw session history",
+    { serverPath: "default", git: false },
+    ({ sdk, directory }) =>
+      Effect.gen(function* () {
+        const session = yield* call(() => sdk.session.create({ title: "large history" }, { throwOnError: true }))
+        const sessionID = session.data.id
+        const older = yield* seedMessage(directory, sessionID)
+        const { message, part } = yield* seedMessage(directory, sessionID)
+        const filePath = "scene.ts"
+        const errors = Array.from({ length: 6 }, (_, i) => ({ severity: 1, message: `error ${i}` }))
+        const diagnostics = Object.fromEntries(Array.from({ length: 200 }, (_, i) => [`file-${i}.ts`, errors]))
+        diagnostics[filePath] = [{ severity: 2, message: "warning" }, ...errors]
+        const partID = PartID.ascending()
+        const tool = {
+          type: "tool" as const,
+          tool: "edit",
+          callID: "fixture",
+          id: partID,
+          sessionID,
+          messageID: message.id,
+          state: {
+            status: "completed" as const,
+            input: { filePath },
+            title: "edit",
+            output: "done",
+            time: { start: 1, end: 2 },
+            metadata: { diagnostics, extra: "preserved" },
+          },
+        }
+        yield* call(() =>
+          sdk.part.update({ sessionID, messageID: message.id, partID, part: tool }, { throwOnError: true }),
+        )
+        const raw = yield* call(() => sdk.session.message({ sessionID, messageID: message.id }, { throwOnError: true }))
+        const display = yield* call(() =>
+          sdk.session.message({ sessionID, messageID: message.id, view: "display" }, { throwOnError: true }),
+        )
+        const expected = {
+          ...tool,
+          state: { ...tool.state, metadata: { diagnostics: { [filePath]: errors.slice(0, 3) }, extra: "preserved" } },
+        }
+        expect(raw.data.parts).toEqual([part, tool])
+        expect(display.data.parts).toEqual([part, expected])
+        expect(Buffer.byteLength(JSON.stringify(display.data)) * 10).toBeLessThan(
+          Buffer.byteLength(JSON.stringify(raw.data)),
+        )
+        const list = yield* call(() => sdk.session.messages({ sessionID, view: "display" }, { throwOnError: true }))
+        expect(list.data.find((item) => item.info.id === message.id)).toEqual(display.data)
+        const page = yield* call(() =>
+          sdk.session.messages({ sessionID, view: "display", limit: 1 }, { throwOnError: true }),
+        )
+        expect(page.data).toEqual([display.data])
+        const before = page.response.headers.get("X-Next-Cursor")
+        expect(before).toBeTruthy()
+        const next = yield* call(() =>
+          sdk.session.messages({ sessionID, view: "display", limit: 1, before: before! }, { throwOnError: true }),
+        )
+        expect(next.data[0].info.id).toBe(older.message.id)
+        const full = yield* call(() => sdk.session.messages({ sessionID }, { throwOnError: true }))
+        expect(full.data.find((item) => item.info.id === message.id)).toEqual(raw.data)
+      }),
+  )
+
   // Regression: SyncEvent must publish on the same ProjectBus the /event handler
   // subscribes to, AND the /event stream must forward handler ALS/context into the
   // body-pump fiber. Drives the full SDK → /event → Session.updatePart → sync.run →

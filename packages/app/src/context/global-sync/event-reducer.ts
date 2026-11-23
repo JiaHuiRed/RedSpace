@@ -1,3 +1,4 @@
+import { partForDisplay } from "@redcode-ai/core/util/tool-diagnostics"
 import { Binary } from "@redcode-ai/core/util/binary"
 import { batch } from "solid-js"
 import { produce, reconcile, type SetStoreFunction, type Store } from "solid-js/store"
@@ -430,9 +431,10 @@ export function applyDirectoryEvent(input: {
       break
     }
     case "message.part.updated": {
-      const part = (event.properties as { part: Part }).part
-      if (SKIP_PARTS.has(part.type)) break
-      if (!input.store.message[part.sessionID]?.some((message) => message.id === part.messageID)) break
+      const incoming = (event.properties as { part: Part }).part
+      if (SKIP_PARTS.has(incoming.type)) break
+      if (!input.store.message[incoming.sessionID]?.some((message) => message.id === incoming.messageID)) break
+      const part = partForDisplay(incoming)
       input.setStore(
         produce((draft) => {
           delete draft.part_text_accum_delta[part.id]

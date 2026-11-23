@@ -6695,6 +6695,16 @@
             "required": false
           },
           {
+            "name": "view",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": ["display"],
+              "description": "Keep the edit/write diagnostics visible in the GUI. Omit to retrieve full tool records."
+            },
+            "required": false
+          },
+          {
             "name": "limit",
             "in": "query",
             "schema": {
@@ -7134,6 +7144,16 @@
             "in": "query",
             "schema": {
               "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "view",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": ["display"],
+              "description": "Keep the edit/write diagnostics visible in the GUI. Omit to retrieve full tool records."
             },
             "required": false
           }

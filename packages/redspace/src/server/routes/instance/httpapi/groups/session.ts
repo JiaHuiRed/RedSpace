@@ -51,8 +51,12 @@ export const DiffQuery = Schema.Struct({
   // 病态会话那份 diff 33MB，带正文拉一次 TUI 卡 23s（260903 因此把进会话的 fetch 删掉了）。
   patch: Schema.optional(QueryBoolean),
 })
-export const MessagesQuery = Schema.Struct({
+export const MessageQuery = Schema.Struct({
   ...WorkspaceRoutingQueryFields,
+  view: Schema.optional(described(Schema.Literal("display"), "Keep the edit/write diagnostics visible in the GUI. Omit to retrieve full tool records.")),
+})
+export const MessagesQuery = Schema.Struct({
+  ...MessageQuery.fields,
   limit: Schema.optional(Schema.NumberFromString.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0))),
   before: Schema.optional(Schema.String),
   after: Schema.optional(Schema.String),
@@ -360,7 +364,7 @@ export const SessionApi = HttpApi.make("session")
         ),
         HttpApiEndpoint.get("message", SessionPaths.message, {
           params: { sessionID: SessionID, messageID: MessageID },
-          query: WorkspaceRoutingQuery,
+          query: MessageQuery,
           success: described(MessageV2.WithParts, "Message"),
           error: [HttpApiError.BadRequest, ApiNotFoundError],
         }).annotateMerge(

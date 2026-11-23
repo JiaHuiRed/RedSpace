@@ -3775,6 +3775,7 @@ export class Session2 extends HeyApiClient {
       sessionID: string
       directory?: string
       workspace?: string
+      view?: "display"
       limit?: number
       before?: string
       after?: string
@@ -3789,6 +3790,7 @@ export class Session2 extends HeyApiClient {
             { in: "path", key: "sessionID" },
             { in: "query", key: "directory" },
             { in: "query", key: "workspace" },
+            { in: "query", key: "view" },
             { in: "query", key: "limit" },
             { in: "query", key: "before" },
             { in: "query", key: "after" },
@@ -3948,6 +3950,7 @@ export class Session2 extends HeyApiClient {
       messageID: string
       directory?: string
       workspace?: string
+      view?: "display"
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -3960,6 +3963,7 @@ export class Session2 extends HeyApiClient {
             { in: "path", key: "messageID" },
             { in: "query", key: "directory" },
             { in: "query", key: "workspace" },
+            { in: "query", key: "view" },
           ],
         },
       ],

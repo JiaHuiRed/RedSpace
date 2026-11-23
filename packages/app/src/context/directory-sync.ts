@@ -350,7 +350,7 @@ export const createDirSyncContext = (
     const messages = await trackForegroundMessageLoad(
       retry(() =>
         input.client.session.messages(
-          { sessionID: input.sessionID, limit: input.limit, before: input.before, after: input.after },
+          { sessionID: input.sessionID, limit: input.limit, before: input.before, after: input.after, view: "display" },
           { throwOnError: true },
         ),
       ),
@@ -696,7 +696,7 @@ export const createDirSyncContext = (
                         message: async (messageID) => {
                           try {
                             const result = await client.session.message(
-                              { sessionID, messageID },
+                              { sessionID, messageID, view: "display" },
                               { throwOnError: true },
                             )
                             return { info: clean(result.data.info), parts: sortParts(result.data.parts) }
@@ -794,7 +794,10 @@ export const createDirSyncContext = (
             fetchMessage: async (messageID, isCurrent) => {
               const pending = staged
               try {
-                const response = await client.session.message({ sessionID, messageID }, { throwOnError: true })
+                const response = await client.session.message(
+                  { sessionID, messageID, view: "display" },
+                  { throwOnError: true },
+                )
                 if (!isCurrent()) return
                 const data = response.data
                 if (!data?.info?.id) {

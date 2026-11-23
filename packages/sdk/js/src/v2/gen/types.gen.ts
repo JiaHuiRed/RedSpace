@@ -8097,6 +8097,10 @@ export type SessionMessagesData = {
   query?: {
     directory?: string
     workspace?: string
+    /**
+     * Keep the edit/write diagnostics visible in the GUI. Omit to retrieve full tool records.
+     */
+    view?: "display"
     limit?: number
     before?: string
     after?: string
@@ -8280,6 +8284,10 @@ export type SessionMessageData = {
   query?: {
     directory?: string
     workspace?: string
+    /**
+     * Keep the edit/write diagnostics visible in the GUI. Omit to retrieve full tool records.
+     */
+    view?: "display"
   }
   url: "/session/{sessionID}/message/{messageID}"
 }

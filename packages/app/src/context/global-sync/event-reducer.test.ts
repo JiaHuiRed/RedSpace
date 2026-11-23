@@ -650,6 +650,42 @@ describe("applyDirectoryEvent", () => {
     expect(store.part[messageID]).toBeUndefined()
   })
 
+  test("keeps only the visible write diagnostics in the live timeline", () => {
+    const sessionID = "ses_1"
+    const messageID = "msg_1"
+    const [store, setStore] = createStore(baseState({ message: { [sessionID]: [userMessage(messageID, sessionID)] } }))
+    const diagnostics = { "a.ts": [{ severity: 1, message: "a" }], "b.ts": [{ severity: 1, message: "b" }] }
+    const part = {
+      id: "prt_1",
+      sessionID,
+      messageID,
+      type: "tool",
+      tool: "write",
+      callID: "fixture",
+      state: {
+        status: "completed",
+        title: "write",
+        input: { filePath: "a.ts" },
+        output: "done",
+        metadata: { diagnostics },
+        time: { start: 1, end: 2 },
+      },
+    } satisfies Part
+    applyDirectoryEvent({
+      event: { type: "message.part.updated", properties: { part } },
+      store,
+      setStore,
+      push() {},
+      directory: "/tmp",
+      loadLsp() {},
+    })
+    expect(store.part[messageID][0]).toEqual({
+      ...part,
+      state: { ...part.state, metadata: { diagnostics: { "a.ts": diagnostics["a.ts"] } } },
+    })
+    expect(Object.keys(part.state.metadata.diagnostics)).toEqual(["a.ts", "b.ts"])
+  })
+
   test("does not retain parts for messages outside the current window", () => {
     const sessionID = "ses_1"
     const visibleID = "msg_visible"
