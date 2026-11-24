@@ -1690,6 +1690,41 @@ describe("tool.shell reserved env", () => {
   )
 })
 
+const backgroundFields = (output: string) => {
+  const field = (name: string) => {
+    const value = new RegExp(`^${name}: (.+)$`, "m").exec(output)?.[1]
+    if (!value) throw new Error(`Missing ${name.trim()} in background result: ${output}`)
+    return value
+  }
+  const shell = field("  shell")
+  if (shell !== "default" && shell !== "bash" && shell !== "powershell") throw new Error(`Invalid poll shell: ${shell}`)
+  return {
+    jobDir: field("job dir"),
+    log: field("log"),
+    status: field("status"),
+    workdir: field("  workdir"),
+    command: field("  command"),
+    shell,
+  } as const
+}
+
+const waitStatus = (file: string) =>
+  pollWithTimeout(
+    Effect.gen(function* () {
+      return yield* Effect.promise(() =>
+        fs.readFile(file, "utf8").then(
+          (text) => text.trim(),
+          (error) => {
+            if (error.code === "ENOENT") return undefined
+            throw error
+          },
+        ),
+      )
+    }),
+    `background terminal status never appeared at ${file}`,
+    "15 seconds",
+  )
+
 describe("tool.shell background", () => {
   it.live(
     "returns immediately and writes output to the log",
@@ -1709,22 +1744,135 @@ describe("tool.shell background", () => {
             const result = yield* run({ command, description: "background job", background: true })
             expect(Date.now() - started).toBeLessThan(3000)
             expect(result.output).toContain("Started in background")
-            const logPath = /^log: (.+)$/m.exec(result.output)?.[1]
-            if (!logPath) throw new Error(`background log path missing: ${result.output}`)
-
-            const content = yield* pollWithTimeout(
-              Effect.gen(function* () {
-                const text = yield* Effect.promise(() => fs.readFile(logPath, "utf8").catch(() => ""))
-                return text.includes("bg-started") ? text : undefined
-              }),
-              "background log never received output",
-            )
-            expect(content).toContain("bg-started")
-            // 等后台子进程自己退出并释放日志句柄，临时目录才能被 fixture 清掉。
-            yield* Effect.sleep("1500 millis")
+            const { log, status } = backgroundFields(result.output)
+            expect(yield* waitStatus(status)).toBe("exit 0")
+            expect(yield* Effect.promise(() => fs.readFile(log, "utf8"))).toContain("bg-started")
           }),
         )
       }),
     20_000,
+  )
+
+  it.live(
+    "records the real terminal status for a quiet exit 0 and for a nonzero exit",
+    () =>
+      Effect.gen(function* () {
+        const tmp = yield* tmpdirScoped()
+        yield* runIn(
+          tmp,
+          Effect.gen(function* () {
+            const zero = yield* run({ command: "exit 0", description: "background quiet zero", background: true })
+            const zeroFields = backgroundFields(zero.output)
+            // 作业目录独占：日志与终态文件都在同一个新目录下。
+            expect(path.dirname(zeroFields.log)).toBe(zeroFields.jobDir)
+            expect(path.dirname(zeroFields.status)).toBe(zeroFields.jobDir)
+            expect(yield* waitStatus(zeroFields.status)).toBe("exit 0")
+            // 静默作业没有 stdout，终态必须来自 exit 事件而不是日志内容。
+            expect((yield* Effect.promise(() => fs.readFile(zeroFields.log, "utf8"))).trim()).toBe("")
+
+            const bad = yield* run({ command: "exit 3", description: "background quiet nonzero", background: true })
+            const badFields = backgroundFields(bad.output)
+            expect(yield* waitStatus(badFields.status)).toBe("exit 3")
+          }),
+        )
+      }),
+    30_000,
+  )
+
+  it.live(
+    "creates a unique job directory and log per background call",
+    () =>
+      Effect.gen(function* () {
+        const tmp = yield* tmpdirScoped()
+        yield* runIn(
+          tmp,
+          Effect.gen(function* () {
+            const [first, second] = yield* Effect.all([
+              run({ command: "echo first-job", description: "background first", background: true }),
+              run({ command: "echo second-job", description: "background second", background: true }),
+            ], { concurrency: 2 })
+            const a = backgroundFields(first.output)
+            const b = backgroundFields(second.output)
+
+            expect(a.jobDir).not.toBe(b.jobDir)
+            expect(a.log).not.toBe(b.log)
+            expect(path.dirname(a.log)).toBe(a.jobDir)
+            expect(path.dirname(b.log)).toBe(b.jobDir)
+            expect(a.jobDir).toContain(path.join(".redcode", "temp"))
+            expect(b.jobDir).toContain(path.join(".redcode", "temp"))
+            expect(yield* waitStatus(a.status)).toBe("exit 0")
+            expect(yield* waitStatus(b.status)).toBe("exit 0")
+            const firstLog = yield* Effect.promise(() => fs.readFile(a.log, "utf8"))
+            const secondLog = yield* Effect.promise(() => fs.readFile(b.log, "utf8"))
+            expect(firstLog).toContain("first-job")
+            expect(firstLog).not.toContain("second-job")
+            expect(secondLog).toContain("second-job")
+            expect(secondLog).not.toContain("first-job")
+          }),
+        )
+      }),
+    30_000,
+  )
+
+  for (const item of shells) {
+    it.live(
+      `polls a finished job from its apostrophe job directory [${item.label}]`,
+      () =>
+        withShell(
+          item,
+          Effect.gen(function* () {
+            const base = yield* tmpdirScoped()
+            // 工作区路径自带单引号、空格与 Windows 的 %（cmd 会展开 %VAR%）：
+            // 轮询指令只能靠 workdir 参数 + 固定相对文件名，不能把路径拼进命令。
+            const dir = path.join(base, "it's a 100% job dir")
+            yield* Effect.promise(() => fs.mkdir(dir, { recursive: true }))
+            yield* runIn(
+              dir,
+              Effect.gen(function* () {
+                const command = item.label === "cmd" ? "echo poll-ok & exit 5" : "echo poll-ok; exit 5"
+                const selected = item.label === "bash" ? "bash" : item.label === "pwsh" ? "powershell" : "default"
+                const started = yield* run({ command, shell: selected, description: "background poll target", background: true })
+                const { jobDir, status, shell, workdir, command: poll } = backgroundFields(started.output)
+
+                expect(shell).toBe(selected)
+                expect(workdir).toBe(jobDir)
+                expect(poll).not.toContain(jobDir)
+                expect(poll).not.toContain("it's")
+                expect(poll).toContain("output.log")
+                expect(poll).toContain("status.txt")
+                expect(yield* waitStatus(status)).toBe("exit 5")
+
+                const polled = yield* run({ command: poll, shell, workdir, description: "poll background job" })
+                expect(polled.output).toContain("poll-ok")
+                expect(polled.output).toContain("exit 5")
+                expect(polled.output).not.toContain("not recorded")
+              }),
+            )
+          }),
+        ),
+      60_000,
+    )
+  }
+
+  it.live(
+    "never reports success when the terminal status is missing",
+    () =>
+      Effect.gen(function* () {
+        const tmp = yield* tmpdirScoped()
+        yield* runIn(
+          tmp,
+          Effect.gen(function* () {
+            const started = yield* run({ command: "echo pending-job", description: "background status target", background: true })
+            const { status, shell, workdir, command: poll } = backgroundFields(started.output)
+            expect(yield* waitStatus(status)).toBe("exit 0")
+            // 模拟宿主先退出、终态没来得及落盘：轮询输出必须说「未记录」，不得暗示成功。
+            yield* Effect.promise(() => fs.rm(status, { force: true }))
+            const polled = yield* run({ command: poll, shell, workdir, description: "poll without status" })
+            expect(polled.output).toContain("not recorded")
+            expect(polled.output).not.toContain("exit 0")
+          }),
+        )
+      }),
+    30_000,
   )
 })

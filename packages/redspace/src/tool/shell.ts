@@ -1,6 +1,6 @@
 import { Effect, Fiber, Stream } from "effect"
 import os from "os"
-import { createWriteStream, mkdirSync, openSync, closeSync } from "node:fs"
+import { createWriteStream, mkdirSync, mkdtempSync, openSync, closeSync, renameSync, writeFileSync } from "node:fs"
 import { spawn as nodeSpawn } from "node:child_process"
 import * as Tool from "./tool"
 import path from "path"
@@ -206,6 +206,20 @@ type Chunk = {
   text: string
   size: number
 }
+
+// 261124 Red 前台与后台共用一套显式 metadata 形状：exit 是 number|null（后台/中断/超时
+// 未观察到退出），outputPath 只在截断落盘时出现。此前靠两个返回分支各自推断联合类型，
+// TS5 在 Tool.define 的 Result 泛型上对不上；用类型别名（接口没有隐式索引签名）满足
+// Tool.Metadata 约束，不靠 cast 抹平。
+type ShellMetadata = {
+  output: string
+  exit: number | null
+  shell: string
+  description: string
+  truncated: boolean
+  outputPath?: string
+}
+type ShellResult = Tool.ExecuteResult<ShellMetadata>
 
 export const log = Log.create({ service: "shell-tool" })
 
@@ -573,6 +587,29 @@ function backgroundArgv(shell: string, command: string) {
   if (Shell.name(shell) === "cmd") return { file: shell, args: ["/d", "/s", "/c", command] }
   return { file: shell, args: ["-c", command] }
 }
+
+// 261124 Red 每个后台作业独占目录，文件名固定，轮询侧只引用相对名：作业目录可能带空格、
+// 单引号或 Windows 的 %（cmd 会当变量展开），把绝对路径拼进命令在三种 shell 里各有各的炸法。
+const BACKGROUND_LOG = "output.log"
+const BACKGROUND_STATUS = "status.txt"
+
+function backgroundStatus(code: number | null, signal: NodeJS.Signals | null) {
+  if (signal) return `signal ${signal}`
+  if (code !== null) return `exit ${code}`
+  return "exit unknown"
+}
+
+function backgroundPoll(shell: string) {
+  const missing = "Exit status not recorded (still running, or the RedSpace host exited first)"
+  if (Shell.ps(shell))
+    return [
+      `Get-Content -LiteralPath '${BACKGROUND_LOG}' -Tail 80;`,
+      `if (Test-Path -LiteralPath '${BACKGROUND_STATUS}') { Get-Content -LiteralPath '${BACKGROUND_STATUS}' } else { '${missing}' }`,
+    ].join(" ")
+  if (Shell.name(shell) === "cmd")
+    return `type ${BACKGROUND_LOG} & if exist ${BACKGROUND_STATUS} (type ${BACKGROUND_STATUS}) else (echo Exit status not recorded)`
+  return `tail -n 80 ${BACKGROUND_LOG}; if [ -f ${BACKGROUND_STATUS} ]; then cat ${BACKGROUND_STATUS}; else echo '${missing}'; fi`
+}
 const parser = lazy(async () => {
   const { Parser } = await import("web-tree-sitter")
   const { default: treeWasm } = await import("web-tree-sitter/tree-sitter.wasm" as string, {
@@ -913,7 +950,7 @@ export const ShellTool = Tool.define(
       if (meta.length > 0) {
         output += "\n\n<shell_metadata>\n" + meta.join("\n") + "\n</shell_metadata>"
       }
-      return {
+      const result: ShellResult = {
         title: input.description,
         metadata: {
           output: last || preview(output),
@@ -926,6 +963,7 @@ export const ShellTool = Tool.define(
         },
         output,
       }
+      return result
     })
 
     return () =>
@@ -944,38 +982,60 @@ export const ShellTool = Tool.define(
 
         const runBackground = (input: {
           shell: string
+          selector: Parameters["shell"]
           command: string
           cwd: string
           env: NodeJS.ProcessEnv
           description: string
         }) =>
           Effect.gen(function* () {
-            const logPath = path.join(tmpDir, `background-${Date.now()}.log`)
-            const fd = openSync(logPath, "a")
+            const jobDir = mkdtempSync(path.join(tmpDir, "background-"))
+            const logPath = path.join(jobDir, BACKGROUND_LOG)
+            const statusPath = path.join(jobDir, BACKGROUND_STATUS)
             const argv = backgroundArgv(input.shell, input.command)
-            const child = nodeSpawn(argv.file, argv.args, {
-              cwd: input.cwd,
-              env: input.env,
-              stdio: ["ignore", fd, fd],
-              // 261124 Red Windows 下 detached 会让 fd 重定向失效（实测日志为空）；
-              // Windows 子进程本来就不随父进程退出，unref 足够放行。Unix 仍需 detached
-              // 脱离父进程组，否则父进程退出时会被一起带走。
-              detached: process.platform !== "win32",
-              windowsHide: true,
+            const child = yield* Effect.sync(() => {
+              // 261124 Red Git Bash on Windows drops output when it inherits an O_APPEND handle.
+              const fd = openSync(logPath, "w")
+              try {
+                const handle = nodeSpawn(argv.file, argv.args, {
+                  cwd: input.cwd,
+                  env: input.env,
+                  stdio: ["ignore", fd, fd],
+                  // 261124 Red Windows 下 detached 会让 fd 重定向失效（实测日志为空）；
+                  // Windows 子进程本来就不随父进程退出，unref 足够放行。Unix 仍需 detached
+                  // 脱离父进程组，否则父进程退出时会被一起带走。
+                  detached: process.platform !== "win32",
+                  windowsHide: true,
+                })
+                // spawn 失败是异步 error 事件；先挂监听，否则未捕获异常会掀翻宿主。
+                handle.on("error", (error) => log.warn("background.spawn.failed", { error }))
+                // 261124 Red Publish the terminal result atomically; host exit leaves it unknown.
+                handle.once("exit", (code, signal) => {
+                  const partial = `${statusPath}.tmp`
+                  try {
+                    writeFileSync(partial, `${backgroundStatus(code, signal)}\n`)
+                    renameSync(partial, statusPath)
+                  } catch (error) {
+                    log.warn("background.status.failed", { error })
+                  }
+                })
+                return handle
+              } catch (error) {
+                throw new Error(
+                  `Failed to start background command with ${input.shell}: ${error instanceof Error ? error.message : String(error)}`,
+                )
+              } finally {
+                // 子进程已复制句柄；同步抛错时也必须关掉，否则日志 fd 泄漏。
+                closeSync(fd)
+              }
             })
-            // spawn 失败是异步 error 事件；不挂监听会变成未捕获异常。
-            child.on("error", (error) => log.warn("background.spawn.failed", { error }))
-            closeSync(fd)
+            // spawn 失败时 pid 为 undefined（Node 与 Bun 一致）；此时不能报 Started。
             if (child.pid === undefined) throw new Error(`Failed to start background command with ${input.shell}`)
+            const pid = child.pid
             child.unref()
-            const pid = child.pid ?? -1
-            const poll = Shell.ps(input.shell)
-              ? `Get-Content -LiteralPath '${logPath}' -Tail 80; Get-Process -Id ${pid} -ErrorAction SilentlyContinue`
-              : `tail -n 80 '${logPath}'; kill -0 ${pid} 2>/dev/null && echo running`
-            return {
+            const poll = backgroundPoll(input.shell)
+            const result: ShellResult = {
               title: input.description,
-              // 与前台分支保持同一 metadata 形状：Tool 的 Metadata 泛型由返回值推断，
-              // 多一套键会把 execute 的返回类型推成不相容的联合。
               metadata: {
                 output: `Started in background (pid=${pid}). Log: ${logPath}`,
                 exit: null,
@@ -986,12 +1046,18 @@ export const ShellTool = Tool.define(
               output: [
                 "Started in background; this tool call returned without waiting.",
                 `pid: ${pid}`,
+                `job dir: ${jobDir}`,
                 `log: ${logPath}`,
+                `status: ${statusPath}`,
                 "",
-                "Poll with this same tool (do not start the same command again):",
-                `  ${poll}`,
+                `Missing ${BACKGROUND_STATUS} means no exit was recorded, not success.`,
+                "Poll with these arguments, without restarting the job:",
+                `  shell: ${input.selector ?? "default"}`,
+                `  workdir: ${jobDir}`,
+                `  command: ${poll}`,
               ].join("\n"),
             }
+            return result
           })
 
         return {
@@ -1046,6 +1112,7 @@ export const ShellTool = Tool.define(
               if (params.background) {
                 return yield* runBackground({
                   shell: resolved,
+                  selector: params.shell,
                   command: params.command,
                   cwd,
                   env: yield* shellEnv(ctx, cwd),
