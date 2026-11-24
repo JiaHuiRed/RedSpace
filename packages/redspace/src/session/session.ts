@@ -13,7 +13,7 @@ import { NotFoundError } from "@/storage/storage"
 import { eq } from "drizzle-orm"
 import { and } from "drizzle-orm"
 import { gte } from "drizzle-orm"
-import { isNull } from "drizzle-orm"
+import { isNotNull, isNull } from "drizzle-orm"
 import { desc } from "drizzle-orm"
 import { sql } from "drizzle-orm"
 import { like } from "drizzle-orm"
@@ -1687,6 +1687,9 @@ export function* listGlobal(input?: {
   search?: string
   limit?: number
   archived?: boolean
+  archivedOnly?: boolean
+  mode?: "code" | "chat"
+  companionID?: string
 }) {
   const conditions: SQL[] = []
   const cursor = parseListCursor(input?.cursor)
@@ -1715,9 +1718,10 @@ export function* listGlobal(input?: {
   if (input?.search) {
     conditions.push(like(SessionTable.title, `%${input.search}%`))
   }
-  if (!input?.archived) {
-    conditions.push(isNull(SessionTable.time_archived))
-  }
+  if (input?.archivedOnly) conditions.push(isNotNull(SessionTable.time_archived))
+  else if (!input?.archived) conditions.push(isNull(SessionTable.time_archived))
+  if (input?.mode) conditions.push(eq(SessionTable.mode, input.mode))
+  if (input?.companionID) conditions.push(eq(SessionTable.companion_id, input.companionID))
 
   const limit = input?.limit ?? 100
 

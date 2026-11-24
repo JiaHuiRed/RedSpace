@@ -954,10 +954,13 @@ export class Session extends HeyApiClient {
       workspace?: string
       roots?: boolean | "true" | "false"
       start?: number
-      cursor?: number
+      cursor?: string | number
       search?: string
       limit?: number
       archived?: boolean | "true" | "false"
+      archivedOnly?: boolean | "true" | "false"
+      mode?: "code" | "chat"
+      companionID?: string
     },
     options?: Options<never, ThrowOnError>,
   ) {
@@ -974,6 +977,9 @@ export class Session extends HeyApiClient {
             { in: "query", key: "search" },
             { in: "query", key: "limit" },
             { in: "query", key: "archived" },
+            { in: "query", key: "archivedOnly" },
+            { in: "query", key: "mode" },
+            { in: "query", key: "companionID" },
           ],
         },
       ],

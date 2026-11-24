@@ -145,6 +145,9 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
           search: ctx.query.search,
           limit: limit + 1,
           archived: ctx.query.archived,
+          archivedOnly: ctx.query.archivedOnly,
+          mode: ctx.query.mode,
+          companionID: ctx.query.companionID,
         }),
       )
       const list = sessions.length > limit ? sessions.slice(0, limit) : sessions

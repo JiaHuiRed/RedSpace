@@ -595,6 +595,23 @@ describe("HttpApi SDK", () => {
   )
 
   httpapi(
+    "archived Code sessions are filtered before the page limit",
+    withStandardProject("default", ({ sdk, directory }) =>
+      Effect.gen(function* () {
+        const options = { throwOnError: true } as const
+        const { data: older } = yield* call(() => sdk.session.create({ title: "Older archive" }, options))
+        yield* call(() => sdk.session.update({ sessionID: older.id, time: { archived: Date.now() } }, options))
+        const { data: active } = yield* call(() => sdk.session.create({ title: "Recent active task" }, options))
+        const page = (filters: { archived?: boolean; archivedOnly?: boolean; mode?: "chat" | "code" }) =>
+          call(() => sdk.experimental.session.list({ directory, roots: true, limit: 1, ...filters }, options))
+        expect((yield* page({ archived: true })).data.map((s) => s.id)).toEqual([active.id])
+        expect((yield* page({ archivedOnly: true, mode: "code" })).data.map((s) => s.id)).toEqual([older.id])
+        expect((yield* page({ archivedOnly: true, mode: "chat" })).data).toEqual([])
+      }),
+    ),
+  )
+
+  httpapi(
     "session search only links to messages on the selected branch",
     withStandardProject("default", ({ sdk, directory }) =>
       Effect.gen(function* () {

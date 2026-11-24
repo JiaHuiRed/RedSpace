@@ -5863,10 +5863,13 @@ export type ExperimentalSessionListData = {
     workspace?: string
     roots?: boolean | "true" | "false"
     start?: number
-    cursor?: number
+    cursor?: string | number
     search?: string
     limit?: number
     archived?: boolean | "true" | "false"
+    archivedOnly?: boolean | "true" | "false"
+    mode?: "code" | "chat"
+    companionID?: string
   }
   url: "/experimental/session"
 }

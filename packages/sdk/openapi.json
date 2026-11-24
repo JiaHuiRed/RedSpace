@@ -1446,7 +1446,14 @@
             "name": "cursor",
             "in": "query",
             "schema": {
-              "type": "number"
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "number"
+                }
+              ]
             },
             "required": false
           },
@@ -1479,6 +1486,39 @@
                   "enum": ["true", "false"]
                 }
               ]
+            },
+            "required": false
+          },
+          {
+            "name": "archivedOnly",
+            "in": "query",
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "string",
+                  "enum": ["true", "false"]
+                }
+              ]
+            },
+            "required": false
+          },
+          {
+            "name": "mode",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": ["code", "chat"]
+            },
+            "required": false
+          },
+          {
+            "name": "companionID",
+            "in": "query",
+            "schema": {
+              "type": "string"
             },
             "required": false
           }
