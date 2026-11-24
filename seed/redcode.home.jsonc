@@ -104,6 +104,7 @@
   // 保留空数组不删键：merge-home-config 是 deepMergeUserWins，删掉会被当"缺键"补回来。
   // opencode（260917 到期）：免费层按客户端指纹 403，接入=冒充官方客户端，不做；
   // 显式禁用防 models.dev 自动发现复活。
+ "disabled_providers": ["opencode", "scnet-token-plan"],
   "disabled_providers": ["opencode"],
   // small_model 与 provider.ollama 在本地层（按各机显存挑）；放这里会被 merge-home-config 当"缺键"补回。
   // 261010 Red 原生压缩替代 DCP compress；颜色预警不执行旧 prune。
@@ -184,40 +185,6 @@
           "tool_call": true,
           "modalities": { "input": ["text"], "output": ["image"] },
           "limit": { "context": 262144, "output": 65536 },
-        },
-      },
-    },
-    // 261031 Red 接入 SCNet Token Plan（api.scnet.cn）：套餐制 credits，models.dev 该 provider
-    // 报价全 0 → 费用显示恒 0，与 sensenova 同口径。provider id 对齐 models.dev 的
-    // scnet-token-plan；key 存 data/auth.json（不入仓，模板里不出现明文）。
-    // 平台模型表另有 16 个，whitelist 只放行这两个。本模板会反向覆盖 live 配置，两处必须一致。
-    "scnet-token-plan": {
-      "name": "SCNet Token Plan",
-      "whitelist": ["DeepSeek-V4.1-Flash-1017", "GLM-5.3-Flash"],
-      "models": {
-        // models.dev 只收 DeepSeek-V4.1-Flash（attachment=false）；实测 1017 变体可读图
-        // （64x64 纯色图正确识别）。注意 1x1 图会被服务端静默丢弃，连通性验证别用极小图。
-        // interleaved 必须显式给：默认探测用 apiID.includes("deepseek")，本 ID 首字母大写不命中。
-        "DeepSeek-V4.1-Flash-1017": {
-          "name": "DeepSeek V4.1 Flash 1017 (多模态)",
-          "temperature": true,
-          "reasoning": true,
-          "tool_call": true,
-          "attachment": true,
-          "interleaved": { "field": "reasoning_content" },
-          "modalities": { "input": ["text", "image"], "output": ["text"] },
-          "limit": { "context": 1048576, "output": 384000 },
-        },
-        // 数值取自 models.dev 同 id 条目（1M/128k、text+image+video+pdf、套餐价 0）。
-        "GLM-5.3-Flash": {
-          "name": "GLM 5.3 Flash (多模态)",
-          "temperature": true,
-          "reasoning": true,
-          "tool_call": true,
-          "attachment": true,
-          "interleaved": { "field": "reasoning_content" },
-          "modalities": { "input": ["text", "image", "video", "pdf"], "output": ["text"] },
-          "limit": { "context": 1048576, "output": 131072 },
         },
       },
     },
