@@ -7,6 +7,7 @@ import { SessionSearchPanel } from "./turn-outline"
 type QueryCall = {
   sessionID: string
   q: string
+  cursor?: string
   resolve: (value: unknown) => void
   reject: (error: unknown) => void
 }
@@ -21,10 +22,8 @@ mock.module("@/context/sdk", () => ({
     directory: "/repo",
     client: {
       session: {
-        query: (input: { sessionID: string; q: string }) =>
-          new Promise((resolve, reject) =>
-            calls.push({ sessionID: input.sessionID, q: input.q, resolve, reject }),
-          ),
+        query: (input: { sessionID: string; q: string; cursor?: string }) =>
+          new Promise((resolve, reject) => calls.push({ ...input, resolve, reject })),
       },
     },
   }),
@@ -60,8 +59,8 @@ async function search(container: HTMLElement, text: string) {
   await flush()
 }
 
-const hit = (id: string, text: string) => ({
-  data: { results: [{ messageID: id, partID: `p_${id}`, role: "user", text, createdAt: 1 }], scannedParts: 1 },
+const hit = (id: string, text: string, nextCursor?: string) => ({
+  data: { results: [{ messageID: id, partID: `p_${id}`, role: "user", text, createdAt: 1 }], scannedParts: 1, nextCursor },
 })
 
 test("a late response from another scope never lands in the current panel", async () => {
@@ -144,4 +143,43 @@ test("a failed new search does not leave old hits under the new keyword", async 
   expect(panel.container.textContent).not.toContain("needle-d hit")
   expect(panel.container.textContent).toContain("boom")
   panel.dispose()
+})
+
+test("a failed page can retry with the submitted keyword and the same cursor", async () => {
+  const panel = mount("scope-e\u0000ses_e", "ses_e")
+  const base = calls.length
+  try {
+    await search(panel.container, "needle-e")
+    calls[base].resolve(hit("m_e", "needle-e first hit", "page-2"))
+    await flush()
+
+    const input = panel.container.querySelector("input")!
+    input.value = "not submitted"
+    input.dispatchEvent(new Event("input", { bubbles: true }))
+    const more = () =>
+      [...panel.container.querySelectorAll("button")].find((button) =>
+        button.textContent?.includes("session.search.more"),
+      )
+    more()!.click()
+    await flush()
+    const page = { q: "needle-e", cursor: "page-2" }
+    expect(calls[base + 1]).toMatchObject(page)
+    calls[base + 1].reject(new Error("page failed"))
+    await flush()
+    expect(panel.container.textContent).toContain("needle-e first hit")
+    expect(panel.container.querySelector('[role="alert"]')?.textContent).toContain("page failed")
+
+    expect(more()?.disabled).toBe(false)
+    more()!.click()
+    await flush()
+    expect(calls[base + 2]).toMatchObject(page)
+    calls[base + 2].resolve(hit("m_e2", "needle-e second hit"))
+    await flush()
+    expect(panel.container.textContent).toContain("needle-e first hit")
+    expect(panel.container.textContent).toContain("needle-e second hit")
+    expect(panel.container.querySelector('[role="alert"]')).toBeNull()
+    expect(input.value).toBe("not submitted")
+  } finally {
+    panel.dispose()
+  }
 })
