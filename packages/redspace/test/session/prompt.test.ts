@@ -2977,7 +2977,7 @@ it.instance("marks explicitly steered messages delivered after the provider resp
 )
 
 for (const native of [false, true]) {
-  it.instance(`${native ? "native" : "legacy"} manual compaction continues the running tool turn`, () =>
+  it.instance(`${native ? "native" : "legacy"} background manual compaction continues the running tool turn`, () =>
     Effect.gen(function* () {
       const { dir, llm } = yield* useServerConfig((url) => ({
         ...providerCfg(url),
@@ -2993,7 +2993,6 @@ for (const native of [false, true]) {
       }))
       const prompt = yield* SessionPrompt.Service
       const sessions = yield* Session.Service
-      const compaction = yield* SessionCompaction.Service
       const chat = yield* sessions.create({ title: "Manual compaction during a tool turn" })
       const history = yield* seed(chat.id, { finish: "stop" })
       yield* sessions.updatePart({
@@ -3018,7 +3017,8 @@ for (const native of [false, true]) {
         })
         .pipe(Effect.forkChild)
       yield* llm.wait(1)
-      yield* compaction.create({ sessionID: chat.id, agent: "build", model: ref, auto: false })
+      yield* prompt.summarize({ sessionID: chat.id, model: ref, auto: false, background: true })
+      expect((yield* sessions.get(chat.id)).time.compacting).toBeGreaterThan(0)
       held.resolve()
       const result = yield* Fiber.join(run).pipe(Effect.timeout("10 seconds"))
       expect(result.info.role === "assistant" && result.info.summary).not.toBe(true)

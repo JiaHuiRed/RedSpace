@@ -380,7 +380,7 @@ export interface Interface {
     model: MessageV2.User["model"]
     auto: boolean
     overflow?: boolean
-  }) => Effect.Effect<void>
+  }) => Effect.Effect<MessageV2.CompactionPart>
 }
 
 export class Service extends Context.Service<Service, Interface>()("@redcode/SessionCompaction") {}
@@ -1341,7 +1341,7 @@ export const layer = Layer.effect(
         agent: input.agent,
         time: { created: Date.now() },
       })
-      yield* session.updatePart({
+      return yield* session.updatePart({
         id: PartID.ascending(),
         messageID: msg.id,
         sessionID: msg.sessionID,

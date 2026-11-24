@@ -1,5 +1,5 @@
 import { afterEach, describe, expect } from "bun:test"
-import { ConfigProvider, Deferred, Effect, Layer, Schedule } from "effect"
+import { ConfigProvider, Deferred, Effect, Fiber, Layer, Schedule } from "effect"
 import type * as Scope from "effect/Scope"
 import { HttpRouter } from "effect/http"
 import { ChildProcessSpawner } from "effect/process"
@@ -18,7 +18,7 @@ import { ModelID, ProviderID } from "../../src/provider/schema"
 import type { Config } from "@/config/config"
 import { Session as SessionNs } from "@/session/session"
 import { errorMessage } from "../../src/util/error"
-import { TestLLMServer } from "../lib/llm-server"
+import { reply, TestLLMServer } from "../lib/llm-server"
 import path from "path"
 import { resetDatabase } from "../fixture/db"
 import { disposeAllInstances, TestInstance, tmpdirScoped } from "../fixture/fixture"
@@ -866,6 +866,52 @@ describe("HttpApi SDK", () => {
             expect(markers[0]?.tokens_after).toBeUndefined()
             expect(messages.some(({ info }) => info.role === "assistant" && info.summary && info.error)).toBe(true)
           }
+        }),
+      ),
+    )
+  }
+
+  for (const interrupted of [false, true]) {
+    httpapi(
+      interrupted
+        ? "cancels background compaction still waiting for the active turn"
+        : "runs accepted background compaction after the active turn fails",
+      withFakeLlm("default", ({ sdk, llm }) =>
+        Effect.gen(function* () {
+          const options = { throwOnError: true } as const
+          const { data: session } = yield* call(() => sdk.session.create({ title: "Compaction during a turn" }, options))
+          const sessionID = session.id
+          const model = { providerID: "test", modelID: "test-model" }
+          const prompt = (text: string) =>
+            call(() => sdk.session.prompt({ sessionID, agent: "build", model, parts: [{ type: "text", text }] }, options))
+
+          yield* llm.text("Retain this answer in the summary.")
+          yield* prompt("Set up history.")
+          const gate = Promise.withResolvers<void>()
+          yield* Effect.addFinalizer(() => Effect.sync(() => gate.resolve()))
+          yield* llm.push(reply().wait(gate.promise).streamError("The active turn failed."))
+          const active = yield* prompt("Hold this request until the compaction is accepted.").pipe(Effect.forkChild)
+          yield* llm.wait(2).pipe(Effect.timeout("10 seconds"))
+          yield* llm.text("## Goal\nSummarize the prior work.")
+
+          const summarize = () => sdk.session.summarize({ sessionID, ...model, background: true }, options)
+          const accepted = yield* Effect.all([call(summarize), call(summarize)], { concurrency: 2 })
+          expect(accepted.map((result) => result.data)).toEqual([true, true])
+          const state = () => sdk.session.get({ sessionID }, options)
+          expect((yield* call(state)).data.time.compacting).toBeGreaterThan(0)
+          if (interrupted) yield* call(() => sdk.session.abort({ sessionID }, options))
+          gate.resolve()
+          const stopped = yield* Fiber.join(active)
+          expect(stopped.data.info.error).toBeDefined()
+          yield* call(state).pipe(
+            Effect.repeat({ while: (value) => !!value.data.time.compacting, schedule: Schedule.spaced(25) }),
+            Effect.timeout("10 seconds"),
+          )
+          const { data: messages } = yield* call(() => sdk.session.messages({ sessionID }, options))
+          const markers = messages.flatMap(({ parts }) => parts.filter((part) => part.type === "compaction"))
+          expect(yield* llm.calls).toBe(interrupted ? 2 : 3)
+          expect(markers).toHaveLength(interrupted ? 0 : 1)
+          if (!interrupted) expect(markers[0]?.tokens_after).toBeDefined()
         }),
       ),
     )

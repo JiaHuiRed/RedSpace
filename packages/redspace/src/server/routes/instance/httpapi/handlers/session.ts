@@ -1,5 +1,4 @@
 import { partForDisplay } from "@redcode-ai/core/util/tool-diagnostics"
-import { Agent } from "@/agent/agent"
 import { Auth } from "@/auth"
 import { Bus } from "@/bus"
 import { Command } from "@/command"
@@ -14,7 +13,6 @@ import * as Database from "@/storage/db"
 import * as SessionQuery from "@/tool/session-query"
 import { ContextSnapshot } from "@/session/context-snapshot"
 import { Goal } from "@/session/goal"
-import { SessionCompaction } from "@/session/compaction"
 import { MessageV2 } from "@/session/message-v2"
 import { SessionPrompt } from "@/session/prompt"
 import { SessionRevert } from "@/session/revert"
@@ -28,7 +26,7 @@ import * as SessionUsage from "@/session/usage"
 import { MessageID, PartID, SessionID } from "@/session/schema"
 import { InstanceState } from "@/effect/instance-state"
 import { NamedError } from "@redcode-ai/core/util/error"
-import { Cause, Effect, Option, Schema, Scope, Semaphore } from "effect"
+import { Cause, Effect, Option, Schema, Scope } from "effect"
 import * as Stream from "effect/Stream"
 import { HttpServerRequest, HttpServerResponse } from "effect/http"
 import { HttpApiBuilder, HttpApiError, HttpApiSchema } from "effect/http-api"
@@ -69,9 +67,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
     const promptSvc = yield* SessionPrompt.Service
     const revertSvc = yield* SessionRevert.Service
     const branchSvc = yield* SessionBranch.Service
-    const compactSvc = yield* SessionCompaction.Service
     const runState = yield* SessionRunState.Service
-    const agentSvc = yield* Agent.Service
     const permissionSvc = yield* Permission.Service
     const statusSvc = yield* SessionStatus.Service
     const todoSvc = yield* Todo.Service
@@ -470,73 +466,19 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       return yield* requireSession(ctx.params.sessionID)
     })
 
-    const prepareSummary = Effect.fn("SessionHttpApi.prepareSummary")(function* (ctx: {
-      params: { sessionID: SessionID }
-      payload: typeof SummarizePayload.Type
-    }) {
-      yield* revertSvc.cleanup(yield* requireSession(ctx.params.sessionID))
-      const defaultAgent = yield* agentSvc.defaultAgent()
-      // 260909 Red 换 MessageV2.lastUserAgent 单行查询：全量翻页只为读最后一个
-      // user 消息的 agent 字段，compaction 时会话最长、代价最大。会话存在性已由
-      // 上面的 requireSession 保证。
-      const currentAgent = (yield* MessageV2.lastUserAgent(ctx.params.sessionID)) ?? defaultAgent
-
-      yield* compactSvc.create({
-        sessionID: ctx.params.sessionID,
-        agent: currentAgent,
-        model: {
-          providerID: ctx.payload.providerID,
-          modelID: ctx.payload.modelID,
-        },
-        auto: ctx.payload.auto ?? false,
-      })
-    })
-
-    const summaryAdmission = Semaphore.makeUnsafe(1)
-    const backgroundSummaries = new Set<SessionID>()
     const summarize = Effect.fn("SessionHttpApi.summarize")(function* (ctx: {
       params: { sessionID: SessionID }
       payload: typeof SummarizePayload.Type
     }) {
-      const { sessionID } = ctx.params
-      if (!ctx.payload.background) {
-        yield* prepareSummary(ctx)
-        yield* promptSvc.loop({ sessionID })
-        return true
-      }
-
-      // 261123 Red 只串行受理，不跨模型调用持锁。请求断开后 runner 仍由服务端持有。
-      return yield* summaryAdmission.withPermits(1)(
-        Effect.gen(function* () {
-          if (backgroundSummaries.has(sessionID)) return true
-          yield* prepareSummary(ctx)
-          const acceptedAt = Date.now()
-          yield* session.setCompacting({ sessionID, time: acceptedAt })
-          backgroundSummaries.add(sessionID)
-          yield* promptSvc.loop({ sessionID }).pipe(
-            Effect.catchCause((cause) =>
-              Cause.hasInterruptsOnly(cause)
-                ? Effect.void
-                : bus.publish(Session.Event.Error, {
-                    sessionID,
-                    error: new NamedError.Unknown({ message: Cause.pretty(cause) }).toObject(),
-                  }),
-            ),
-            Effect.ensuring(
-              Effect.gen(function* () {
-                // The compactor clears its execution timestamp. Clear admission if the loop exited before starting it.
-                const info = yield* session.get(sessionID).pipe(Effect.option)
-                if (Option.isSome(info) && info.value.time.compacting === acceptedAt) {
-                  yield* session.setCompacting({ sessionID, time: null })
-                }
-              }).pipe(Effect.ignore, Effect.ensuring(Effect.sync(() => backgroundSummaries.delete(sessionID)))),
-            ),
-            Effect.interruptible,
-            Effect.forkIn(scope, { startImmediately: true }),
-          )
-          return true
-        }).pipe(Effect.uninterruptible),
+      yield* SessionError.mapStorageNotFound(
+        promptSvc.summarize({
+          sessionID: ctx.params.sessionID,
+          model: { providerID: ctx.payload.providerID, modelID: ctx.payload.modelID },
+          auto: ctx.payload.auto ?? false,
+          background: ctx.payload.background,
+        }),
       )
+      return true
     })
 
     const prompt = Effect.fn("SessionHttpApi.prompt")(function* (ctx: {

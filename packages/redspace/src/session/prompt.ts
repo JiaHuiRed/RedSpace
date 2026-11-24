@@ -149,12 +149,20 @@ const log = Log.create({ service: "session.prompt" })
 const COMPANION_AGENTS_MAX_BYTES = 16 * 1024
 const elog = EffectLogger.create({ service: "session.prompt" })
 
+type SummarizeInput = {
+  sessionID: SessionID
+  model: MessageV2.User["model"]
+  auto: boolean
+  background?: boolean
+}
+
 export interface Interface {
   readonly cancel: (sessionID: SessionID) => Effect.Effect<void>
   readonly prompt: (input: PromptInput) => Effect.Effect<MessageV2.WithParts, Image.Error>
   // 261031 Red 打断发送：取消当前 Runner 后立即以本消息开新轮（单请求服务端串行）。
   readonly interruptPrompt: (input: PromptInput) => Effect.Effect<MessageV2.WithParts, Image.Error>
   readonly loop: (input: LoopInput, onCancelled?: Effect.Effect<void>) => Effect.Effect<MessageV2.WithParts>
+  readonly summarize: (input: SummarizeInput) => Effect.Effect<void, Session.NotFound>
   readonly shell: (input: ShellInput) => Effect.Effect<MessageV2.WithParts, Session.BusyError>
   readonly command: (input: CommandInput) => Effect.Effect<MessageV2.WithParts, Image.Error>
   readonly resolvePromptParts: (template: string) => Effect.Effect<PromptInput["parts"]>
@@ -1482,6 +1490,16 @@ export const layer = Layer.effect(
         Effect.catchCause((cause) => elog.warn("commitment settlement failed", { error: Cause.squash(cause) })),
       )
 
+    const processCompaction = Effect.fnUntraced(function* (
+      input: Parameters<SessionCompaction.Interface["process"]>[0],
+      native: boolean,
+    ) {
+      const result = yield* compaction.process(input)
+      // 260811 cc 摘要落库后丢弃 msgPin/modelMsgs，累积的 prune 标记与 DCP 改写随下一轮生效。
+      if (!native) settlePromptCaches(input.sessionID, "compaction")
+      return result
+    })
+
     const runLoop = (sessionID: SessionID) => {
       const ownership: TurnOwnership = {}
       return runLoopImpl(sessionID, ownership).pipe(
@@ -1566,6 +1584,14 @@ export const layer = Layer.effect(
       while (true) {
         yield* status.set(sessionID, { type: "busy" })
         yield* slog.info("loop", { step })
+
+        const scheduledCompaction = yield* state.runScheduledCompaction(sessionID)
+        if (scheduledCompaction === "stop") break
+        if (scheduledCompaction === "continue") {
+          forceContinue = false
+          step++
+          continue
+        }
 
         const nativeConfig = yield* config.get()
         // 261031 Red 引导领取：每步组装前把全部 pending_steer 转 steer。领取前它们被下方
@@ -1861,17 +1887,16 @@ export const layer = Layer.effect(
         }
 
         if (task?.type === "compaction") {
-          const result = yield* compaction.process({
-            messages: msgs,
-            parentID: stepSettings.user.id,
-            sessionID,
-            auto: task.auto,
-            overflow: task.overflow,
-          })
-          // 260811 cc audit R4 分代结算：摘要已落库、前缀缓存反正要重建——此刻丢弃
-          // msgPin/modelMsgs，让累积的 prune 标记与 DCP 改写随下一轮一并生效，
-          // 快照双份内存同步释放。
-          if (!nativeSpec.enabled) settlePromptCaches(sessionID, "compaction")
+          const result = yield* processCompaction(
+            {
+              messages: msgs,
+              parentID: stepSettings.user.id,
+              sessionID,
+              auto: task.auto,
+              overflow: task.overflow,
+            },
+            nativeSpec.enabled,
+          )
           if (result === "stop") break
           continue
         }
@@ -2966,6 +2991,57 @@ export const layer = Layer.effect(
       )
     })
 
+    const summarize = Effect.fn("SessionPrompt.summarize")(function* (input: SummarizeInput) {
+      const { sessionID, model, auto } = input
+      const prepare = Effect.gen(function* () {
+        yield* revert.cleanup(yield* sessions.get(sessionID))
+        const agent = (yield* MessageV2.lastUserAgent(sessionID)) ?? (yield* agents.defaultAgent())
+        return { sessionID, model, agent, auto }
+      })
+
+      if (!input.background) {
+        yield* compaction.create(yield* prepare)
+        yield* loop({ sessionID })
+        return
+      }
+
+      yield* state.scheduleCompaction(
+        sessionID,
+        Effect.gen(function* () {
+          const request = yield* prepare
+          const acceptedAt = Date.now()
+          yield* sessions.setCompacting({ sessionID, time: acceptedAt })
+          return {
+            // 261124 Red 写标记和执行由同一个 runner 领取，不能让一个未执行的标记混进历史。
+            run: Effect.gen(function* () {
+              const spec = NativeCompaction.resolve((yield* config.get()).compaction?.native)
+              const marker = yield* compaction.create(request)
+              const messages = spec.enabled
+                ? NativeRuntime.history(sessionID, spec)
+                : yield* MessageV2.filterCompactedEffect(sessionID)
+              return yield* processCompaction({ sessionID, parentID: marker.messageID, messages, auto }, spec.enabled)
+            }),
+            clearAdmission: sessions.get(sessionID).pipe(
+              Effect.flatMap((info) =>
+                info.time.compacting === acceptedAt ? sessions.setCompacting({ sessionID, time: null }) : Effect.void,
+              ),
+              Effect.ignore,
+            ),
+          }
+        }),
+        loop({ sessionID }).pipe(
+          Effect.tapCause((cause) =>
+            Cause.hasInterruptsOnly(cause)
+              ? Effect.void
+              : bus.publish(Session.Event.Error, {
+                  sessionID,
+                  error: new NamedError.Unknown({ message: Cause.pretty(cause) }).toObject(),
+                }),
+          ),
+        ),
+      )
+    })
+
     const shell: (input: ShellInput) => Effect.Effect<MessageV2.WithParts, Session.BusyError> = Effect.fn(
       "SessionPrompt.shell",
     )(function* (input: ShellInput) {
@@ -3095,6 +3171,7 @@ export const layer = Layer.effect(
       prompt,
       interruptPrompt,
       loop,
+      summarize,
       shell,
       command,
       resolvePromptParts,
