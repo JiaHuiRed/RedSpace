@@ -142,7 +142,11 @@ export function DialogSessionList() {
       .map((x) => x.id)
   }
 
-  const [browseOrder] = createSignal<string[]>(orderByRecency(sessions()))
+  const browseOrder = createMemo<string[]>((previous) => {
+    const current = new Set(orderByRecency(sessionsForMode(sync.data.session, companionID())))
+    const retained = previous.filter((id) => current.delete(id))
+    return [...retained, ...current]
+  }, [])
 
   const quickSwitchHint = createMemo(() => {
     const first = quickSwitch1()
