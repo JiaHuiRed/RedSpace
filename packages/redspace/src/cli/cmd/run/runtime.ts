@@ -13,6 +13,7 @@
 //      local sessions,
 //   4. runs the prompt queue until the footer closes.
 import { createOpencodeClient } from "@redcode-ai/sdk/v2"
+import { ServerAuth } from "@/server/auth"
 import { Flag } from "@redcode-ai/core/flag/flag"
 import { createRunDemo } from "./demo"
 import { resolveDiffStyle, resolveFooterKeybinds, resolveModelInfo, resolveSessionInfo } from "./runtime.boot"
@@ -717,11 +718,14 @@ export async function runInteractiveLocalMode(input: RunLocalInput): Promise<voi
       "redcode.demo": input.demo,
     },
     async () => {
-      const sdk = createOpencodeClient({
-        baseUrl: "http://redcode.internal",
-        fetch: input.fetch,
-        directory: input.directory,
-      })
+     const sdk = createOpencodeClient({
+       baseUrl: "http://redcode.internal",
+       fetch: input.fetch,
+       directory: input.directory,
+       // 261124 Red 同 run.ts 非交互路径：server 开鉴权时（GUI 注入 REDCODE_SERVER_PASSWORD）
+       // 进程内调用也要带凭据，否则 session.create 401。
+       headers: ServerAuth.headers(),
+     })
       let session: Promise<ResolvedSession> | undefined
 
       return runInteractiveRuntime({

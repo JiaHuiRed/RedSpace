@@ -7,6 +7,9 @@
 版本线历史分三段：0.3.0 及之前 TUI 与 GUI 共同历史；0.3.0 起两线独立维护（TUI 至 0.8.16，GUI 至 0.7.20），分别记录在下方 `## TUI` 与 `## GUI` 两段；**2026-08-14 起两线重新合并**，单一版本号覆盖全部组件，从 TUI 的 0.8.16 继续递增，新条目直接记录在本说明之下、不再按组件分段。
 
 ---
+## [Unreleased]
+
+- **CLI 修复**：`redcode run` 的本地进程内调用（非交互与 `--interactive` 本地模式）现在携带 `ServerAuth.headers()` 凭据。GUI 宿主把 `REDCODE_SERVER_PASSWORD` 注入子进程环境时，服务端会开启鉴权，此前 `session.create` 被 401 拒绝且真实状态码被 SDK 吞掉，用户只看到「Session not found」。无密码环境行为不变。
 
 ### [0.20.5] - 2026-11-24
 

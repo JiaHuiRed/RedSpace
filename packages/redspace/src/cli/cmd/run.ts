@@ -915,11 +915,16 @@ export const RunCommand = effectCmd({
         const request = new Request(input, init)
         return Server.Default().app.fetch(request)
       }) as typeof globalThis.fetch
-      const sdk = createOpencodeClient({
-        baseUrl: "http://redcode.internal",
-        fetch: fetchFn,
-        directory,
-      })
+     const sdk = createOpencodeClient({
+       baseUrl: "http://redcode.internal",
+       fetch: fetchFn,
+       directory,
+       // 261124 Red 本地进程内路径同样可能撞上开了鉴权的 server（GUI 宿主把
+       // REDCODE_SERVER_PASSWORD 注进 env 时）：headers() 无密码时返回 undefined，
+       // 有密码自动从 Flag/env 构造 basic auth，与 attach 路径同源。不带它会在
+       // session.create 吃 401 空 body，SDK 吞掉真实状态码后只报 "Session not found"。
+       headers: ServerAuth.headers(),
+     })
       await execute(sdk)
     })
   }),
