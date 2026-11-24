@@ -28,11 +28,23 @@ describe("buildReference", () => {
 
     expect(reference.block.startsWith("[引用 · 来源不可定位 · ")).toBe(true)
     expect(reference.block).not.toContain("消息 ")
+    expect(reference.block).not.toContain("整条消息")
+  })
+
+  test("does not infer a whole message from a source message id alone", () => {
+    const reference = buildReference({
+      anchor: { kind: "message", messageID: "msg_2", role: "user" },
+      text: "part of a message",
+      at: 0,
+    })
+
+    expect(reference.block).toContain("消息 msg_2")
+    expect(reference.block).not.toContain("整条消息")
   })
 
   test("whole-message quotes state their range explicitly", () => {
     const reference = buildReference({
-      anchor: { kind: "message", messageID: "msg_9", role: "assistant" },
+      anchor: { kind: "message", messageID: "msg_9", role: "assistant", wholeMessage: true },
       text: "whole answer",
       at: 0,
     })

@@ -1146,6 +1146,7 @@ export function MessageTimeline(props: {
           messageID: row.userMessageID,
           userMessageID: row.userMessageID,
           role: "user",
+          wholeMessage: true,
         },
         text,
       }

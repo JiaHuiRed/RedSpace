@@ -125,6 +125,50 @@ test.describe("smoke: session timeline", () => {
     expect(body.parts).toHaveLength(1)
     expect(body.parts[0]).toMatchObject({ type: "text", text: "Keep my draft @missing-reference-for-smoke" })
   })
+
+  test("a selection spanning two messages is not sent as a whole-message quote", async ({ page }) => {
+    await mockRedCodeServer(page, {
+      sessions: fixture.sessions,
+      provider: fixture.provider,
+      directory: fixture.directory,
+      project: fixture.project,
+      pageMessages,
+    })
+    const promptURL = new RegExp("/session/" + fixture.sourceID + "/prompt_async$")
+    await page.route(promptURL, (route) => route.fulfill({ status: 204, headers: { "access-control-allow-origin": "*" } }))
+    await configureSmokePage(page, fixture.directory)
+    await selectHomeProject(page, fixture.project.name)
+    await navigateToSession(page, fixture.directory, fixture.sourceID, fixture.expected.sourceTitle)
+    await expectSessionReady(page)
+
+    const user = '[data-slot="user-message-text"]'
+    const assistant = '[data-slot="text-part-body"] p'
+    await expect(page.locator(user).last()).toBeVisible()
+    await expect(page.locator(assistant).last()).toBeVisible()
+    const selected = await page.evaluate(({ user, assistant }) => {
+      const start = [...document.querySelectorAll(user)].at(-1)!
+      const end = [...document.querySelectorAll(assistant)].at(-1)!
+      const range = new Range()
+      range.setStart(start, 0)
+      range.setEnd(end, end.childNodes.length)
+      window.getSelection()!.removeAllRanges()
+      window.getSelection()!.addRange(range)
+      end.dispatchEvent(new MouseEvent("mouseup", { bubbles: true }))
+      return { user: start.textContent?.trim(), assistant: end.textContent?.trim() }
+    }, { user, assistant })
+    await page.locator('[data-action="quote-selection"]').click()
+    const editor = page.locator('[data-component="prompt-input"]')
+    await expect(editor.locator('[data-type="quote"]')).toBeVisible()
+
+    const sent = page.waitForRequest((request) => promptURL.test(request.url()) && request.method() === "POST")
+    await editor.press("Enter")
+    const { parts } = (await sent).postDataJSON()
+    const text = parts[0].text
+    expect(text).toContain("来源不可定位")
+    expect(text).not.toContain("整条消息")
+    expect(text).toContain(selected.user?.split("\n")[0])
+    expect(text).toContain(selected.assistant)
+  })
 })
 
 async function configureSmokePage(page: Page, directory: string) {

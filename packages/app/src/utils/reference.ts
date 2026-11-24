@@ -17,6 +17,7 @@ export type ReferenceAnchor =
       sessionID?: string
       messageID?: string
       partID?: string
+      wholeMessage?: true
       /** 命中片段所属的用户轮次；有它时跳转不必再解析父消息。 */
       userMessageID?: string
       role?: "user" | "assistant"
@@ -102,8 +103,7 @@ const sourceIDs = (anchor: ReferenceAnchor) => {
     if (anchor.sessionID) parts.push(`会话 ${field(anchor.sessionID)}`)
     if (anchor.messageID) parts.push(`消息 ${field(anchor.messageID)}`)
     if (anchor.partID) parts.push(`片段 ${field(anchor.partID)}`)
-    // 没有选区时的整条引用要写明范围，读者才知道引的是整条消息而不是某一段。
-    if (anchor.kind === "message" && !anchor.partID) parts.push("整条消息")
+    if (anchor.kind === "message" && anchor.wholeMessage && anchor.messageID) parts.push("整条消息")
   } else if (anchor.kind === "terminal") {
     if (anchor.sessionID) parts.push(`会话 ${field(anchor.sessionID)}`)
     if (anchor.terminalID) parts.push(`终端 ${field(anchor.terminalID)}`)
