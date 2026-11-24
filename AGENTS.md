@@ -1,8 +1,6 @@
 # 边界
 
-**只写"RedSpace 长什么样"**：目录路由、构建/验证命令、代码风格、版本清单、分支与 commit scope、本仓红线。
-
-**"我该怎么干活"一律在全局 `~/.redcode/AGENTS.md`**。
+**写"RedSpace 长什么样"**：目录路由、构建/验证命令、代码风格、版本清单、分支与 commit scope、本仓红线。
 
 ---
 
@@ -47,29 +45,28 @@
 - 版本号/徽章/发布清单相关文档改动 → `check-version-consistency.ts`；普通措辞或注释变更只需对应检查
 - 构建路径改动 → 该 package 的 build
 - 全量套件只在用户明确要求、或改动确属仓库级时才跑
-### 测试 lane（bun test 无 exclude，lane = package.json scripts 分组，260929 立）
+### 测试 lane（bun test 无 exclude，lane = package.json scripts 分组）
 
 | lane | 命令（packages/redspace 下） | 用途 |
 |---|---|---|
 | unit（默认） | `bun run test` | 全量单进程顺序跑。写 `process.env` 的「进程绑定」文件与全局态耦合，排污染前先 `bun run script/lane-inventory.ts` 重新生成清单（约 41 个，会漂移，别背） |
-| httpapi | `bun run test:httpapi` | 真服务器 HTTP 覆盖 / auth / Effect 三模式。< 32GB 且非 CI 的机器全量 effect 会响亮跳过（261116 实测峰值 ~12GB 打穿 16GB 机器，Bun panic）——完整门禁归 nightly，本地定向跑 `script/httpapi-exercise.ts --mode effect --include <名>`；coverage/auth 不受限 |
+| httpapi | `bun run test:httpapi` | 真服务器 HTTP 覆盖 / auth / Effect 三模式。< 32GB 且非 CI 的机器全量 effect 会响亮跳过——完整门禁归 nightly，本地定向跑 `script/httpapi-exercise.ts --mode effect --include <名>`；coverage/auth 不受限 |
 | 套件计时 | `bun run bench:test` | 全套件耗时 sanity check，见 `perf/test-suite.md` |
 | 逐文件 profiler | `bun run profile:test` | 定位慢测试候选（`TEST_PROFILE_GLOB` 过滤） |
 | 性能预算 | `bun run bench:budget` | `filterCompactedEffect` 预算门禁（隔离临时 DB），开机先跑正负控制自检，门禁逻辑坏了直接拒跑 |
 
 # 本仓红线
 
-- **改到函数家族时，先数同形状兄弟。** 无法解释的不对称通常意味着漏了一次抽取，而本仓这件事**已经发生三次**：`edit.ts` 的 replacer 家族，07-22 修了 `fuzzyFindBestMatch`，07-24 号称"补齐其余 5 个"实际漏掉 `BlockAnchorReplacer`，08-19 审计才发现。**"补齐了"这个说法本身要复核——数一遍函数，别信上一次的收尾结论。** 来源：deepseek-harness 的 _unexplained asymmetry usually signals a missed extraction_。
-- **误配置要响。** 自包含的在加载时响，否则在最早能解析的时刻响；**永远不要静默跳过一个解析不到的引用**。0.10.0 修过插件加载的三条静默失败路径（包解析到了但没有 server 入口只有 log.warn、整体超时把所有外置插件一起吞成空数组、`applyPlugin` 抛错处事件被注释掉只剩日志），当时是逐条补，没有立成规矩。
+- **改到函数家族时，先数同形状兄弟。** 无法解释的不对称通常意味着漏了一次抽取，"补齐了"这个说法本身要复核——数一遍函数，别信上一次的收尾结论。
+- **误配置要响。** 自包含的在加载时响，否则在最早能解析的时刻响；**永远不要静默跳过一个解析不到的引用**。
 - **diagnose skill 按触发条件加载，不是每刀编辑的入口税**：触发于——未知根因 bug、回归、跨子系统/时序相关异常、同方向连续失败、高风险行为变化、证据不足又不能安全猜的异常。未知根因、反复失败、跨模块或时序问题按 diagnose skill 建立足够的反馈与假设，然后修复和验证；收尾记录在修复验证后进行。根因已明确的局部问题（文案、布局微调、局部重命名、条件分支修正、文档）直接修改并做相关验证。
 
 # 版本与文档
 
-- **单一版本线**：全仓一个版本号，历史双线（TUI ≤0.8.16 / GUI ≤0.7.20）只存在于 CHANGELOG 的 `## TUI`/`## GUI` 两段，**历史条目不改**。
-- **升版 checklist** 完整清单在 bump-version skill 的「项目专属清单：RedSpace」节；无该 skill 时按 CHANGELOG 顶部说明 + `script/check-version-consistency.ts` 的断言执行。核心纪律一句话：**升版 = 收编 `[Unreleased]` 并用 `git log <上一版 bump>..HEAD` 逐条对照**；本地 annotated tag `v<版本号>`，不 push。
+- **单一版本线**，**升版 checklist** 见 bump-version skill；无该 skill 时按 CHANGELOG 顶部说明 + `script/check-version-consistency.ts` 的断言执行。核心纪律一句话：**升版 = 收编 `[Unreleased]` 并用 `git log <上一版 bump>..HEAD` 逐条对照**；本地 annotated tag `v<版本号>`。
 - 文档（版本号/徽章/CHANGELOG/README）可直接改好。
 - **决策记录 `docs/notes/`，写完必须回链**（规则与模板见其 README；注入项硬上限与模型可见四问见下方专条）。
-  - **链**：note 落地时**必须**在对应代码头注释 / CHANGELOG 条目回链其路径。notes 不进上下文，**只能靠链接网被撞见**——没有回链的 note 等于没写。（此处原有「动子系统前先 ls/grep 查一遍」一条，实际读取 0 次，没有触发点，已删除。）
+  - **链**：note 落地时**必须**在对应代码头注释 / CHANGELOG 条目回链其路径。notes 不进上下文，**只能靠链接网被撞见**——没有回链的 note 等于没写。
   - **读**：notes 不进上下文，只有两个可靠触发点——① 读代码撞见回链时（回链就是为这个存在的，撞见就读）；② 写新 note 前 `ls docs/notes/*/` 查同主题旧决策，前后矛盾的决策比没有决策更坏。
 - **模型可见改动的四问**（改提示词 / 注入段 / 工具 schema 与 description / 工具输出格式，必答）：在 commit 说明里逐条回答，有 note 的写进 note。
   1. **模型看到什么变了**——加了删了还是移了哪一段，给原文对照。
@@ -100,4 +97,4 @@
 - 值只用一次就内联，减少变量
 - 主函数读 happy path，细节抽 helper 放下面
 - 测试测实际实现，避免 mock，从 package 目录跑
-- **注释格式** — 只在注释有长期解释价值时写 `// YYMMDD Red xxx`（6 位日期 + Red + 说明）；作者与修改日期由 Git 记录。保留已有有用注释，不发起全仓清理。
+- **注释格式** — 只在注释有长期解释价值时写 `// YYMMDD Red xxx`（日期 + Red + 改动说明）；作者与修改日期由 Git 记录。保留已有有用注释，不发起全仓清理。
