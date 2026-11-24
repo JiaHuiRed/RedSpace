@@ -173,7 +173,7 @@ export default function Chat() {
   const preferred = createMemo(() => {
     const stored = models.chat.get(directory())
     // Sessions from before Chat remembered draft choices already carry the last sent model.
-    const previous = sessions.data?.[0]?.model
+    const previous = sessions.data?.pages[0]?.sessions[0]?.model
     return stored === undefined && previous
       ? { providerID: previous.providerID, modelID: previous.id, variant: previous.variant }
       : stored
@@ -332,23 +332,10 @@ export default function Chat() {
       <CompanionChatFrame
         profile={profile()}
         history={sessions}
+        profiles={profiles.data}
+        onChoose={choose}
         options={
           <>
-            <Show when={profiles.data?.length}>
-              <select
-                aria-label={language.t("settings.companion.choose")}
-                class="max-w-48 rounded-lg border border-border-base bg-background-base px-3 py-2 text-13-regular"
-                value={profile()?.id ?? ""}
-                onChange={(event) => choose(event.currentTarget.value)}
-              >
-                <Show when={!profile()}>
-                  <option value="" disabled>
-                    {language.t("settings.companion.choose")}
-                  </option>
-                </Show>
-                <For each={profiles.data}>{(item) => <option value={item.id}>{item.name}</option>}</For>
-              </select>
-            </Show>
             <Button
               variant="secondary"
               disabled={!ready() || state.creating || atCapacity() || initializing()}

@@ -46,6 +46,7 @@ export async function mockRedCodeServer(page: Page, config: MockServerConfig) {
     "/agent": [{ name: "build", mode: "primary" }],
     "/vcs": { branch: "main", default_branch: "main" },
     "/session": config.sessions,
+    "/experimental/session": config.sessions,
     "/session/usage": {
       range: "all",
       sessions: 0,
