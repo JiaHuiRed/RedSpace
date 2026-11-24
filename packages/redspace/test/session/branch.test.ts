@@ -228,8 +228,15 @@ describe("session.branch.select", () => {
           const u1b = yield* user(sessionID, "q1'")
           const a1b = yield* assistant(sessionID, u1b.id, dir)
 
-          // 切回旧根：可见路径翻转
+          const snap = yield* Snapshot.Service
+          const before = yield* snap.track()
+          expect(before).toBeDefined()
+          const file = path.join(dir, "new-branch.txt")
+          yield* edit(sessionID, a1b.id, file, "new branch", before!)
+
+          // 旧根有快照但没有 patch，仍要撤销新根创建的文件。
           yield* branch.select({ sessionID, messageID: u1.id })
+          expect(yield* Effect.promise(() => Bun.file(file).exists())).toBe(false)
           expect(ids(yield* ssn.messages({ sessionID }))).toEqual([u1.id, a1.id].map(String))
           let detached = yield* detachMap(sessionID)
           expect(detached.get(u1.id)).toBe(false)
@@ -240,6 +247,7 @@ describe("session.branch.select", () => {
 
           // 切回新根：往返
           yield* branch.select({ sessionID, messageID: u1b.id })
+          expect(yield* Effect.promise(() => fs.readFile(file, "utf-8"))).toBe("new branch")
           expect(ids(yield* ssn.messages({ sessionID }))).toEqual([u1b.id, a1b.id].map(String))
           detached = yield* detachMap(sessionID)
           expect(detached.get(u1b.id)).toBe(false)
@@ -341,7 +349,7 @@ describe("session.branch.select", () => {
   )
 
   it.live(
-    "legacy island without snapshot switches messages only, files untouched",
+    "switching to a legacy island without a snapshot preserves edits and new files on disk",
     provideTmpdirInstance(
       (dir) =>
         Effect.gen(function* () {
@@ -363,12 +371,18 @@ describe("session.branch.select", () => {
 
           const u1b = yield* user(sessionID, "q1'")
           const a1b = yield* assistant(sessionID, u1b.id, dir)
-          void a1b
+          const snap = yield* Snapshot.Service
+          const before = yield* snap.track()
+          expect(before).toBeDefined()
+          const added = path.join(dir, "added.txt")
+          yield* edit(sessionID, a1b.id, file, "current branch", before!)
+          yield* edit(sessionID, a1b.id, added, "new file", before!)
+          yield* Effect.promise(() => fs.appendFile(file, " + manual edit"))
 
           yield* branch.select({ sessionID, messageID: u1.id })
           expect(ids(yield* ssn.messages({ sessionID }))).toEqual([u1.id, a1.id].map(String))
-          // 无岛快照 → 不做文件恢复
-          expect(yield* Effect.promise(() => fs.readFile(file, "utf-8"))).toBe("v9")
+          expect(yield* Effect.promise(() => fs.readFile(file, "utf-8"))).toBe("current branch + manual edit")
+          expect(yield* Effect.promise(() => fs.readFile(added, "utf-8"))).toBe("new file")
         }),
       { git: true },
     ),

@@ -316,7 +316,9 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
         ctx.params.sessionID,
         NativeCompaction.resolve((yield* config.get()).compaction?.native),
       )
-      const raw = yield* Database.use((db) => SessionQuery.run(db, spec, new AbortController().signal))
+      const raw = yield* Database.use((db) =>
+        SessionQuery.run(db, { ...spec, selectedBranchOnly: true }, new AbortController().signal),
+      )
       // run 的返回是 read/search 两种形状的联合；本端点固定 search，用 in 判据收窄，不 cast。
       if (!("results" in raw)) return { results: [], scannedParts: 0 }
       const nextCursor = "nextCursor" in raw ? raw.nextCursor : undefined

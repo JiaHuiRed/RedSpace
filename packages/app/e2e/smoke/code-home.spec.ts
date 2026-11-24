@@ -202,3 +202,77 @@ for (const selectLinked of [false, true]) {
     await expect(composer.getByRole("textbox")).toHaveText("Root draft")
   })
 }
+
+test("a browser project menu only offers actions available in the browser", async ({ page }) => {
+  await page.addInitScript((directory) => {
+    localStorage.setItem("RedCode.global.dat:server", JSON.stringify({
+      projects: { local: [{ worktree: directory, expanded: true }] },
+    }))
+  }, fixture.directory)
+  await mockRedCodeServer(page, { ...fixture, pageMessages: () => ({ items: [] }) })
+  await page.goto("/")
+  await page.locator('[data-action="home-project-row"]').first().click({ button: "right" })
+  await expect(page.getByRole("menuitem", { name: "Delete", exact: true })).toBeVisible()
+  await expect(page.locator('[data-action="home-project-reveal"]')).toHaveCount(0)
+})
+
+test("the composer keeps a usable column when Code shares a narrow window", async ({ page }) => {
+  await mockRedCodeServer(page, { ...fixture, pageMessages: () => ({ items: [] }) })
+  await page.setViewportSize({ width: 390, height: 800 })
+  await page.goto(homeEntry)
+  const host = page.locator('[data-component="home-compose-section"]')
+  const editor = host.locator('[data-component="prompt-input"]')
+  await expect(editor).toBeAttached()
+  for (const width of [390, 900, 1024, 1440]) {
+    await page.setViewportSize({ width, height: 800 })
+    const available = await host.evaluate((el) => Math.round(el.getBoundingClientRect().width))
+    expect(available, "composer column in a " + width + "px window").toBeGreaterThanOrEqual(280)
+    await editor.fill("Draft in a " + width + "px window")
+    await expect(editor).toHaveText("Draft in a " + width + "px window")
+  }
+})
+
+test("Code archive reports an outage, retries and shows an older archived task", async ({ page }) => {
+  const archived = {
+    ...fixture.sessions[0]!,
+    title: "Old deployment notes",
+    time: { created: 1, updated: 1, archived: 2 },
+  }
+  const active = Array.from({ length: 65 }, (_, i) => ({
+    ...fixture.sessions[0]!,
+    id: "ses_active_" + i,
+    title: "Active task " + i,
+    time: { created: i + 3, updated: i + 3 },
+  }))
+  let offline = true
+  await page.addInitScript(
+    (directory) =>
+      localStorage.setItem(
+        "RedCode.global.dat:server",
+        JSON.stringify({
+          projects: { local: [{ worktree: directory, expanded: true }] },
+        }),
+      ),
+    fixture.directory,
+  )
+  await mockRedCodeServer(page, { ...fixture, sessions: active, pageMessages: () => ({ items: [] }) })
+  await page.route(
+    (url) => url.port === (process.env.PLAYWRIGHT_SERVER_PORT ?? "4096") && url.pathname === "/experimental/session",
+    (route) => {
+      if (offline) return route.fulfill({ status: 503, json: { message: "Offline" } })
+      const query = new URL(route.request().url()).searchParams
+      return route.fulfill({
+        json: query.get("archivedOnly") === "true" ? [archived] : active.slice(0, Number(query.get("limit"))),
+      })
+    },
+  )
+  await page.goto("/")
+  await page.locator('[data-action="home-toggle-archived"]').click()
+  const board = page.locator('[data-component="home-board-section"]')
+  const retry = board.getByRole("button", { name: "Retry" })
+  await expect(retry).toBeVisible({ timeout: 20_000 })
+  await expect(board.getByText("No archived sessions")).toHaveCount(0)
+  offline = false
+  await retry.click()
+  await expect(board.getByText("Old deployment notes")).toBeVisible()
+})

@@ -14,6 +14,7 @@ import { HttpApiApp } from "../../src/server/routes/instance/httpapi/server"
 import { Server } from "../../src/server/server"
 import { MessageID, PartID, SessionID } from "../../src/session/schema"
 import { MessageV2 } from "../../src/session/message-v2"
+import { markIslandRows, unmarkIslandRows } from "../../src/session/branch"
 import { ModelID, ProviderID } from "../../src/provider/schema"
 import type { Config } from "@/config/config"
 import { Session as SessionNs } from "@/session/session"
@@ -589,6 +590,43 @@ describe("HttpApi SDK", () => {
           todoCount: array(todo.data).length,
           messageCount: array(messages.data).length,
         }
+      }),
+    ),
+  )
+
+  httpapi(
+    "archived Code sessions are filtered before the page limit",
+    withStandardProject("default", ({ sdk, directory }) =>
+      Effect.gen(function* () {
+        const options = { throwOnError: true } as const
+        const { data: older } = yield* call(() => sdk.session.create({ title: "Older archive" }, options))
+        yield* call(() => sdk.session.update({ sessionID: older.id, time: { archived: Date.now() } }, options))
+        const { data: active } = yield* call(() => sdk.session.create({ title: "Recent active task" }, options))
+        const page = (filters: { archived?: boolean; archivedOnly?: boolean; mode?: "chat" | "code" }) =>
+          call(() => sdk.experimental.session.list({ directory, roots: true, limit: 1, ...filters }, options))
+        expect((yield* page({ archived: true })).data.map((s) => s.id)).toEqual([active.id])
+        expect((yield* page({ archivedOnly: true, mode: "code" })).data.map((s) => s.id)).toEqual([older.id])
+        expect((yield* page({ archivedOnly: true, mode: "chat" })).data).toEqual([])
+      }),
+    ),
+  )
+
+  httpapi(
+    "session search only links to messages on the selected branch",
+    withStandardProject("default", ({ sdk, directory }) =>
+      Effect.gen(function* () {
+        const options = { throwOnError: true } as const
+        const { data: session } = yield* call(() => sdk.session.create({ title: "versions" }, options))
+        const sessionID = session.id
+        const saved = yield* seedMessage(directory, sessionID)
+        const current = yield* seedMessage(directory, sessionID)
+        const hits = () => call(() => sdk.session.query({ sessionID, q: "seeded message" }, options))
+
+        markIslandRows([{ info: saved.message }])
+        expect((yield* hits()).data.results.map((hit) => hit.messageID)).toEqual([current.message.id])
+        unmarkIslandRows([{ info: saved.message }])
+        markIslandRows([{ info: current.message }])
+        expect((yield* hits()).data.results.map((hit) => hit.messageID)).toEqual([saved.message.id])
       }),
     ),
   )

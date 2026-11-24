@@ -113,7 +113,7 @@ export function resolve(
   }
 }
 
-type Spec = ReturnType<typeof resolve>
+type Spec = ReturnType<typeof resolve> & { selectedBranchOnly?: boolean }
 
 // 261025 Red 在 SQLite 内提取语义文本，只把有界切片送入 JS；不加载图片、附件或工具 metadata。
 // 也不搜索本工具的结果，防止上一次检索回显变成下一次的「独立证据」。
@@ -148,6 +148,8 @@ export const run = Effect.fn("SessionQuery.run")(function* (db: Database.TxOrDb,
           ),
         )
   const filters = [
+    // Timeline links must resolve on the selected branch. Explicit archive lookups can still read other versions.
+    spec.selectedBranchOnly ? sql`IFNULL(json_extract(${MessageTable.data}, '$.detached'), 0) = 0` : undefined,
     // 261122 Red 第三批：session_id 存在时仍保留目录约束——跨目录会话必须先显式传目录。
     spec.directory === "*"
       ? undefined

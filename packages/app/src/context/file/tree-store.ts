@@ -65,34 +65,44 @@ export function createFileTreeStore(options: TreeStoreOptions) {
 
     const directory = options.scope()
 
-    const promise = options
+    const promise: Promise<void> = options
       .list(dir)
       .then((nodes) => {
-        if (options.scope() !== directory) return
+        if (options.scope() !== directory || inflight.get(dir) !== promise) return
         const prevChildren = tree.dir[dir]?.children ?? []
         const nextChildren = nodes.map((node) => node.path)
         const nextSet = new Set(nextChildren)
+        const nextDirs = new Set(nodes.filter((node) => node.type === "directory").map((node) => node.path))
+        const removedDirs = prevChildren.filter(
+          (child) => tree.node[child]?.type === "directory" && !nextDirs.has(child),
+        )
+        const removed = (key: string) => removedDirs.some((parent) => key === parent || key.startsWith(parent + "/"))
+
+        if (removedDirs.length > 0) {
+          for (const key of inflight.keys()) {
+            if (removed(key)) inflight.delete(key)
+          }
+          setTree(
+            "dir",
+            produce((draft) => {
+              for (const key of Object.keys(draft)) {
+                if (removed(key)) delete draft[key]
+              }
+            }),
+          )
+        }
 
         setTree(
           "node",
           produce((draft) => {
-            const removedDirs: string[] = []
-
             for (const child of prevChildren) {
               if (nextSet.has(child)) continue
-              const existing = draft[child]
-              if (existing?.type === "directory") removedDirs.push(child)
               delete draft[child]
             }
 
             if (removedDirs.length > 0) {
-              const keys = Object.keys(draft)
-              for (const key of keys) {
-                for (const removed of removedDirs) {
-                  if (!key.startsWith(removed + "/")) continue
-                  delete draft[key]
-                  break
-                }
+              for (const key of Object.keys(draft)) {
+                if (removed(key)) delete draft[key]
               }
             }
 
@@ -113,7 +123,7 @@ export function createFileTreeStore(options: TreeStoreOptions) {
         )
       })
       .catch((e) => {
-        if (options.scope() !== directory) return
+        if (options.scope() !== directory || inflight.get(dir) !== promise) return
         setTree(
           "dir",
           dir,
@@ -125,7 +135,7 @@ export function createFileTreeStore(options: TreeStoreOptions) {
         options.onError(e.message)
       })
       .finally(() => {
-        inflight.delete(dir)
+        if (inflight.get(dir) === promise) inflight.delete(dir)
       })
 
     inflight.set(dir, promise)

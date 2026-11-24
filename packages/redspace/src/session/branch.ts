@@ -224,7 +224,6 @@ export const layer = Layer.effect(
       // 消息不动文件，log 说明（note 的保守语义）。
       const snapHash = yield* snap.track()
       const suffixPatches = suffix.flatMap((row) => row.parts.filter((part) => part.type === "patch"))
-      if (suffixPatches.length) yield* snap.revert(suffixPatches)
       const islandFiles = [
         ...new Set(
           island.flatMap((row) =>
@@ -232,9 +231,10 @@ export const layer = Layer.effect(
           ),
         ),
       ]
-      if (target.islandSnapshot !== undefined && islandFiles.length > 0) {
-        yield* snap.checkoutFiles(target.islandSnapshot, islandFiles)
-      } else if (islandFiles.length > 0) {
+      if (target.islandSnapshot !== undefined) {
+        if (suffixPatches.length) yield* snap.revert(suffixPatches)
+        if (islandFiles.length) yield* snap.checkoutFiles(target.islandSnapshot, islandFiles)
+      } else if (suffixPatches.length || islandFiles.length) {
         log.info("island has no snapshot, switching messages only", {
           sessionID: input.sessionID,
           messageID: input.messageID,

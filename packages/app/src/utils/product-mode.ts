@@ -14,14 +14,14 @@ export function isCodeSession(session: Pick<Session, "mode">) {
   return session.mode !== "chat"
 }
 
-export function companionSessions(sessions: Session[], companionID: string) {
+export function companionSessions(sessions: Session[], companionID: string, archived = false) {
   return sessions
     .filter(
       (session) =>
         session.mode === "chat" &&
         session.companionID === companionID &&
         !session.parentID &&
-        session.time.archived === undefined,
+        (session.time.archived !== undefined) === archived,
     )
     .sort(compareSessionTime)
 }

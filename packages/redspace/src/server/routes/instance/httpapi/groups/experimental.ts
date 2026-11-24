@@ -94,6 +94,9 @@ export const SessionListQuery = Schema.Struct({
   search: Schema.optional(Schema.String),
   limit: Schema.optional(Schema.NumberFromString),
   archived: Schema.optional(QueryBoolean),
+  archivedOnly: Schema.optional(QueryBoolean),
+  mode: Schema.optional(Schema.Literals(["code", "chat"])),
+  companionID: Schema.optional(Schema.String),
 })
 
 export const ExperimentalPaths = {

@@ -1,4 +1,8 @@
 import { test, expect } from "bun:test"
+import { Database } from "bun:sqlite"
+import path from "node:path"
+import { Effect } from "effect"
+import { cliIt } from "../lib/cli-process"
 import {
   parseShareUrl,
   shouldAttachShareAuthHeaders,
@@ -52,3 +56,35 @@ test("returns null for invalid share data", () => {
   expect(transformShareData([{ type: "message", data: {} as any }])).toBeNull()
   expect(transformShareData([{ type: "session", data: { id: "s" } as any }])).toBeNull() // no messages
 })
+
+cliIt.live("an invalid final part rolls back the entire import and the corrected file can be retried", ({ home, redcode }) =>
+  Effect.gen(function* () {
+    const dbPath = path.join(home, "import.db")
+    const file = path.join(home, "session.json")
+    const options = { env: { REDCODE_DB: dbPath } }
+    const sessionID = "ses_import_atomic"
+    const messageID = "msg_import_atomic"
+    const text = { id: "prt_import_first", sessionID, messageID, type: "text", text: "original" }
+    const info = { id: sessionID, title: "restore", slug: "restore", version: "1", time: { created: 1, updated: 1 } }
+    const message = {
+      id: messageID, sessionID, role: "user", time: { created: 1 }, agent: "build",
+      model: { providerID: "test", modelID: "test" },
+    }
+    const archive = (parts: unknown[]) => JSON.stringify({ info, messages: [{ info: message, parts }] })
+    yield* Effect.promise(() => Bun.write(file, archive([text, { ...text, id: "prt_import_last", type: "unknown" }])))
+    const failed = yield* redcode.spawn(["import", file], options)
+    expect(failed.exitCode).not.toBe(0)
+
+    const rows = () => {
+      using db = new Database(dbPath, { readonly: true })
+      return ["session", "message", "part"].map((table) =>
+        db.query<{ n: number }, []>(`SELECT count(*) AS n FROM ${table}`).get()!.n,
+      )
+    }
+    expect(rows()).toEqual([0, 0, 0])
+    yield* Effect.promise(() => Bun.write(file, archive([text, { ...text, id: "prt_import_last" }])))
+    redcode.expectExit(yield* redcode.spawn(["import", file], options), 0)
+    expect(rows()).toEqual([1, 1, 2])
+  }),
+  90_000,
+)

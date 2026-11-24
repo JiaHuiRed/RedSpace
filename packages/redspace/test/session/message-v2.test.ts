@@ -264,6 +264,39 @@ describe("session.message-v2.toModelMessage", () => {
     expect(out).toContain("APK_BUILD_PID=1")
   })
 
+  test.each(["", " \r\n"])("keeps the interruption error when shell output is blank (%j)", async (output) => {
+    const id = "a-silent-cutoff"
+    const error = "Tool execution was interrupted before it settled; the operation may have taken effect"
+    const messages = await MessageV2.toModelMessages(
+      [
+        {
+          info: { ...unfinishedAssistantInfo(id, "u1"), time: { created: 1, completed: 2 } },
+          parts: [
+            {
+              ...basePart(id, "c1"),
+              type: "tool",
+              callID: "call-1",
+              tool: "bash",
+              state: {
+                status: "error",
+                input: { command: "build" },
+                error,
+                metadata: { interrupted: true, output },
+                time: { start: 1, end: 2 },
+              },
+            },
+          ],
+        },
+      ],
+      model,
+    )
+
+    expect(messages.at(-1)).toMatchObject({
+      role: "tool",
+      content: [{ type: "tool-result", toolCallId: "call-1", output: { type: "error-text", value: error } }],
+    })
+  })
+
   test("filters out messages with no parts", async () => {
     const input: MessageV2.WithParts[] = [
       {
