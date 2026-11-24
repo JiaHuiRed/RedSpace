@@ -304,6 +304,17 @@ describe("tool.edit", () => {
       }),
     )
 
+    it.instance("writes dollar substitutions literally in bulk edits", () =>
+      Effect.gen(function* () {
+        const { directory } = yield* TestInstance
+        const filepath = path.join(directory, "script.txt")
+        const replacement = "$$ $& $` $'"
+        yield* put(filepath, "first TOKEN\nsecond TOKEN\n")
+        yield* run({ filePath: filepath, oldString: "TOKEN", newString: replacement, replaceAll: true })
+        expect(yield* loadRaw(filepath)).toBe(`first ${replacement}\nsecond ${replacement}\n`)
+      }),
+    )
+
     it.instance("emits change event for existing files", () =>
       Effect.gen(function* () {
         const test = yield* TestInstance
