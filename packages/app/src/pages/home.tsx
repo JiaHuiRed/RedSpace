@@ -2,7 +2,7 @@ import type { Session } from "@redcode-ai/sdk/v2/client"
 import { createMemo, createSignal, For, lazy, onCleanup, onMount, Show, Suspense } from "solid-js"
 import { createStore, produce } from "solid-js/store"
 import { Binary } from "@redcode-ai/core/util/binary"
-import { useQuery } from "@tanstack/solid-query"
+import { useQuery, useQueryClient } from "@tanstack/solid-query"
 import { Spinner } from "@redcode-ai/ui/spinner"
 import { ContextMenu } from "@redcode-ai/ui/context-menu"
 import { Avatar as AvatarV2 } from "@redcode-ai/ui/v2/components/avatar-v2.jsx"
@@ -71,6 +71,7 @@ export default function Home(props: { initialDirectory?: string }) {
   const server = useServer()
   const language = useLanguage()
   const globalSDK = useGlobalSDK()
+  const queryClient = useQueryClient()
   const command = useCommand()
   // 260616 Red 默认进看板视图（工作中/需关注/空闲）。
   // 261123 YuQi 列表视图与「新建会话」按钮下线：新建会话界面已并入首页 compose 区，
@@ -144,8 +145,6 @@ export default function Home(props: { initialDirectory?: string }) {
   }))
 
   // 260814 Red 已归档会话不进 sync store（global-sync 拉取时就滤掉了），只能单独取。
-  //   archived:true 的语义是"不加 IS NULL 过滤"即**包含**归档，所以这里再筛出真正带
-  //   time.archived 的那些。仅在开关打开时请求，关掉不产生任何额外负载。
   const archivedLoad = useQuery(() => ({
     queryKey: ["home", "archived", selectedProject()?.worktree, state.archived] as const,
     enabled: state.archived,
@@ -158,12 +157,15 @@ export default function Home(props: { initialDirectory?: string }) {
       const res = await globalSDK.client.experimental.session.list({
         directory: project.worktree,
         roots: true,
-        archived: true,
+        archivedOnly: true,
+        mode: "code",
         limit: HOME_SESSION_LIMIT,
       })
-      return ((res.data ?? []) as Session[]).filter((s) => !!s.time?.archived)
+      return res.data ?? []
     },
   }))
+
+  const boardQuery = () => (state.archived ? archivedLoad : sessionLoad)
 
   const projectByID = createMemo(
     () => new Map(projects().flatMap((project) => (project.id ? [[project.id, project] as const] : []))),
@@ -344,6 +346,7 @@ export default function Home(props: { initialDirectory?: string }) {
       return
     }
     dropFromStore(session)
+    void queryClient.invalidateQueries({ queryKey: ["home", "archived", session.directory] })
   }
 
   // 260814 Red 取消归档：清掉 time_archived，会话立刻回到正常列表。
@@ -389,17 +392,17 @@ export default function Home(props: { initialDirectory?: string }) {
       />
 
       <section
-        class="min-h-0 min-w-0 overflow-y-auto pt-6 pr-2"
+        class="@container min-h-0 min-w-0 overflow-y-auto pt-6 pr-2"
         aria-label={language.t("sidebar.project.recentSessions")}
       >
         {/* 261124 六轮（哥哥定稿）：左右整体互换——compose（字标+输入框+继续任务）是主视觉，
             挪到左侧阅读起点；搜索+归档+用量面板的工作台列挪到右侧。看板带随之靠右
             （board-section 里 justify-end，右缘与工作台列对齐）。
             变量 --compose-max-w 由这里下传，session-new-design-view 内部消费。 */}
-        <div class="flex items-start gap-x-6 pr-2">
+        <div class="flex flex-col gap-x-6 pr-2 @min-[1040px]:flex-row @min-[1040px]:items-start">
           <div
             data-component="home-compose-section"
-            class="flex min-w-0 flex-1 justify-center pt-10 pb-[clamp(26px,4vh,44px)]"
+            class="flex min-w-0 justify-center pt-10 pb-[clamp(26px,4vh,44px)] @min-[1040px]:flex-1"
             style={{ "--compose-max-w": "900px" }}
           >
             <Show when={composerDirectory()} keyed>
@@ -422,7 +425,7 @@ export default function Home(props: { initialDirectory?: string }) {
             </Show>
           </div>
           {/* 261124 八轮：列宽 620→720 配合看板带宽——面板左移 100px，右列与看板同宽等右缘。 */}
-          <div class="flex w-[720px] max-w-full shrink-0 flex-col gap-3">
+          <div class="flex w-full shrink-0 flex-col gap-3 @min-[1040px]:w-[min(720px,calc(100%-460px))]">
             <div class="flex items-center gap-2">
               <HomeSessionSearch
                 ref={(el) => (searchInputRef = el)}
@@ -452,10 +455,16 @@ export default function Home(props: { initialDirectory?: string }) {
           </div>
         </div>
         <div data-component="home-board-section" class="pt-2 pb-5">
-          <Show when={!sessionLoad.isLoading} fallback={<HomeSessionSkeleton label={language.t("common.loading")} />}>
+          <Show when={!boardQuery().isLoading} fallback={<HomeSessionSkeleton label={language.t("common.loading")} />}>
+            <Show when={boardQuery().isError}>
+              <div role="alert" class="flex items-center justify-center gap-2 py-3">
+                {language.t("common.requestFailed")}
+                <ButtonV2 onClick={() => void boardQuery().refetch()}>{language.t("common.retry")}</ButtonV2>
+              </div>
+            </Show>
             <Show
               when={records().length > 0}
-              fallback={
+              fallback={boardQuery().isError ? undefined : (
                 <div class="flex min-w-0 flex-col items-center gap-4 py-12">
                   <div class="flex size-12 items-center justify-center rounded-full bg-v2-background-bg-deep">
                     <IconV2 name="edit" size="large" class="text-v2-text-text-muted" />
@@ -482,7 +491,7 @@ export default function Home(props: { initialDirectory?: string }) {
                     </ButtonV2>
                   </Show>
                 </div>
-              }
+              )}
             >
               {/* 261124 六轮：工作台挪右后，看板带靠右（justify-end），右缘与工作台列对齐
                   （pr-2 对齐顶部行的同一缩进）；空态与骨架保持全宽居中，不跟着靠右。 */}
@@ -573,6 +582,7 @@ function HomeProjectColumn(props: {
   statsSessions: Session[]
 }) {
   const platform = usePlatform()
+  const server = useServer()
 
   // 261123 Karina 项目列表分组：最近常用 + 全部折叠。
   // 顺序直接沿用 server.projects 的 touch 冒泡（最近打开在前），不新增数据源。
@@ -630,13 +640,15 @@ function HomeProjectColumn(props: {
       <ContextMenu.Portal>
         <ContextMenu.Content>
           {/* 260710 Red 在文件管理器中打开项目目录 */}
-          <ContextMenu.Item
-            data-action="home-project-reveal"
-            data-project={base64Encode(project.worktree)}
-            onSelect={() => platform.openPath?.(project.worktree)}
-          >
-            <ContextMenu.ItemLabel>{props.language.t("home.project.revealInExplorer")}</ContextMenu.ItemLabel>
-          </ContextMenu.Item>
+          <Show when={platform.platform === "desktop" && platform.openPath && server.isLocal()}>
+            <ContextMenu.Item
+              data-action="home-project-reveal"
+              data-project={base64Encode(project.worktree)}
+              onSelect={() => void platform.openPath?.(project.worktree).catch((error) => notifyServerError(props.language.t, error))}
+            >
+              <ContextMenu.ItemLabel>{props.language.t("home.project.revealInExplorer")}</ContextMenu.ItemLabel>
+            </ContextMenu.Item>
+          </Show>
           <ContextMenu.Item
             data-action="home-project-remove"
             data-project={base64Encode(project.worktree)}
