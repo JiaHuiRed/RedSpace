@@ -1,7 +1,51 @@
-import { describe, expect, test } from "bun:test"
-import { bar, barColor, compact, contextLevelColor, contextSource, formatMs, sessionCostBuckets, sessionUsage, subagentCost } from "../../../../src/cli/cmd/tui/feature-plugins/sidebar/context"
+import { describe, expect, spyOn, test } from "bun:test"
+import { testRender } from "@opentui/solid"
+import type { TuiPluginApi } from "@redcode-ai/plugin/tui"
+import { createComponent, createSignal } from "solid-js"
+import { bar, barColor, compact, contextLevelColor, contextSource, formatMs, sessionCostBuckets, sessionUsage, SidebarActivity, subagentCost } from "../../../../src/cli/cmd/tui/feature-plugins/sidebar/context"
 import { snapshotGroups, snapshotRequestKey } from "../../../../src/cli/cmd/tui/feature-plugins/sidebar/context-composition"
 import type { AssistantMessage, Message } from "@redcode-ai/sdk/v2"
+
+test("sidebar active follows conversation timestamps and ages without a session event", async () => {
+  const now = Date.now()
+  const user = (created: number, id = "user") => ({ id, role: "user", time: { created } }) as Message
+  const reply = (time: AssistantMessage["time"], summary = false) =>
+    ({ id: "reply", role: "assistant", time, summary }) as AssistantMessage
+  const [messages, setMessages] = createSignal<Message[]>([
+    reply({ created: now - 600_000, completed: now - 120_000 }),
+    user(now - 180_000),
+    user(now, "compaction"),
+    reply({ created: now, completed: now }, true),
+  ])
+  const api = {
+    theme: { current: {} },
+    state: {
+      session: { messages, get: () => ({ time: { updated: now } }) },
+      part: (id: string) => id === "compaction" ? [{ type: "compaction" }] : [{ type: "text", text: "hello" }],
+    },
+  } as unknown as TuiPluginApi
+  using clock = spyOn(Date, "now").mockReturnValue(now)
+  const app = await testRender(() => createComponent(SidebarActivity, { api, sessionID: "session" }), { width: 42, height: 2 })
+  try {
+    await app.renderOnce()
+    expect(app.captureCharFrame()).toContain("active 2m ago")
+    setMessages([])
+    await app.renderOnce()
+    expect(app.captureCharFrame()).not.toContain("active")
+    setMessages([user(now - 59_990)])
+    await app.renderOnce()
+    expect(app.captureCharFrame()).toContain("active just now")
+    clock.mockReturnValue(now + 10)
+    await Bun.sleep(20)
+    await app.renderOnce()
+    expect(app.captureCharFrame()).toContain("active 1m ago")
+    setMessages([user(now - 180_000), reply({ created: now - 120_000, firstChunk: now })])
+    await app.renderOnce()
+    expect(app.captureCharFrame()).toContain("active just now")
+  } finally {
+    app.renderer.destroy()
+  }
+})
 
 // 260819 cc: 侧边栏上下文窗口的显示件。侧边栏宽 42 列，紧凑记法和进度条宽度都按这个定的。
 describe("sidebar context window 显示", () => {

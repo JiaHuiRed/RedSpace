@@ -3,7 +3,7 @@ import { USD_TO_CNY } from "@redcode-ai/core/currency"
 import { cacheHitPercent } from "@redcode-ai/core/util/cache-rate"
 import type { TuiPlugin, TuiPluginApi } from "@redcode-ai/plugin/tui"
 import type { InternalTuiPlugin } from "../../plugin/internal"
-import { createMemo, createResource, onCleanup, Show } from "solid-js"
+import { createEffect, createMemo, createResource, createSignal, onCleanup, Show } from "solid-js"
 import { useEvent } from "@tui/context/event"
 import { useSDK } from "@tui/context/sdk"
 import { ContextComposition } from "./context-composition"
@@ -43,12 +43,41 @@ function formatTime(ts: number): string {
   return `${d.getMonth() + 1}/${d.getDate()} ${pad(d.getHours())}:${pad(d.getMinutes())}`
 }
 
-function formatDuration(updated: number): string {
-  const diff = Date.now() - updated
-  if (diff < 60_000) return "just now"
-  if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`
-  if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`
-  return `${Math.floor(diff / 86_400_000)}d ago`
+export function SidebarActivity(props: { api: TuiPluginApi; sessionID: string }) {
+  const latest = createMemo(() => props.api.state.session.messages(props.sessionID).reduce((at, message) => {
+    if (message.role === "user") {
+      const visible = props.api.state.part(message.id).some((part) =>
+        part.type !== "compaction" && (part.type !== "text" || (!part.synthetic && !part.ignored)),
+      )
+      return visible ? Math.max(at, message.time.created) : at
+    }
+    if (message.summary) return at
+    return Math.max(at, message.time.completed ?? message.time.firstChunk ?? message.time.created)
+  }, 0))
+
+  const [age, setAge] = createSignal("")
+  createEffect(() => {
+    const at = latest()
+    if (!at) {
+      setAge("")
+      return
+    }
+    let timer: ReturnType<typeof setTimeout>
+    const refresh = () => {
+      const elapsed = Math.max(0, Date.now() - at)
+      const [unit, suffix]: [number, string] =
+        elapsed < 3_600_000 ? [60_000, "m"] : elapsed < 86_400_000 ? [3_600_000, "h"] : [86_400_000, "d"]
+      setAge(elapsed < 60_000 ? "just now" : `${Math.floor(elapsed / unit)}${suffix} ago`)
+      timer = setTimeout(refresh, unit - elapsed % unit)
+    }
+    refresh()
+    onCleanup(() => clearTimeout(timer))
+  })
+  return (
+    <Show when={age()}>
+      <text fg={props.api.theme.current?.textMuted}>active {age()}</text>
+    </Show>
+  )
 }
 
 // 260819 cc 上下文窗口用紧凑记法，侧边栏只有 42 列，185,925 / 1,000,000 这种写法一行放不下
@@ -321,7 +350,6 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
   return parts.length > 0 ? parts.join(" + ") : money.format(0)
  })
   const created = createMemo(() => session()?.time?.created)
-  const updated = createMemo(() => session()?.time?.updated)
 
   const percentLabel = createMemo(() => {
     const p = state().percent
@@ -422,9 +450,7 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
       <Show when={created()}>
         <text fg={theme()?.textMuted}>created {formatTime(created()!)}</text>
       </Show>
-      <Show when={updated()}>
-        <text fg={theme()?.textMuted}>active {formatDuration(updated()!)}</text>
-      </Show>
+      <SidebarActivity api={props.api} sessionID={props.session_id} />
     </box>
   )
 }
