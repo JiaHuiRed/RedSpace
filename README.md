@@ -6,7 +6,7 @@ Chat 能接续原有伙伴的人格和长期记忆，并按需召回导入档案
 
 自 0.19.0 起，RedCode 演进为 RedSpace：在同一底层延续人格、会话与执行能力。
 
-[![版本](https://badgen.net/badge/版本/0.20.5/blue)](CHANGELOG.md)
+[![版本](https://badgen.net/badge/版本/0.20.6/blue)](CHANGELOG.md)
 [![平台](https://badgen.net/badge/平台/Windows%2010%2F11/green)](https://github.com/JiaHuiRed/RedCode)
 [![TypeScript](https://badgen.net/badge/TypeScript/7.x/3178c6)](https://typescriptlang.org)
 [![Bun](https://badgen.net/badge/Bun/1.3.x/fb6e19)](https://bun.sh)
@@ -62,7 +62,7 @@ bun run dev:desktop
 
 0.19.0 开始在同一个应用中提供两个模式，TUI 与 GUI 共用后端和个人档案：
 
-- **Code**：继续使用现有开发工作区、Soul、工程记忆和权限模式。
+- **Code**：继续使用现有开发工作区、Soul、工程记忆和权限模式。想先看界面效果，可以用 [`visual-prototype`](seed/skill/visual-prototype/SKILL.md) 调整并导出 HTML 草稿，确认后再改正式界面。
 - **Chat**：导入已有 OpenClaw / RedClaw 个人档案，接续同一个伙伴的人格、长期记忆、日记和可识别的旧对话文本，也可以使用工具完成工作。
 
 TUI 推荐用 `redspace companion import <目录或ZIP> --id companion` 导入，再用 `redspace --companion companion` 进入（原 `redcode` 命令仍兼容）；运行中使用 `/chat` 与 `/code`。源码运行时把 `redcode` 换成 `bun dev`。GUI 使用顶栏 Chat 入口导入并开始聊天。

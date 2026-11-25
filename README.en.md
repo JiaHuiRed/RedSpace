@@ -6,7 +6,7 @@ Chat continues an existing companion's identity and long-term memory, and can se
 
 Beginning with 0.19.0, RedCode evolves into RedSpace: one runtime for identity, conversations, and meaningful work.
 
-[![Version](https://badgen.net/badge/Version/0.20.5/blue)](CHANGELOG.md)
+[![Version](https://badgen.net/badge/Version/0.20.6/blue)](CHANGELOG.md)
 [![Platform](https://badgen.net/badge/Platform/Windows%2010%2F11/green)](https://github.com/JiaHuiRed/RedCode)
 [![TypeScript](https://badgen.net/badge/TypeScript/7.x/3178c6)](https://typescriptlang.org)
 [![Bun](https://badgen.net/badge/Bun/1.3.x/fb6e19)](https://bun.sh)
@@ -62,7 +62,7 @@ For installation, model setup, permissions, and Soul configuration, see [MANUAL.
 
 Version 0.19.0 starts the transition to two product modes sharing the same backend and personal archive in TUI and GUI:
 
-- **Code** keeps existing development workspaces, Souls, engineering memory, and permission modes.
+- **Code** keeps existing development workspaces, Souls, engineering memory, and permission modes. With the optional [`visual-prototype` skill](seed/skill/visual-prototype/SKILL.md), you can edit and export an HTML mockup before asking Code to implement it.
 - **Chat** imports an existing OpenClaw / RedClaw companion's identity, long-term memory, diaries, and selected historical chat text. The same companion can also use tools for practical work.
 
 In the terminal, import with `redcode companion import <directory-or-zip> --id companion`, then open `redspace --companion companion`. Use `/chat` and `/code` during a local TUI session. The original `redcode` CLI remains compatible. When running from source, replace `redspace` with `bun dev`. In the GUI, use the Chat entry in the title bar.
