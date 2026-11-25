@@ -602,9 +602,19 @@ describe("HttpApi SDK", () => {
         const { data: older } = yield* call(() => sdk.session.create({ title: "Older archive" }, options))
         yield* call(() => sdk.session.update({ sessionID: older.id, time: { archived: Date.now() } }, options))
         const { data: active } = yield* call(() => sdk.session.create({ title: "Recent active task" }, options))
+        const origin = "http://127.0.0.1:5173"
         const page = (filters: { archived?: boolean; archivedOnly?: boolean; mode?: "chat" | "code" }) =>
-          call(() => sdk.experimental.session.list({ directory, roots: true, limit: 1, ...filters }, options))
-        expect((yield* page({ archived: true })).data.map((s) => s.id)).toEqual([active.id])
+          call(() =>
+            sdk.experimental.session.list(
+              { directory, roots: true, limit: 1, ...filters },
+              { ...options, headers: { origin } },
+            ),
+          )
+        const first = yield* page({ archived: true })
+        expect(first.data.map((s) => s.id)).toEqual([active.id])
+        expect(first.response.headers.get("access-control-allow-origin")).toBe(origin)
+        expect(first.response.headers.get("x-next-cursor")).toBeTruthy()
+        expect(first.response.headers.get("access-control-expose-headers")?.toLowerCase()).toBe("x-next-cursor")
         expect((yield* page({ archivedOnly: true, mode: "code" })).data.map((s) => s.id)).toEqual([older.id])
         expect((yield* page({ archivedOnly: true, mode: "chat" })).data).toEqual([])
       }),

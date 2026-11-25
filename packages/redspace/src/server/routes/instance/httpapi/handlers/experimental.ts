@@ -154,7 +154,10 @@ export const experimentalHandlers = HttpApiBuilder.group(InstanceHttpApi, "exper
       return HttpServerResponse.jsonUnsafe(list, {
         headers:
           sessions.length > limit && list.length > 0
-            ? { "x-next-cursor": Session.listCursor(list[list.length - 1]!) }
+            ? {
+                "Access-Control-Expose-Headers": "X-Next-Cursor",
+                "X-Next-Cursor": Session.listCursor(list[list.length - 1]!),
+              }
             : undefined,
       })
     })
