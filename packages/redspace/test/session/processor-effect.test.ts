@@ -1,4 +1,5 @@
 import { NodeFileSystem } from "@effect/platform-node"
+import { LLMEvent } from "@redcode-ai/llm"
 import { expect, test } from "bun:test"
 import { tool } from "ai"
 import { Cause, Effect, Exit, Fiber, Layer } from "effect"
@@ -24,8 +25,8 @@ import { SessionSummary } from "../../src/session/summary"
 import { Snapshot } from "../../src/snapshot"
 import * as Log from "@redcode-ai/core/util/log"
 import { CrossSpawnSpawner } from "@redcode-ai/core/cross-spawn-spawner"
-import { provideTmpdirServer } from "../fixture/fixture"
-import { testEffect } from "../lib/effect"
+import { provideTmpdirServer, TestInstance } from "../fixture/fixture"
+import { awaitWithTimeout, testEffect } from "../lib/effect"
 import { raw, reply, TestLLMServer } from "../lib/llm-server"
 import { SyncEvent } from "@/sync"
 import { RuntimeFlags } from "@/effect/runtime-flags"
@@ -185,24 +186,20 @@ const deps = Layer.mergeAll(
   Permission.defaultLayer,
   Plugin.defaultLayer,
   Config.defaultLayer,
-  LLM.defaultLayer,
   Provider.defaultLayer,
   status,
   SyncEvent.defaultLayer,
   EventV2Bridge.defaultLayer,
   Snippet.defaultLayer,
 ).pipe(Layer.provideMerge(infra))
-const env = Layer.mergeAll(
-  TestLLMServer.layer,
-  SessionProcessor.layer.pipe(
-    Layer.provide(summary),
-    Layer.provide(Image.defaultLayer),
-    Layer.provide(RuntimeFlags.layer({})),
-    Layer.provideMerge(deps),
-  ),
+const processorLayer = SessionProcessor.layer.pipe(
+  Layer.provide(summary),
+  Layer.provide(Image.defaultLayer),
+  Layer.provide(RuntimeFlags.layer({})),
+  Layer.provideMerge(deps),
 )
 
-const it = testEffect(env)
+const it = testEffect(Layer.mergeAll(TestLLMServer.layer, processorLayer.pipe(Layer.provide(LLM.defaultLayer))))
 
 const boot = Effect.fn("test.boot")(function* () {
   const processors = yield* SessionProcessor.Service
@@ -284,10 +281,11 @@ for (const scenario of [
             expect(part?.state.status).toBe("completed")
             if (part?.state.status === "completed") expect(part.state.output).not.toContain("[System notice]")
           }
-      }),
-    { config: (url) => providerCfg(url) },
-  ),
-)
+        }),
+      { config: (url) => providerCfg(url) },
+    ),
+  )
+}
 
 it.live("session.processor effect tests idle-cuts a silent reasoning stream", () =>
   provideTmpdirServer(
@@ -343,59 +341,49 @@ it.live("session.processor effect tests idle-cuts a silent reasoning stream", ()
   ),
 )
 
-// 261104 Red 网关收尾挂起（mock 形态）：finish_reason 已吐但流不关、[DONE] 永不到。
-//   注意 mock 的 AI SDK openai-compatible 路径不产 finish part（真实 zhipuai/GLM 路径会，
-//   实证见 request-evidence.middleware 的 providerUsage 只在 finish part 打点、而真实
-//   ses_ffe5e5bdeb 的 usage 行早已出现），因此本用例短窗不触发、退化为 idleMs 兜底——
-//   断言的是 race 的存在不破坏「有产出场景的 idleMs 路径」。短窗真机判据 = processor
-//   step.exit 打点与 usage 行间隔（TEMP DIAG 探针）。
-it.live("session.processor effect tests cuts a hung gateway tail shortly after step-finish", () =>
-  provideTmpdirServer(
-    ({ dir, llm }) =>
-      Effect.gen(function* () {
-        const { processors, session, provider } = yield* boot()
-
-        yield* llm.push(reply().text("gateway tail").hangAfterFinish())
-
-        const chat = yield* session.create({})
-        const parent = yield* user(chat.id, "tail")
-        const msg = yield* assistant(chat.id, parent.id, path.resolve(dir))
-        const mdl = yield* provider.getModel(ref.providerID, ref.modelID)
-        const handle = yield* processors.create({
-          assistantMessage: msg,
-          sessionID: chat.id,
-          model: mdl,
-        })
-
-        const startedAt = Date.now()
-        const value = yield* handle.process({
-          user: {
-            id: parent.id,
-            sessionID: chat.id,
-            role: "user",
-            time: parent.time,
-            agent: parent.agent,
-            model: { providerID: ref.providerID, modelID: ref.modelID },
-          } satisfies MessageV2.User,
-          sessionID: chat.id,
-          model: mdl,
-          agent: agent(),
-          system: [],
-          messages: [{ role: "user", content: "tail" }],
-          tools: {},
-        })
-        const elapsed = Date.now() - startedAt
-
-        expect(value).toBe("continue")
-        // mock 形态走 idleMs（10s）兜底；finish_reason 未到 → finish 未设 → loop 续跑重发
-        //   （半截 assistant 消息由 toModelMessages 的在途守卫跳过，不会重复注入上下文）。
-        //   超过 15s 说明 race 破坏了收尾。
-        expect(elapsed).toBeLessThan(15_000)
+// 261125 Red 在处理器的 LLM 边界送 finish；HTTP mock 的 finish_reason 要等 EOF 才转成此事件。
+testEffect(
+  processorLayer.pipe(
+    Layer.provide(
+      Layer.succeed(LLM.Service, {
+        stream: () =>
+          Stream.make(
+            LLMEvent.textStart({ id: "tail" }),
+            LLMEvent.textDelta({ id: "tail", text: "gateway tail" }),
+            LLMEvent.textEnd({ id: "tail" }),
+            LLMEvent.finish({ reason: "stop" }),
+          ).pipe(Stream.concat(Stream.never)),
       }),
-    { config: (url) => providerCfg(url, { reasoningStall: { idleMs: 10_000, idleAfterUsageMs: 1_000 } }) },
+    ),
   ),
+).instance(
+  "session.processor cuts a hung gateway tail after finish without waiting for idleMs",
+  Effect.gen(function* () {
+    const { directory } = yield* TestInstance
+    const { processors, session, provider } = yield* boot()
+    const chat = yield* session.create({})
+    const parent = yield* user(chat.id, "tail")
+    const msg = yield* assistant(chat.id, parent.id, directory)
+    const model = yield* provider.getModel(ref.providerID, ref.modelID)
+    const handle = yield* processors.create({ assistantMessage: msg, sessionID: chat.id, model })
+
+    const value = yield* awaitWithTimeout(
+      handle.process({
+        user: parent,
+        sessionID: chat.id,
+        model,
+        agent: agent(),
+        system: [],
+        messages: [{ role: "user", content: "tail" }],
+        tools: {},
+      }),
+      "post-finish cutoff did not beat the idle timeout",
+      "3 seconds",
+    )
+    expect(value).toBe("continue")
+  }),
+  { config: { ...cfg, experimental: { reasoningStall: { idleMs: 10_000, idleAfterUsageMs: 1_000 } } } },
 )
-}
 
 // 261006 Red 静态规则把 doom_loop 压成 deny 时（explore 白名单 "*": deny 的真实形态），
 // 拒绝要落成工具报错让模型自救，而不是炸掉整个 step：旧实现 halt 后 assistant 消息

@@ -18,28 +18,19 @@
 
 # 验证命令
 
-- **从 package 目录跑，别在 repo root 跑 `tsc`**：
-  - 改 TUI → `cd packages/redspace && bun run typecheck`
-  - 改 GUI → `cd packages/desktop && bun run typecheck`
+- 类型检查在实际受影响的 package 目录跑 `bun run typecheck`（如 `packages/redspace`、`packages/app`、`packages/desktop`），不在 repo root 跑 `tsc`。
 - 各 package 的代码风格/构建细节见该 package 的 AGENTS.md
 - 跑单测**必须带完整文件路径过滤**：不带过滤的 `bun test` 会碰 live 配置（已修根因，但 plugin-loader 那类直接操作 live 文件名的用例仍靠路径隔离兜着）
-- `bun run typecheck` 走 `script/typecheck.ts`：先跑 tsgo，崩溃（OOM/panic）时自动回退 TypeScript 5.x 重跑
+- 核心包的 `bun run typecheck` 走 `script/typecheck.ts`，内存不足或 tsgo 崩溃时使用 TypeScript 5.x。
 - **子进程超时不变量**：`bun run check:subprocess-timeout`（已挂 pre-push）。新增 `appProcess.run` 调用点必须显式给 `timeout`，或在调用行上方写 `// subprocess-timeout: none — <理由>`。无界的子进程等待不触发 evloop drift 探针，挂起时日志里一个字都没有
 - **httpapi 路由覆盖门禁**（已挂 pre-push，~6s）：新增 HTTP 端点必须在 `httpapi-exercise` 里有场景，coverage 模式只做路由↔场景对账、不执行场景。同型事故已五次才红在 nightly（0.17.0 instructions、261115 UX-15 query / UX-17 result；e2e mock 兜底 `{}` 崩页面另有三次），推送时就拦
 
-## 编辑后自动验证
-
-**每个逻辑改动批次完成后，立即跑对应验证，不等任务结束。**——一次原子修改内的连续 edit 不必每次都跑，但批次完成绝不攒到收尾。
-- 改了 `.ts` / `.tsx` → typecheck（从 package 目录跑）
-- 改了测试文件 → 跑对应测试（带路径过滤）
-- 批量改同 package 文件 → 合并验证一次；跨 package 编辑 → 分别验证
-- 一个批次 = 一个逻辑完整的改动（如「修一个函数 + 它的调用方」），不是任意 N 次 edit 的集合
-
 ## 证据面匹配（永不默认全量）
 
-**跑的检查必须匹配改动面，永远不要默认跑全量测试套件。**（事故：想验一个测试却跑了全量 `bun test`，测试套件洗掉 live 配置——见 `docs/notes/`）
+**按改动面选验证，不按文件后缀凑检查。** 同包相关改动合并验证；已经通过且相关输入没变的检查不重复跑。
 
-- 行为改动 → 只跑对应的测试文件（带路径过滤），**必须带包脚本的超时 `--timeout 30000`**——裸 `bun test <file>` 是默认 5 秒，session 套件会大面积假超时（判定指纹：失败耗时齐刷刷贴着超时值＝命令用错，不是回归）
+- 改生产 TypeScript 的实现或类型，或改 `tsconfig` 纳入的测试中的类型、服务装配 → 对相关 package 跑 typecheck。只改样例或断言不用加跑；`packages/app/e2e/` 和 `packages/desktop/src/**/*.test.ts` 不在各自默认 typecheck 的覆盖范围内。
+- 行为或测试改动 → 跑对应测试文件（带路径过滤）。核心包的 `bun test` 必须带 `--timeout 30000`；默认 5 秒会让 session 测试假超时。
 - 改了进 OpenAPI 的 schema 出口（`packages/redspace/src/config/*.ts`、`session/status.ts` 等 `Schema.Struct`）→ **commit 前跑 `bun run check:openapi-drift`**（~8s，不一致就跑两条生成命令：`bun ./packages/sdk/js/script/build.ts` + `bun run gen:openapi`）。pre-commit 钩子也会拦，但钩子是兜底、不是不跑的理由——推送时才发现就要补 fixup commit（9-01 以来已发生 6 次）
 - 提示词/模型可见内容改动 → 对照该模型的实际会话验证
 - 版本号/徽章/发布清单相关文档改动 → `check-version-consistency.ts`；普通措辞或注释变更只需对应检查
