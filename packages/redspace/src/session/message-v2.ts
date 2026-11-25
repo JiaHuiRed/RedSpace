@@ -364,9 +364,9 @@ export type ToolStateCompleted = Types.DeepMutable<Schema.Schema.Type<typeof Too
 
 // 260814 Red head-only → head+tail 4:1（参考 DeepSeek Harness tool-result-pruner 的
 // 8192/4096/1024 形态）：长输出的尾部往往是结论/错误栈/退出码——正是摘要器最需要
-// 看到的部分，只留头会把「怎么失败的」整个裁掉。目前唯一传 maxChars 的是压缩摘要
-// 路径（compaction.ts TOOL_OUTPUT_MAX_CHARS=2000 → head 1600 + tail 400）；主请求
-// 路径不传 → 原文直通，行为不变。
+// 看到的部分，只留头会把「怎么失败的」整个裁掉。
+// 261125 Red 摘要请求不再传 maxChars：head 必须与主请求逐字节一致才能命中前缀缓存，
+// 压缩体积交给选段与摘要预算控制。
 export function truncateToolOutput(text: string, maxChars?: number) {
   if (!maxChars || text.length <= maxChars) return text
   const head = Math.floor(maxChars * 0.8)

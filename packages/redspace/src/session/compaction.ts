@@ -44,7 +44,6 @@ export const Event = {
 
 export const PRUNE_MINIMUM = 20_000
 export const PRUNE_PROTECT = 40_000
-const TOOL_OUTPUT_MAX_CHARS = 2_000
 const PRUNE_PROTECTED_TOOLS = ["skill"]
 // 261112 Red 快速回填熔断（ZCode v3.15.1 RC04 吸收，决策见
 // docs/notes/proposed/feature/2026-11-12-compact-rapid-refill-breaker.md）：
@@ -665,9 +664,9 @@ export const layer = Layer.effect(
         const processor = yield* processors.create({ assistantMessage: msg, sessionID: input.sessionID, model })
         modelTiming = processor.compactionTiming
         mark("conversion")
-        const modelMessages = yield* MessageV2.toModelMessagesEffect(head, model, {
-          stripMedia: true, toolOutputMaxChars: TOOL_OUTPUT_MAX_CHARS,
-        })
+        // 261125 Red 摘要 head 必须与主请求逐字节一致：主请求不截断工具输出，
+        // 这里传 maxChars 会让 head 从第一条长输出起失配，摘要请求命中不到历史缓存。
+        const modelMessages = yield* MessageV2.toModelMessagesEffect(head, model, { stripMedia: true })
         mark("request")
         requestStartedAt = checkpoint
         const messages = [...modelMessages, {
@@ -1028,10 +1027,8 @@ export const layer = Layer.effect(
       // 逐字节一致；50K tail 预算（MAX_PRESERVE_RECENT_TOKENS）保留。
       const msgs = structuredClone(selected.head)
       yield* plugin.trigger("experimental.chat.messages.transform", {}, { messages: msgs })
-      const modelMessages = yield* MessageV2.toModelMessagesEffect(msgs, model, {
-        stripMedia: true,
-        toolOutputMaxChars: TOOL_OUTPUT_MAX_CHARS,
-      })
+      // 261125 Red 同上：head 与恢复轮逐字节一致，不能截断工具输出。
+      const modelMessages = yield* MessageV2.toModelMessagesEffect(msgs, model, { stripMedia: true })
       const ctx = yield* InstanceState.context
       const msg: MessageV2.Assistant = {
         id: MessageID.ascending(),
