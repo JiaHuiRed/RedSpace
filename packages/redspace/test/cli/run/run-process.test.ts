@@ -10,7 +10,7 @@ import { cliIt } from "../../lib/cli-process"
 describe("redcode run (non-interactive subprocess)", () => {
   // Happy path: prompt completes, output reaches stdout, process exits 0.
   // If this fails, all the others likely will too — debug here first.
-  cliIt.concurrent(
+  cliIt.live(
     "exits 0 and writes the response to stdout on a successful prompt",
     ({ llm, redcode }) =>
       Effect.gen(function* () {
@@ -27,7 +27,7 @@ describe("redcode run (non-interactive subprocess)", () => {
   // makes the SDK call surface an error promptly so the process exits nonzero.
   // We assert nonzero exit AND wall-clock under the harness timeout — a hang
   // would expire the timeout and produce a different (signal-killed) failure.
-  cliIt.concurrent(
+  cliIt.live(
     "exits nonzero promptly when the model is unknown (regression for #27371)",
     ({ redcode }) =>
       Effect.gen(function* () {
@@ -50,7 +50,7 @@ describe("redcode run (non-interactive subprocess)", () => {
   //
   // This is debatable — a future cleanup might flip it to exit 1. If you're
   // changing this expectation, do it deliberately and say so in the PR.
-  cliIt.concurrent(
+  cliIt.live(
     "mid-stream LLM error still exits 0 today (contract lock-in)",
     ({ llm, redcode }) =>
       Effect.gen(function* () {
@@ -64,7 +64,7 @@ describe("redcode run (non-interactive subprocess)", () => {
   // --format json puts one JSON object per line on stdout for each emitted
   // event. Consumers (CI scripts, tooling) parse this stream. Asserts the
   // shape so a future event-emit change has to update this expectation.
-  cliIt.concurrent(
+  cliIt.live(
     "--format json emits parseable line-delimited JSON to stdout",
     ({ llm, redcode }) =>
       Effect.gen(function* () {
@@ -88,7 +88,7 @@ describe("redcode run (non-interactive subprocess)", () => {
  // 261116 Red 多步回合：run 必须把每一步的事件都镜像出来，不能只输出第一步。
  // 工具要选不需要权限的——read 在非 TTY 的 run 里会触发询问并被自动拒绝，
  // shouldBreak 直接终结回合，那测的就不是多步了（261116 实测踩过一次）。
- cliIt.concurrent(
+ cliIt.live(
    "runs every step of a multi-step turn",
    ({ llm, redcode }) =>
      Effect.gen(function* () {

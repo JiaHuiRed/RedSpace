@@ -24,13 +24,19 @@ await fs.mkdir(dir, { recursive: true })
 afterAll(async () => {
   const { Database } = await import("../src/storage/db")
   Database.close()
-  const busy = (error: unknown) =>
-    typeof error === "object" && error !== null && "code" in error && error.code === "EBUSY"
+  // Windows keeps SQLite WAL handles alive until GC finalizers run, so we
+  // force GC and retry teardown to avoid flaky cleanup. EBUSY and EPERM are
+  // both observed here; anything else still throws.
+  const retryable = (error: unknown) =>
+    typeof error === "object" &&
+    error !== null &&
+    "code" in error &&
+    (error.code === "EBUSY" || error.code === "EPERM")
   const rm = async (left: number): Promise<void> => {
     Bun.gc(true)
     await sleep(100)
     return fs.rm(dir, { recursive: true, force: true }).catch((error) => {
-      if (!busy(error)) throw error
+      if (!retryable(error)) throw error
       if (left <= 1) throw error
       return rm(left - 1)
     })

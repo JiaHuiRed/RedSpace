@@ -4,7 +4,7 @@ import { InstanceState } from "@/effect/instance-state"
 
 import { AppFileSystem } from "@redcode-ai/core/filesystem"
 import { Git } from "@/git"
-import { Effect, Layer, Context, Schema, Scope } from "effect"
+import { Effect, Layer, Context, Schema, Scope, Cause } from "effect"
 import * as Stream from "effect/Stream"
 import { formatPatch, structuredPatch } from "diff"
 import fuzzysort from "fuzzysort"
@@ -425,11 +425,19 @@ export const layer = Layer.effect(
     // 刚被创建的文件要能立刻 @ 到，test/file/index.test.ts 的
     // "search refreshes after init when files change" 钉的就是这条。
     // 代价是每次 search() 一趟完整 rg --files；连打时的放大交给 autocomplete 侧的去抖来收。
-    let cachedScan = yield* Effect.cached(scan().pipe(Effect.catchCause(() => Effect.void)))
+    // 261125 Red 扫描失败此前被静默吞掉，CI 上只能看到空结果；留一条 warn 供定位。
+    const scanOrEmpty = scan().pipe(
+      Effect.catchCause((cause) =>
+        Effect.sync(() => {
+          log.warn("scan failed", { cause: Cause.pretty(cause).slice(0, 2000) })
+        }),
+      ),
+    )
+    let cachedScan = yield* Effect.cached(scanOrEmpty)
 
     const ensure = Effect.fn("File.ensure")(function* () {
       yield* cachedScan
-      cachedScan = yield* Effect.cached(scan().pipe(Effect.catchCause(() => Effect.void)))
+      cachedScan = yield* Effect.cached(scanOrEmpty)
     })
 
     const gitText = Effect.fnUntraced(function* (args: string[]) {

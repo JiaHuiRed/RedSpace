@@ -61,7 +61,6 @@ const openApiDriftRoutes = [
 
 const numericSdkQueryParams = [
   { method: "get", path: ExperimentalPaths.session, name: "start", schema: { type: "number" } },
-  { method: "get", path: ExperimentalPaths.session, name: "cursor", schema: { type: "number" } },
   { method: "get", path: ExperimentalPaths.session, name: "limit", schema: { type: "number" } },
   { method: "get", path: FilePaths.findFile, name: "limit", schema: { type: "integer", minimum: 1, maximum: 200 } },
   { method: "get", path: SessionPaths.list, name: "start", schema: { type: "number" } },
@@ -223,6 +222,11 @@ describe("httpapi query schema drift", () => {
           `${expected.method.toUpperCase()} ${expected.path} ${expected.name}`,
         ).toEqual({ type: "string", pattern: expected.pattern })
       }
+      // 261118 Red 复合游标 `updated:id`：字符串优先，纯数字仍按旧式时间游标兼容
+      expect(
+        queryParameter(spec.paths[openApiPath(ExperimentalPaths.session)]?.get, "cursor")?.schema,
+        "GET /experimental/session cursor",
+      ).toEqual({ anyOf: [{ type: "string" }, { type: "number" }] })
     }),
   )
 

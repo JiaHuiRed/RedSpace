@@ -101,6 +101,9 @@ test("mtime 变了但内容没变时放行并刷新记录", async () => {
 test("内容真的变了仍然拦截，并引导精确替换", async () => {
   await Effect.runPromise(FileTime.record("ses_hint", file))
   await fs.writeFile(file, "changed externally")
+  // 261125 Red Windows 上连续写可能落在同一 mtime 刻度，显式推进避免守卫走"未变"快路径
+  const future = new Date(Date.now() + 5000)
+  await fs.utimes(file, future, future)
   await expect(Effect.runPromise(FileTime.assert("ses_hint", file))).rejects.toThrow(/oldString replacement/)
 })
 
