@@ -4,8 +4,9 @@ import { tmpdir } from "node:os"
 import path from "node:path"
 import type { FileNode } from "@redcode-ai/sdk/v2"
 import { createFileTreeStore } from "./tree-store"
+import { invalidateFromWatcher } from "./watcher"
 
-test("reopening a recreated directory lists the files now on disk", async () => {
+test("reopening a same-name replacement lists fresh files even when the parent never sees the deletion", async () => {
   const root = await mkdtemp(path.join(tmpdir(), "redspace-file-tree-"))
   try {
     const tree = createFileTreeStore({
@@ -31,10 +32,25 @@ test("reopening a recreated directory lists the files now on disk", async () => 
     await tree.listDir("src/nested")
 
     await rm(path.join(root, "src"), { recursive: true })
-    await tree.listDir("", { force: true })
     await mkdir(nested, { recursive: true })
     await writeFile(path.join(nested, "after.ts"), "")
-    await tree.listDir("", { force: true })
+
+    const refreshes: Promise<void>[] = []
+    for (const event of ["unlink", "add"]) {
+      invalidateFromWatcher(
+        { type: "file.watcher.updated", properties: { file: "src", event } },
+        {
+          normalize: (input) => input,
+          windows: false,
+          hasFile: () => false,
+          loadFile: () => {},
+          node: tree.node,
+          isDirLoaded: tree.isLoaded,
+          refreshDir: (dir, replacedChild) => refreshes.push(tree.refreshDir(dir, replacedChild)),
+        },
+      )
+    }
+    await Promise.all(refreshes)
     await tree.listDir("src")
     await tree.listDir("src/nested")
     expect(tree.children("src/nested").map((file) => file.name)).toEqual(["after.ts"])

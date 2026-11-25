@@ -44,6 +44,24 @@ export function createFileTreeStore(options: TreeStoreOptions) {
     setTree("dir", path, { expanded: false })
   }
 
+  const evictDirectories = (dirs: string[]) => {
+    if (!dirs.length) return
+    const evicted = (key: string) => dirs.some((dir) => key === dir || key.startsWith(dir + "/"))
+    for (const key of inflight.keys()) {
+      if (evicted(key)) inflight.delete(key)
+    }
+    setTree(
+      produce((draft) => {
+        for (const key of Object.keys(draft.dir)) {
+          if (evicted(key)) delete draft.dir[key]
+        }
+        for (const key of Object.keys(draft.node)) {
+          if (evicted(key)) delete draft.node[key]
+        }
+      }),
+    )
+  }
+
   const listDir = (input: string, opts?: { force?: boolean }) => {
     const dir = options.normalizeDir(input)
     ensureDir(dir)
@@ -76,21 +94,7 @@ export function createFileTreeStore(options: TreeStoreOptions) {
         const removedDirs = prevChildren.filter(
           (child) => tree.node[child]?.type === "directory" && !nextDirs.has(child),
         )
-        const removed = (key: string) => removedDirs.some((parent) => key === parent || key.startsWith(parent + "/"))
-
-        if (removedDirs.length > 0) {
-          for (const key of inflight.keys()) {
-            if (removed(key)) inflight.delete(key)
-          }
-          setTree(
-            "dir",
-            produce((draft) => {
-              for (const key of Object.keys(draft)) {
-                if (removed(key)) delete draft[key]
-              }
-            }),
-          )
-        }
+        evictDirectories(removedDirs)
 
         setTree(
           "node",
@@ -98,12 +102,6 @@ export function createFileTreeStore(options: TreeStoreOptions) {
             for (const child of prevChildren) {
               if (nextSet.has(child)) continue
               delete draft[child]
-            }
-
-            if (removedDirs.length > 0) {
-              for (const key of Object.keys(draft)) {
-                if (removed(key)) delete draft[key]
-              }
             }
 
             for (const node of nodes) {
@@ -174,6 +172,10 @@ export function createFileTreeStore(options: TreeStoreOptions) {
 
   return {
     listDir,
+    refreshDir: (input: string, replacedChild?: string) => {
+      if (replacedChild) evictDirectories([options.normalizeDir(replacedChild)])
+      return listDir(input, { force: true })
+    },
     expandDir,
     collapseDir,
     dirState,

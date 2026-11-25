@@ -15,7 +15,7 @@ type WatcherOps = {
   loadFile: (path: string) => void
   node: (path: string) => FileNode | undefined
   isDirLoaded: (path: string) => boolean
-  refreshDir: (path: string) => void
+  refreshDir: (path: string, replacedChild?: string) => void
 }
 
 export function invalidateFromWatcher(event: WatcherEvent, ops: WatcherOps) {
@@ -61,5 +61,6 @@ export function invalidateFromWatcher(event: WatcherEvent, ops: WatcherOps) {
   const parent = treePath.split("/").slice(0, -1).join("/")
   if (!ops.isDirLoaded(parent)) return
 
-  ops.refreshDir(parent)
+  // 261125 Red 删除再创建可能赶在父目录响应之前；同名节点不能继续用旧子树。
+  ops.refreshDir(parent, ops.node(treePath)?.type === "directory" ? treePath : undefined)
 }
