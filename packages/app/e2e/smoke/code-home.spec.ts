@@ -232,7 +232,7 @@ test("the composer keeps a usable column when Code shares a narrow window", asyn
   }
 })
 
-test("Code archive reports an outage, retries and shows an older archived task", async ({ page }) => {
+test("Code archive retries an outage and reaches older tasks by search or pagination", async ({ page }) => {
   const archived = {
     ...fixture.sessions[0]!,
     title: "Old deployment notes",
@@ -244,6 +244,13 @@ test("Code archive reports an outage, retries and shows an older archived task",
     title: "Active task " + i,
     time: { created: i + 3, updated: i + 3 },
   }))
+  const recent = Array.from({ length: 64 }, (_, i) => ({
+    ...archived,
+    id: "ses_archive_" + i,
+    title: "Recent archive " + i,
+    time: { created: 65 - i, updated: 65 - i, archived: 66 },
+  }))
+  const cursor = "2:ses_archive_63"
   let offline = true
   await page.addInitScript(
     (directory) =>
@@ -261,8 +268,15 @@ test("Code archive reports an outage, retries and shows an older archived task",
     (route) => {
       if (offline) return route.fulfill({ status: 503, json: { message: "Offline" } })
       const query = new URL(route.request().url()).searchParams
+      if (query.get("archivedOnly") !== "true") {
+        return route.fulfill({ json: active.slice(0, Number(query.get("limit"))) })
+      }
+      if (query.get("search") === archived.title || query.get("cursor") === cursor) {
+        return route.fulfill({ json: [archived] })
+      }
       return route.fulfill({
-        json: query.get("archivedOnly") === "true" ? [archived] : active.slice(0, Number(query.get("limit"))),
+        json: recent,
+        headers: { "x-next-cursor": cursor, "access-control-expose-headers": "x-next-cursor" },
       })
     },
   )
@@ -274,5 +288,15 @@ test("Code archive reports an outage, retries and shows an older archived task",
   await expect(board.getByText("No archived sessions")).toHaveCount(0)
   offline = false
   await retry.click()
+  await expect(board.getByText(recent[0]!.title)).toBeVisible()
+  await expect(board.getByText(archived.title)).toHaveCount(0)
+
+  const search = page.locator('[data-component="home-session-search"] input')
+  await search.fill(archived.title)
+  await expect(board.getByText(archived.title)).toBeVisible()
+  await search.clear()
+  await expect(board.getByText(archived.title)).toHaveCount(0)
+  await board.getByRole("button", { name: "Load more" }).click()
+  await expect(board.getByText(recent[0]!.title)).toBeVisible()
   await expect(board.getByText("Old deployment notes")).toBeVisible()
 })

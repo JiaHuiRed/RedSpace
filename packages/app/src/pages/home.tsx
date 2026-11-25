@@ -2,7 +2,7 @@ import type { Session } from "@redcode-ai/sdk/v2/client"
 import { createMemo, createSignal, For, lazy, onCleanup, onMount, Show, Suspense } from "solid-js"
 import { createStore, produce } from "solid-js/store"
 import { Binary } from "@redcode-ai/core/util/binary"
-import { useQuery, useQueryClient } from "@tanstack/solid-query"
+import { useInfiniteQuery, useQuery, useQueryClient } from "@tanstack/solid-query"
 import { Spinner } from "@redcode-ai/ui/spinner"
 import { ContextMenu } from "@redcode-ai/ui/context-menu"
 import { Avatar as AvatarV2 } from "@redcode-ai/ui/v2/components/avatar-v2.jsx"
@@ -145,25 +145,37 @@ export default function Home(props: { initialDirectory?: string }) {
   }))
 
   // 260814 Red 已归档会话不进 sync store（global-sync 拉取时就滤掉了），只能单独取。
-  const archivedLoad = useQuery(() => ({
-    queryKey: ["home", "archived", selectedProject()?.worktree, state.archived] as const,
-    enabled: state.archived,
-    // 261002 Red 同 sessionLoad：开关翻回来时若首载已失败，不放开就永远空列表。
-    staleTime: 30_000,
-    refetchOnMount: true,
-    queryFn: async () => {
-      const project = selectedProject()
-      if (!project) return [] as Session[]
-      const res = await globalSDK.client.experimental.session.list({
-        directory: project.worktree,
-        roots: true,
-        archivedOnly: true,
-        mode: "code",
-        limit: HOME_SESSION_LIMIT,
-      })
-      return res.data ?? []
-    },
-  }))
+  const archivedLoad = useInfiniteQuery(() => {
+    const project = selectedProject()
+    const directory = project?.worktree
+    const query = search()
+    const keyword =
+      project && displayName(project).toLowerCase().includes(query.toLowerCase()) ? undefined : query || undefined
+    return {
+      queryKey: ["home", "archived", directory, keyword] as const,
+      enabled: state.archived && !!directory,
+      // 261002 Red 同 sessionLoad：开关翻回来时若首载已失败，不放开就永远空列表。
+      staleTime: 30_000,
+      refetchOnMount: true,
+      initialPageParam: undefined as string | undefined,
+      getNextPageParam: (page: { next?: string }) => page.next,
+      queryFn: async ({ pageParam, signal }) => {
+        const res = await globalSDK.client.experimental.session.list(
+          {
+            directory,
+            roots: true,
+            archivedOnly: true,
+            mode: "code",
+            search: keyword,
+            cursor: pageParam,
+            limit: HOME_SESSION_LIMIT,
+          },
+          { throwOnError: true, signal },
+        )
+        return { sessions: res.data, next: res.response.headers.get("x-next-cursor") ?? undefined }
+      },
+    }
+  })
 
   const boardQuery = () => (state.archived ? archivedLoad : sessionLoad)
 
@@ -174,7 +186,7 @@ export default function Home(props: { initialDirectory?: string }) {
     [
       ...new Map(
         (state.archived
-          ? (archivedLoad.data ?? [])
+          ? (archivedLoad.data?.pages.flatMap((page) => page.sessions) ?? [])
           : projectDirectories().flatMap((directory) =>
               sortedRootSessions(sync.child(directory, { bootstrap: false })[0], Date.now()),
             )
@@ -197,7 +209,7 @@ export default function Home(props: { initialDirectory?: string }) {
         if (!value) return true
         return `${record.session.title} ${record.projectName}`.toLowerCase().includes(value)
       })
-      .slice(0, HOME_SESSION_LIMIT),
+      .slice(0, state.archived ? undefined : HOME_SESSION_LIMIT),
   )
   // 260701 Red 首页左下角看板用：跟 records() 不一样，不做 15 条截断、不排除子 session
   // （子 agent worktree session 也有独立 cost/tokens，不算进去总花费会偏低）。
@@ -370,7 +382,7 @@ export default function Home(props: { initialDirectory?: string }) {
       notifyServerError(language.t, err)
       return
     }
-    await archivedLoad.refetch()
+    await queryClient.invalidateQueries({ queryKey: ["home", "archived", session.directory] })
     // 让它重新出现在正常列表里（归档时已从 store 摘掉，事件回不来就得主动拉）
     await sync.project.loadSessions(session.directory)
   }
@@ -459,7 +471,15 @@ export default function Home(props: { initialDirectory?: string }) {
             <Show when={boardQuery().isError}>
               <div role="alert" class="flex items-center justify-center gap-2 py-3">
                 {language.t("common.requestFailed")}
-                <ButtonV2 onClick={() => void boardQuery().refetch()}>{language.t("common.retry")}</ButtonV2>
+                <ButtonV2
+                  onClick={() =>
+                    void (state.archived && archivedLoad.isFetchNextPageError
+                      ? archivedLoad.fetchNextPage()
+                      : boardQuery().refetch())
+                  }
+                >
+                  {language.t("common.retry")}
+                </ButtonV2>
               </div>
             </Show>
             <Show
@@ -504,6 +524,13 @@ export default function Home(props: { initialDirectory?: string }) {
                   onUnarchive={(session) => void unarchiveSession(session)}
                   showAllIdle={state.archived || search().length > 0}
                 />
+              </div>
+            </Show>
+            <Show when={state.archived && archivedLoad.hasNextPage && !archivedLoad.isError}>
+              <div class="flex justify-end pr-2 pt-3">
+                <ButtonV2 disabled={archivedLoad.isFetching} onClick={() => void archivedLoad.fetchNextPage()}>
+                  {language.t(archivedLoad.isFetchingNextPage ? "common.loading" : "common.loadMore")}
+                </ButtonV2>
               </div>
             </Show>
           </Show>
