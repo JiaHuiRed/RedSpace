@@ -1,6 +1,10 @@
 name: "Setup Bun"
 description: "Setup Bun with caching and install dependencies"
 inputs:
+  install-dependencies:
+    description: "Install workspace dependencies after setting up Bun"
+    required: false
+    default: "true"
   install-flags:
     description: "Additional flags to pass to 'bun install'"
     required: false
@@ -41,24 +45,27 @@ runs:
         bun-download-url: ${{ steps.bun-url.outputs.url }}
 
     - name: Get cache directory
+      if: inputs.install-dependencies == 'true'
       id: cache
       shell: bash
       run: echo "dir=$(bun pm cache)" >> "$GITHUB_OUTPUT"
 
     - name: Restore Bun dependencies
+      if: inputs.install-dependencies == 'true'
       id: bun-cache
       uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
         path: ${{ steps.cache.outputs.dir }}
-        key: ${{ runner.os }}-bun-${{ hashFiles('**/bun.lock') }}
-        restore-keys: |
-          ${{ runner.os }}-bun-
+        # 261125 Red Use the workspace lock, not lockfiles discovered inside installed dependencies.
+        key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
 
     - name: Install setuptools for distutils compatibility
+      if: inputs.install-dependencies == 'true'
       run: python3 -m pip install setuptools || pip install setuptools || true
       shell: bash
 
     - name: Install dependencies
+      if: inputs.install-dependencies == 'true'
       # 261006 Karina 全 OS 统一默认 linker：#28147 已由 bun PR #33646 修复，Windows 的 bun
       # 已在上面钉到含修复的 1.4.2，不再需要 --linker hoisted；而保留 hoisted 会让
       # @hey-api/openapi-ts 吃到顶层 typescript 7 原生移植版把 sdk:build 挂掉。
@@ -68,8 +75,8 @@ runs:
       shell: bash
 
     - name: Save Bun dependencies
-      if: inputs.save-cache == 'true' && steps.bun-cache.outputs.cache-hit != 'true' && github.event_name != 'pull_request' && github.event_name != 'pull_request_target'
+      if: inputs.install-dependencies == 'true' && inputs.save-cache == 'true' && steps.bun-cache.outputs.cache-hit != 'true' && github.event_name != 'pull_request' && github.event_name != 'pull_request_target'
       uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
       with:
         path: ${{ steps.cache.outputs.dir }}
-        key: ${{ runner.os }}-bun-${{ hashFiles('**/bun.lock') }}
+        key: ${{ steps.bun-cache.outputs.cache-primary-key }}

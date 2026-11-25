@@ -1,0 +1,28 @@
+name: Check CI scope
+description: Identify changes that need the dependency-backed checks
+outputs:
+  code:
+    description: Whether to run the dependency-backed checks
+    value: ${{ steps.diff.outputs.code }}
+runs:
+  using: composite
+  steps:
+    - id: diff
+      shell: bash
+      env:
+        BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+      run: |
+        code=true
+        if [[ -n "$BASE_SHA" && ! "$BASE_SHA" =~ ^0+$ ]]; then
+          if ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+            git fetch --no-tags --depth=1 origin "$BASE_SHA" || true
+          fi
+          # Count both sides of a rename. Unknown ranges stay on the full-check path.
+          if git diff --no-renames --quiet "$BASE_SHA" "$GITHUB_SHA" -- . \
+            ':(top,exclude,glob)README*.md' ':(top,exclude,glob)CONTRIBUTING*.md' \
+            ':(top,exclude)CHANGELOG.md' ':(top,exclude)MANUAL.md' ':(top,exclude,glob)docs/**/*.md'; then
+            code=false
+            echo 'Only documentation changed; skipping dependency-backed checks.'
+          fi
+        fi
+        echo "code=$code" >> "$GITHUB_OUTPUT"

@@ -24,8 +24,7 @@ jobs:
   # 261103 Red 两层 CI：push 只跑 smoke（核心 provider/session/httpapi，逐文件独立进程），
   # 全量 unit 与 httpapi gates 移到 nightly.yml。smoke 是唯一必过的回归围栏；全量套件
   # 当前有 100+ 个 4 核 Windows 环境超时，继续挡每次 push 只会制造红点疲劳。
-  # cache 只由 typecheck workflow 保存（默认 save-cache=true）；这里、e2e、audit、nightly
-  # 都跳过保存，避免并发 job 抢同一个 cache key 白等 6 分钟。
+  # Bun 依赖缓存只由 typecheck 保存；smoke、e2e、audit、nightly 只读。
   smoke:
     name: smoke (windows)
     runs-on: windows-latest
@@ -37,25 +36,33 @@ jobs:
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 2
+
+      - name: Check CI scope
+        id: scope
+        uses: ./.github/actions/ci-scope
 
       - name: Setup Node
+        if: steps.scope.outputs.code == 'true'
         uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "24"
 
       - name: Setup Bun
+        if: steps.scope.outputs.code == 'true'
         uses: ./.github/actions/setup-bun
         with:
           save-cache: "false"
 
       - name: Run smoke tests
+        if: steps.scope.outputs.code == 'true'
         working-directory: packages/redspace
         run: bun run test:smoke
         env:
           REDCODE_EXPERIMENTAL_DISABLE_FILEWATCHER: "true"
 
       - name: Publish smoke report
-        if: always()
+        if: always() && steps.scope.outputs.code == 'true'
         uses: mikepenz/action-junit-report@bccf2e31636835cf0874589931c4116687171386 # v6.4.0
         with:
           report_paths: packages/redspace/.artifacts/smoke/*.xml
@@ -65,7 +72,7 @@ jobs:
           fail_on_failure: false
 
       - name: Upload smoke artifact
-        if: always()
+        if: always() && steps.scope.outputs.code == 'true'
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: smoke-windows-${{ github.run_attempt }}

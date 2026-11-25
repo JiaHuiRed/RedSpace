@@ -15,23 +15,35 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+        with:
+          fetch-depth: 2
 
-      # 261103 Red 快闸：只有这个 job 保存 Bun cache；smoke/e2e/audit/nightly 都跳过，
-      # 避免并发 job 抢同一个 cache key 白等 6 分钟。
+      - name: Check CI scope
+        id: scope
+        uses: ./.github/actions/ci-scope
+
+      # 只有这个 job 为根锁文件存 Bun 依赖缓存。
       - name: Setup Bun
         uses: ./.github/actions/setup-bun
+        with:
+          install-dependencies: ${{ steps.scope.outputs.code }}
+
+      - name: Check control bytes
+        run: bun run check:control-bytes
 
       - name: Check RedSpace core layout
+        if: steps.scope.outputs.code == 'true'
         run: bun run check:redspace-layout
 
       - name: Run typecheck
+        if: steps.scope.outputs.code == 'true'
         run: bun typecheck
 
       # 261103 Red 可复现契约从 test.yml 的 gates 前移：这些检查快、确定，和类型检查
       # 同属 push 必过层；httpapi 全量场景留在 nightly。
       - name: Run contract gates
+        if: steps.scope.outputs.code == 'true'
         run: |
           bun run check:openapi-drift
           bun run check:subprocess-timeout
           bun run check:tool-description-budget
-          bun run check:control-bytes

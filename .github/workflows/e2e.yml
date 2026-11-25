@@ -1,34 +1,40 @@
 name: e2e
 
-# 261013 Red 从 test.yml 拆出：e2e 是全套 CI 里最大头（Playwright 30 分钟量级），
-# 而 app E2E 还依赖 packages/core、packages/sdk、packages/ui；这些共享包、
-# package manifest/lock 和 Bun setup action 变更也会影响测试。workflow 级 paths
-# 过滤让 docs/session-core 等无关改动不再白烧 runner。unit/typecheck/secrets 仍全量跑。
+# 261125 Red 浏览器套件跑 Vite + mock HTTP，不启动引擎或 Electron。
+# 保留共享包及冻结安装的输入；引擎的 HTTP 契约由生成物对账和真路由测试验证。
 on:
   push:
     branches:
       - master
     paths:
       - "packages/app/**"
-      - "packages/desktop/**"
-      - "packages/redspace/**"
       - "packages/core/**"
       - "packages/sdk/**"
       - "packages/ui/**"
+      - "packages/*/package.json"
+      - "packages/redspace/script/fix-node-pty.ts"
+      - "script/fix-keymap-junction.ts"
       - "package.json"
       - "bun.lock"
+      - "bunfig.toml"
+      - "tsconfig.json"
+      - "patches/**"
       - ".github/actions/setup-bun/**"
       - ".github/workflows/e2e.yml"
   pull_request:
     paths:
       - "packages/app/**"
-      - "packages/desktop/**"
-      - "packages/redspace/**"
       - "packages/core/**"
       - "packages/sdk/**"
       - "packages/ui/**"
+      - "packages/*/package.json"
+      - "packages/redspace/script/fix-node-pty.ts"
+      - "script/fix-keymap-junction.ts"
       - "package.json"
       - "bun.lock"
+      - "bunfig.toml"
+      - "tsconfig.json"
+      - "patches/**"
       - ".github/actions/setup-bun/**"
       - ".github/workflows/e2e.yml"
   workflow_dispatch:
