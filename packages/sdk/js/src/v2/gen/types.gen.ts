@@ -995,6 +995,66 @@ export type FlightRecorderRow = {
     history: "baseline" | "unchanged" | "append" | "rewind" | "rewrite"
     compressed: boolean
   }
+  diagnostics?: FlightRecorderDiagnostics
+}
+
+export type FlightRecorderDiagnostics = {
+  version: 1
+  runtime: "ai-sdk" | "native"
+  capture?:
+    | {
+        status: "captured"
+        previousRequestID?: string
+        system: {
+          change: "baseline" | "unchanged" | "append" | "rewind" | "rewrite"
+          count: number
+          bytes: number
+          countDelta?: number
+          bytesDelta?: number
+          firstDifference?: number
+        }
+        tools: {
+          change: "baseline" | "unchanged" | "append" | "rewind" | "rewrite"
+          count: number
+          bytes: number
+          countDelta?: number
+          bytesDelta?: number
+          firstDifference?: number
+        }
+        history: {
+          change: "baseline" | "unchanged" | "append" | "rewind" | "rewrite"
+          count: number
+          bytes: number
+          countDelta?: number
+          bytesDelta?: number
+          firstDifference?: number
+        }
+        parameters: "baseline" | "unchanged" | "append" | "rewind" | "rewrite"
+        wire: "baseline" | "unchanged" | "changed"
+        serialized: "baseline" | "unchanged" | "changed"
+        affinity: "baseline" | "unchanged" | "changed" | "unknown"
+        compacted?: true
+        compression?: {
+          receipts: number
+          blockCount: number
+          inputTokensEstimated: number
+          summaryTokensEstimated: number
+          netSavingsEstimated: number
+        }
+      }
+    | {
+        status: "unsupported"
+        reason:
+          "body-too-large" | "body-unavailable" | "invalid-json" | "unsupported-shape" | "message-limit" | "field-limit"
+      }
+  instructions?: {
+    source: "provider"
+    inputTokens?: number
+    cachedTokens?: number
+    cacheWriteTokens?: number
+    missTokens?: number
+  }
+  unattributedInputTokens?: number
 }
 
 export type ContextSnapshot = {

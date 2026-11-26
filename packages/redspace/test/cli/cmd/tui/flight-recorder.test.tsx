@@ -313,6 +313,55 @@ test("row detail shows recorded tokens, cost currency, same-model prefix and sum
 })
 
 // 旧账的 booked 行允许账面命中率，包括记账归零；列表也要直接显示 0%。
+test("request diagnostics are reachable by scrolling a terminal detail", async () => {
+  const section = { change: "unchanged", count: 1, bytes: 50 } as const
+  const load: FlightRecorderLoad = async (input) =>
+    input.source === "steps"
+      ? page([])
+      : page([
+          row({
+            id: "diagnostic",
+            time: 1_700_000_200_000,
+            modelID: "low-model",
+            input: 100,
+            cacheRead: 32,
+            diagnostics: {
+              version: 1,
+              runtime: "ai-sdk",
+              capture: {
+                status: "captured",
+                previousRequestID: "comparison-request",
+                system: section,
+                tools: section,
+                history: { ...section, change: "rewrite", firstDifference: 0 },
+                parameters: "unchanged",
+                wire: "changed",
+                serialized: "changed",
+                affinity: "unchanged",
+              },
+              instructions: { source: "provider", inputTokens: 30, cachedTokens: 0, missTokens: 30 },
+              unattributedInputTokens: 38,
+            },
+          }),
+          row({ id: "comparison-request", time: 1_700_000_100_000, input: 100, cacheRead: 98 }),
+        ])
+  const modal = await mount(() => <DialogFlightRecorder sessionID="ses_test" load={load} />, { height: 26 })
+  try {
+    await modal.until(() => modal.app.captureCharFrame().includes("没有执行记录"))
+    modal.app.mockInput.pressKey("s", { ctrl: true })
+    await modal.until(() => modal.app.captureCharFrame().includes("low-model"))
+    modal.keymap().dispatchCommand("dialog.select.submit")
+    const top = await modal.until(() => modal.app.captureCharFrame().includes("基准命中率"))
+    expect(top).toContain("基准命中率 98%")
+    modal.app.mockInput.pressKey("\u001b[6~")
+    const bottom = await modal.until(() => modal.app.captureCharFrame().includes("未归因的未读缓存输入"))
+    expect(bottom).toContain("未归因的未读缓存输入 38")
+    expect(bottom).toContain("读取 0")
+  } finally {
+    modal.app.renderer.destroy()
+  }
+})
+
 test("booked ledger rows expose the ledger hit rate including a recorded zero", async () => {
   const load: FlightRecorderLoad = async () =>
     page([

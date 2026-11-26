@@ -33,6 +33,16 @@ export type Context = {
   readonly lastCompactionAt?: number
 }
 
+type Affinity = Readonly<Record<string, string>>
+
+function compareAffinity(previous: Affinity | undefined, current: Affinity) {
+  if (!previous) return "baseline"
+  const keys = Object.keys(current)
+  const previousCount = Object.keys(previous).length
+  if (keys.length === 0 && previousCount === 0) return "unknown"
+  return keys.length === previousCount && keys.every((key) => current[key] === previous[key]) ? "unchanged" : "changed"
+}
+
 type Entry = {
   readonly sha256: string
   readonly length: number
@@ -49,6 +59,8 @@ type SectionObservation = {
   readonly count: number
   readonly length: number
   readonly change: "baseline" | "unchanged" | "append" | "rewind" | "rewrite"
+  readonly countDelta?: number
+  readonly lengthDelta?: number
   readonly difference?: {
     readonly index: number
     readonly previous?: Entry
@@ -64,6 +76,8 @@ type Compression = {
 }
 
 type Fingerprint = {
+  readonly requestID: string
+  readonly affinity: Readonly<Record<string, string>>
   readonly system: Sequence
   readonly tools: Sequence
   readonly history: Sequence
@@ -89,16 +103,27 @@ type Bucket = {
   missStreak?: number
 }
 
+export const CaptureFailureReasons = [
+  "body-too-large",
+  "body-unavailable",
+  "invalid-json",
+  "unsupported-shape",
+  "message-limit",
+  "field-limit",
+] as const
+
 export type CaptureObservation =
   | {
       readonly status: "captured"
       readonly requestID: string
+      readonly previousRequestID?: string
       readonly system: SectionObservation
       readonly tools: SectionObservation
       readonly history: SectionObservation
       readonly parameters: SectionObservation
       readonly serialized: Entry & { readonly change: "baseline" | "unchanged" | "changed" }
       readonly affinity: Readonly<Record<string, string>>
+      readonly affinityChange: "baseline" | "unchanged" | "changed" | "unknown"
       readonly wire: {
         readonly sha256: string
         readonly length: number
@@ -111,7 +136,7 @@ export type CaptureObservation =
   | {
       readonly status: "unsupported"
       readonly requestID: string
-      readonly reason: "body-too-large" | "body-unavailable" | "invalid-json" | "unsupported-shape" | "message-limit" | "field-limit"
+      readonly reason: (typeof CaptureFailureReasons)[number]
     }
 
 export type EventObservation =
@@ -119,6 +144,7 @@ export type EventObservation =
       readonly type: "usage"
       readonly usageStatus: "reported" | "output-only-estimated" | "missing"
       readonly rawUsage?: Readonly<Record<string, number>>
+      readonly providerFields?: Readonly<Record<string, number>>
       // 261118 Red native 路径的同一套派生：原始 usage 在 Usage.providerMetadata.openai。
       readonly uncachedInputTokens?: number
       readonly instructions?: InstructionAttribution
@@ -167,7 +193,7 @@ export type ObserverHooks = {
 // 261012 Red finish 事件里原始 vendor usage 的白名单投影。@ai-sdk/openai 的 Responses
 // converter 用 `cached_tokens ?? 0` 把「字段缺失」与「显式 0」归一成同一个 0，下游
 // LLMAISDK.usage 再也分不开；只有归一化之前的原始 usage 能给出显式在场判定。
-// 原始对象本身从不入日志——只收下列有限数值标量（字段数上界 = 白名单长度 12）。
+// 原始对象本身从不入日志，只收下列白名单数值。
 // 261118 Red attribution 是 Codex OAuth 端点按字段返回的缓存归因（codex#62109）：
 // AI SDK 的 Responses usage schema 对未知键透传，orchestration_* 字段已证明这点。
 // 口径与验证步骤见 docs/notes/implemented/feature/2026-11-18-cache-attribution-diagnostics.md。
@@ -183,6 +209,8 @@ const PROVIDER_USAGE_FIELDS = [
   "input_tokens_details.cached_tokens",
   "input_tokens_details.cache_write_tokens",
   "prompt_tokens_details.cached_tokens",
+  "prompt_cache_hit_tokens",
+  "prompt_cache_miss_tokens",
   "cache_read_input_tokens",
   "cache_creation_input_tokens",
   "input_tokens_details.orchestration_input_tokens",
@@ -349,6 +377,8 @@ function transition(previous: Sequence | undefined, current: Sequence): SectionO
     count: current.entries.length,
     length: current.length,
     change,
+    countDelta: current.entries.length - previous.entries.length,
+    lengthDelta: current.length - previous.length,
     ...(same
       ? {}
       : {
@@ -520,13 +550,16 @@ function routeHashes(input: TransportInput): Pick<TransportObservation, "headerH
   }
 }
 
-// 261012 Red finish part 的原始 vendor usage 投影：只走白名单路径、只收有限数值。
+export function tokenCount(value: unknown) {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : undefined
+}
+
+// 261012 Red finish part 的原始 vendor usage 投影：只走白名单路径。
 function providerFields(raw: unknown) {
   return PROVIDER_USAGE_FIELDS.reduce<Record<string, number>>((result, field) => {
-    const value = field
-      .split(".")
-      .reduce<unknown>((cursor, key) => (isRecord(cursor) ? cursor[key] : undefined), raw)
-    if (typeof value === "number" && Number.isFinite(value)) result[field] = value
+    const value = field.split(".").reduce<unknown>((cursor, key) => (isRecord(cursor) ? cursor[key] : undefined), raw)
+    const count = tokenCount(value)
+    if (count !== undefined) result[field] = count
     return result
   }, {})
 }
@@ -540,9 +573,16 @@ function usageDerivation(fields: Readonly<Record<string, number>>) {
   const instructionInput = fields[INSTRUCTION_INPUT_FIELD]
   const instructionCached = fields[INSTRUCTION_CACHED_FIELD]
   const instructionWrite = fields[INSTRUCTION_WRITE_FIELD]
-  const uncached = input !== undefined && cached !== undefined ? input - cached : undefined
+  const uncached = input !== undefined && cached !== undefined && cached <= input ? input - cached : undefined
+  const comparable =
+    input !== undefined &&
+    cached !== undefined &&
+    instructionInput !== undefined &&
+    instructionCached !== undefined &&
+    instructionInput <= input &&
+    instructionCached <= cached
   const miss =
-    instructionInput !== undefined && instructionCached !== undefined
+    instructionInput !== undefined && instructionCached !== undefined && instructionCached <= instructionInput
       ? instructionInput - instructionCached
       : undefined
   const instructions =
@@ -557,7 +597,9 @@ function usageDerivation(fields: Readonly<Record<string, number>>) {
   return {
     ...(uncached === undefined ? {} : { uncachedInputTokens: uncached }),
     ...(instructions === undefined ? {} : { instructions }),
-    ...(uncached === undefined || miss === undefined ? {} : { unattributedInputTokens: uncached - miss }),
+    ...(comparable && uncached !== undefined && miss !== undefined && miss <= uncached
+      ? { unattributedInputTokens: uncached - miss }
+      : {}),
   }
 }
 
@@ -582,7 +624,7 @@ function observeCompression(
 ): CompressionObservation | undefined {
   const wrapped = event.result.value
   const metadata = isRecord(wrapped) ? wrapped.metadata : undefined
-  const candidate = isRecord(metadata) ? metadata.nativeCompression ?? metadata.dcpCompression : undefined
+  const candidate = isRecord(metadata) ? (metadata.nativeCompression ?? metadata.dcpCompression) : undefined
   if (!candidate) return { type: "compression", status: "metadata-unavailable" }
   const value = compression(candidate)
   if (!value) return { type: "compression", status: "invalid" }
@@ -648,16 +690,18 @@ export function create(
     const rawUsage = usageFields(event.usage)
     // 261118 Red native 路径把原始 usage 放在 Usage.providerMetadata.openai，
     // 与 AI SDK 的 usage.raw 共用同一套白名单投影与派生。
-    const providerRaw = isRecord(event.usage?.providerMetadata)
-      ? event.usage.providerMetadata["openai"]
-      : undefined
-    const derivation = usageDerivation(providerFields(providerRaw))
+    const providerRaw = isRecord(event.usage?.providerMetadata) ? event.usage.providerMetadata["openai"] : undefined
+    const fields = providerFields(providerRaw)
+    const derivation = usageDerivation(fields)
     const cacheReadInputTokens = event.usage?.cacheReadInputTokens
     const cacheWriteInputTokens = event.usage?.cacheWriteInputTokens
     const observation: EventObservation = {
       type: "usage",
       usageStatus,
       ...(rawUsage ? { rawUsage } : {}),
+      ...(fields["prompt_cache_hit_tokens"] !== undefined || fields["prompt_cache_miss_tokens"] !== undefined
+        ? { providerFields: fields }
+        : {}),
       ...derivation,
       cache:
         cacheReadInputTokens === undefined && cacheWriteInputTokens === undefined
@@ -714,53 +758,28 @@ export function create(
       const bucket = buckets.get(id) ?? { pending: new Map<string, Compression>() }
       buckets.set(id, bucket)
       evictor.touch(id)
-      if (body instanceof Uint8Array && body.byteLength > limits.maxBodyBytes) {
-        const observation: CaptureObservation = { status: "unsupported", requestID, reason: "body-too-large" }
+      const unsupported = (reason: (typeof CaptureFailureReasons)[number]): CaptureObservation => {
+        const observation: CaptureObservation = { status: "unsupported", requestID, reason }
         record("request.prefix", { ...common(), ...observation })
+        notify(() => hooks?.capture?.(observation))
         return observation
       }
-      const bodyText = typeof body === "string"
-        ? body
-        : body instanceof Uint8Array
-          ? new TextDecoder().decode(body)
-          : serialize(body)
-      if (bodyText === undefined) {
-        const observation: CaptureObservation = { status: "unsupported", requestID, reason: "body-unavailable" }
-        record("request.prefix", { ...common(), ...observation })
-        return observation
-      }
+      if (body instanceof Uint8Array && body.byteLength > limits.maxBodyBytes) return unsupported("body-too-large")
+      const bodyText =
+        typeof body === "string" ? body : body instanceof Uint8Array ? new TextDecoder().decode(body) : serialize(body)
+      if (bodyText === undefined) return unsupported("body-unavailable")
       if (bodyText.length > limits.maxBodyBytes || Buffer.byteLength(bodyText, "utf8") > limits.maxBodyBytes) {
-        const observation: CaptureObservation = { status: "unsupported", requestID, reason: "body-too-large" }
-        record("request.prefix", { ...common(), ...observation })
-        return observation
+        return unsupported("body-too-large")
       }
       const decoded = parse(bodyText)
-      if (!isRecord(decoded)) {
-        const observation: CaptureObservation = { status: "unsupported", requestID, reason: "invalid-json" }
-        record("request.prefix", { ...common(), ...observation })
-        return observation
-      }
+      if (!isRecord(decoded)) return unsupported("invalid-json")
       const fields = Object.keys(decoded)
-      if (fields.length > limits.maxMessages) {
-        const observation: CaptureObservation = { status: "unsupported", requestID, reason: "field-limit" }
-        record("request.prefix", { ...common(), ...observation })
-        return observation
-      }
+      if (fields.length > limits.maxMessages) return unsupported("field-limit")
       const projected = project(decoded)
-      if (!projected) {
-        const observation: CaptureObservation = { status: "unsupported", requestID, reason: "unsupported-shape" }
-        record("request.prefix", { ...common(), ...observation })
-        return observation
-      }
-      if (projected.messageCount > limits.maxMessages) {
-        const observation: CaptureObservation = { status: "unsupported", requestID, reason: "message-limit" }
-        record("request.prefix", { ...common(), ...observation })
-        return observation
-      }
+      if (!projected) return unsupported("unsupported-shape")
+      if (projected.messageCount > limits.maxMessages) return unsupported("message-limit")
       if (projected.system.length > limits.maxMessages || projected.tools.length > limits.maxMessages) {
-        const observation: CaptureObservation = { status: "unsupported", requestID, reason: "field-limit" }
-        record("request.prefix", { ...common(), ...observation })
-        return observation
+        return unsupported("field-limit")
       }
       const cache = new Map<unknown, Entry>()
       const system = sequence(projected.system, cache)
@@ -773,13 +792,19 @@ export function create(
         ].includes(field)).map((field) => ({ field, value: decoded[field] })),
         cache,
       )
-      if (!system || !tools || !history || !wire || !parameters) {
-        const observation: CaptureObservation = { status: "unsupported", requestID, reason: "unsupported-shape" }
-        record("request.prefix", { ...common(), ...observation })
-        return observation
-      }
+      if (!system || !tools || !history || !wire || !parameters) return unsupported("unsupported-shape")
+      const affinity = Object.fromEntries(
+        ["model", "prompt_cache_key", "prompt_cache_options", "prompt_cache_retention", "service_tier", "reasoning"]
+          .filter((field) => Object.hasOwn(decoded, field))
+          .map((field) => [field, identity(serialize(decoded[field]) ?? "")]),
+      )
       const current: Fingerprint = {
-        system, tools, history, parameters,
+        requestID,
+        affinity,
+        system,
+        tools,
+        history,
+        parameters,
         serialized: { sha256: hash(bodyText), length: Buffer.byteLength(bodyText, "utf8") },
         wire: { sha256: wire.sha256, length: wire.length },
       }
@@ -804,6 +829,7 @@ export function create(
       const observation: CaptureObservation = {
         status: "captured",
         requestID,
+        previousRequestID: previous?.requestID,
         system: transition(previous?.system, current.system),
         tools: transition(previous?.tools, current.tools),
         history: historyObservation,
@@ -814,19 +840,12 @@ export function create(
             ? previous.serialized.sha256 === current.serialized.sha256 ? "unchanged" : "changed"
             : "baseline",
         },
-        affinity: Object.fromEntries(
-          ["model", "prompt_cache_key", "prompt_cache_options", "prompt_cache_retention", "service_tier", "reasoning"]
-            .filter((field) => Object.hasOwn(decoded, field))
-            .map((field) => [field, identity(serialize(decoded[field]) ?? "")]),
-        ),
+        affinity,
+        affinityChange: compareAffinity(previous?.affinity, affinity),
         wire: {
           sha256: current.wire.sha256,
           length: current.wire.length,
-          change: previous
-            ? previous.wire.sha256 === current.wire.sha256
-              ? "unchanged"
-              : "changed"
-            : "baseline",
+          change: previous ? (previous.wire.sha256 === current.wire.sha256 ? "unchanged" : "changed") : "baseline",
         },
         afterCompression,
         ...(compacted ? { compacted: true } : {}),

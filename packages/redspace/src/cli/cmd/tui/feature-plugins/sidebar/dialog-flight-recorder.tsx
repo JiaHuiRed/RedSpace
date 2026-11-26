@@ -1,5 +1,6 @@
-import { TextAttributes } from "@opentui/core"
-import type { FlightRecorderPage, FlightRecorderRow } from "@redcode-ai/sdk/v2"
+import { TextAttributes, type ScrollBoxRenderable } from "@opentui/core"
+import { useTerminalDimensions } from "@opentui/solid"
+import type { FlightRecorderDiagnostics, FlightRecorderPage, FlightRecorderRow } from "@redcode-ai/sdk/v2"
 import type { TuiPluginApi } from "@redcode-ai/plugin/tui"
 import { useBindings } from "@tui/keymap"
 import { DialogSelect, type DialogSelectOption } from "@tui/ui/dialog-select"
@@ -423,6 +424,12 @@ export function DialogFlightRecorder(props: {
       {(row) => (
         <FlightRecorderDetail
           row={row()}
+          previous={(() => {
+            const capture = row().diagnostics?.capture
+            return capture?.status === "captured" && capture.previousRequestID
+              ? rows().find((item) => item.id === capture.previousRequestID)
+              : undefined
+          })()}
           source={source()}
           onBack={() => {
             setSelected(undefined)
@@ -433,8 +440,18 @@ export function DialogFlightRecorder(props: {
   )
 }
 
-function FlightRecorderDetail(props: { row: FlightRecorderRow; source: FlightRecorderSource; onBack: () => void }) {
+function FlightRecorderDetail(props: {
+  row: FlightRecorderRow
+  previous?: FlightRecorderRow
+  source: FlightRecorderSource
+  onBack: () => void
+}) {
   const { theme } = useTheme()
+  const dimensions = useTerminalDimensions()
+  let scroll: ScrollBoxRenderable | undefined
+  const page = (direction: -1 | 1) => {
+    if (scroll) scroll.scrollBy(direction * Math.max(1, scroll.height - 1))
+  }
   const row = () => props.row
   const hitRate = createMemo(() => cacheHitPercent(row()))
   const cacheValues = createMemo(() =>
@@ -456,6 +473,8 @@ function FlightRecorderDetail(props: { row: FlightRecorderRow; source: FlightRec
     bindings: [
       { key: "left", cmd: "sidebar.flight_recorder.back", desc: "返回列表", group: "Dialog" },
       { key: "backspace", cmd: "sidebar.flight_recorder.back", desc: "返回列表", group: "Dialog" },
+      { key: "pageup", cmd: () => page(-1), desc: "向上滚动详情", group: "Dialog" },
+      { key: "pagedown", cmd: () => page(1), desc: "向下滚动详情", group: "Dialog" },
     ],
   }))
 
@@ -469,60 +488,142 @@ function FlightRecorderDetail(props: { row: FlightRecorderRow; source: FlightRec
           ← 返回
         </text>
       </box>
-      <text fg={theme.textMuted}>
-        {formatRecordedTime(row().time)} · {row().providerID}/{row().modelID}
-      </text>
-      <text fg={theme.textMuted}>
-        结果 {outcomeLabel(row().outcome)}
-        <Show when={row().summary}> · 摘要消息</Show>
-      </text>
-      <Show when={row().outcome === "estimated"}>
-        <text fg={theme.warning}>数值口径 估算（非实报）</text>
-      </Show>
-      <Show when={props.source === "steps" || row().outcome === "booked"}>
-        <text fg={theme.textMuted}>缓存口径 账单归一化（记账 0 可能来自缺报归零，不代表供应商显式 0）</text>
-      </Show>
-      <text fg={theme.textMuted}>
-        输入（含缓存） <span style={{ fg: theme.text }}>{formatRecordedNumber(row().input)}</span>
-      </text>
-      <text fg={theme.textMuted}>
-        输出（含推理） <span style={{ fg: theme.text }}>{formatRecordedNumber(row().output)}</span>
-      </text>
-      <Show when={cacheValues().length > 0} fallback={<text fg={theme.textMuted}>缓存 未采集</text>}>
-        <For each={cacheValues()}>
-          {(item) => (
+      <scrollbox
+        ref={(value: ScrollBoxRenderable) => (scroll = value)}
+        maxHeight={Math.max(1, dimensions().height - Math.ceil(dimensions().height / 4) - 6)}
+        scrollbarOptions={{ visible: false }}
+      >
+        <box flexDirection="column">
+          <text fg={theme.textMuted}>
+            {formatRecordedTime(row().time)} · {row().providerID}/{row().modelID}
+          </text>
+          <text fg={theme.textMuted}>
+            结果 {outcomeLabel(row().outcome)}
+            <Show when={row().summary}> · 摘要消息</Show>
+          </text>
+          <Show when={row().outcome === "estimated"}>
+            <text fg={theme.warning}>数值口径 估算（非实报）</text>
+          </Show>
+          <Show when={props.source === "steps" || row().outcome === "booked"}>
+            <text fg={theme.textMuted}>缓存口径 账单归一化（记账 0 可能来自缺报归零，不代表供应商显式 0）</text>
+          </Show>
+          <text fg={theme.textMuted}>
+            输入（含缓存） <span style={{ fg: theme.text }}>{formatRecordedNumber(row().input)}</span>
+          </text>
+          <text fg={theme.textMuted}>
+            输出（含推理） <span style={{ fg: theme.text }}>{formatRecordedNumber(row().output)}</span>
+          </text>
+          <Show when={cacheValues().length > 0} fallback={<text fg={theme.textMuted}>缓存 未采集</text>}>
+            <For each={cacheValues()}>
+              {(item) => (
+                <text fg={theme.textMuted}>
+                  {item.label} <span style={{ fg: theme.text }}>{formatRecordedNumber(item.value)}</span>
+                </text>
+              )}
+            </For>
+            <Show when={hitRate() !== undefined}>
+              <text fg={theme.textMuted}>
+                {cacheHitLabel(row())} <span style={{ fg: theme.text }}>{hitRate()}%</span>
+              </text>
+            </Show>
+          </Show>
+          <text fg={theme.textMuted}>
+            费用 <span style={{ fg: theme.text }}>{formatRecordedCost(row().cost, row().currency)}</span>
+          </text>
+          <Show when={row().durationMs !== undefined}>
             <text fg={theme.textMuted}>
-              {item.label} <span style={{ fg: theme.text }}>{formatRecordedNumber(item.value)}</span>
+              耗时 <span style={{ fg: theme.text }}>{formatRecordedDuration(row().durationMs)}</span>
             </text>
-          )}
-        </For>
-        <Show when={hitRate() !== undefined}>
-          <text fg={theme.textMuted}>
-            {cacheHitLabel(row())} <span style={{ fg: theme.text }}>{hitRate()}%</span>
-          </text>
-        </Show>
-      </Show>
+          </Show>
+          <Show when={row().firstEventMs !== undefined}>
+            <text fg={theme.textMuted}>
+              首事件 <span style={{ fg: theme.text }}>{formatRecordedDuration(row().firstEventMs)}</span>
+            </text>
+          </Show>
+          <Show when={!row().diagnostics?.capture && row().prefix}>
+            {(prefix) => (
+              <text fg={theme.textMuted}>
+                同模型前缀 <span style={{ fg: theme.text }}>{prefixParts(prefix()).join(" · ")}</span>
+              </text>
+            )}
+          </Show>
+          <Show when={row().diagnostics}>
+            {(data) => <RequestDiagnostics data={data()} previous={props.previous} />}
+          </Show>
+        </box>
+      </scrollbox>
       <text fg={theme.textMuted}>
-        费用 <span style={{ fg: theme.text }}>{formatRecordedCost(row().cost, row().currency)}</span>
+        ← / Backspace 返回列表
+        <Show when={row().diagnostics}> · PgUp / PgDn 滚动</Show>
       </text>
-      <Show when={row().durationMs !== undefined}>
-        <text fg={theme.textMuted}>
-          耗时 <span style={{ fg: theme.text }}>{formatRecordedDuration(row().durationMs)}</span>
-        </text>
-      </Show>
-      <Show when={row().firstEventMs !== undefined}>
-        <text fg={theme.textMuted}>
-          首事件 <span style={{ fg: theme.text }}>{formatRecordedDuration(row().firstEventMs)}</span>
-        </text>
-      </Show>
-      <Show when={row().prefix}>
-        {(prefix) => (
-          <text fg={theme.textMuted}>
-            同模型前缀 <span style={{ fg: theme.text }}>{prefixParts(prefix()).join(" · ")}</span>
-          </text>
-        )}
-      </Show>
-      <text fg={theme.textMuted}>← / Backspace 返回列表</text>
     </box>
   )
+}
+
+type RequestCapture = NonNullable<FlightRecorderDiagnostics["capture"]>
+type Captured = Extract<RequestCapture, { status: "captured" }>
+
+const CAPTURE_FAILURE_LABEL: Record<Extract<RequestCapture, { status: "unsupported" }>["reason"], string> = {
+  "body-too-large": "请求正文超过采集上限",
+  "body-unavailable": "请求正文不可用",
+  "invalid-json": "请求 JSON 无法解析",
+  "unsupported-shape": "请求结构不支持",
+  "message-limit": "消息条数超限",
+  "field-limit": "字段数超限",
+}
+
+function RequestDiagnostics(props: { data: FlightRecorderDiagnostics; previous?: FlightRecorderRow }) {
+  const { theme } = useTheme()
+  const number = formatRecordedNumber
+  const amount = (value: number, delta?: number) =>
+    delta === undefined ? number(value) : `${number(value)} (${delta > 0 ? "+" : ""}${number(delta)})`
+  const section = (item: Captured["system"]) =>
+    [
+      prefixTransitionLabel(item.change),
+      `${amount(item.count, item.countDelta)} 项`,
+      `${amount(item.bytes, item.bytesDelta)} B`,
+      item.firstDifference === undefined ? undefined : `首差第 ${number(item.firstDifference + 1)} 项`,
+    ]
+      .filter(Boolean)
+      .join(" · ")
+  const compare = (change: Captured["affinity"]) =>
+    change === "changed" ? "已变" : change === "unknown" ? "未知" : prefixTransitionLabel(change)
+  const lines = createMemo(() => {
+    const data = props.data
+    const lines = [`运行时 ${data.runtime === "native" ? "Native" : "AI SDK"}`]
+    const capture = data.capture
+    if (capture?.status === "unsupported") lines.push(`前缀未采集 ${CAPTURE_FAILURE_LABEL[capture.reason]}`)
+    if (capture?.status === "captured") {
+      lines.push(`同桶基准 ${capture.previousRequestID ?? "首次采集"}`)
+      if (capture.previousRequestID) {
+        const rate = props.previous && cacheHitPercent(props.previous)
+        lines.push(`基准命中率 ${rate === undefined ? "未加载或未采集" : `${rate}%`}`)
+      }
+      lines.push(
+        `system ${section(capture.system)}`,
+        `tools ${section(capture.tools)}`,
+        `history ${section(capture.history)}`,
+        `参数 ${prefixTransitionLabel(capture.parameters)} · 有序内容 ${compare(capture.wire)}`,
+        `整份 JSON ${compare(capture.serialized)} · 亲和字段 ${compare(capture.affinity)}`,
+        capture.compacted || capture.compression ? "观察到新压缩" : "未观察到新压缩",
+      )
+      const stats = capture.compression
+      if (stats)
+        lines.push(
+          `压缩估算 ${number(stats.receipts)} 份回执 · ${number(stats.blockCount)} 块`,
+          `${number(stats.inputTokensEstimated)} → ${number(stats.summaryTokensEstimated)} Token · 节省 ${number(stats.netSavingsEstimated)}`,
+        )
+    }
+    const instructions = data.instructions
+    if (instructions)
+      lines.push(
+        "Instructions 归因（供应商实报）",
+        `输入 ${number(instructions.inputTokens)} · 读取 ${number(instructions.cachedTokens)}`,
+        `写入 ${number(instructions.cacheWriteTokens)} · 未读 ${number(instructions.missTokens)}`,
+      )
+    if (data.unattributedInputTokens !== undefined)
+      lines.push(`未归因的未读缓存输入 ${number(data.unattributedInputTokens)}`)
+    return lines
+  })
+  return <For each={lines()}>{(line) => <text fg={theme.textMuted}>{line}</text>}</For>
 }

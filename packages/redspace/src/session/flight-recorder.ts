@@ -2,6 +2,7 @@ import { and, desc, eq, sql } from "drizzle-orm"
 import { Option, Schema } from "effect"
 import { Database } from "@/storage/db"
 import { FlightRequestTable } from "./flight-request.sql"
+import { Diagnostics, PrefixChange } from "./flight-recording"
 import type { SessionID } from "./schema"
 import { MessageTable, PartTable } from "./session.sql"
 
@@ -9,7 +10,6 @@ import { MessageTable, PartTable } from "./session.sql"
 export const Source = Schema.Literals(["steps", "requests"])
 export type Source = typeof Source.Type
 export const MAX_PAGE = 50
-const change = Schema.Literals(["baseline", "unchanged", "append", "rewind", "rewrite"])
 const metric = Schema.optional(Schema.Finite)
 export const Row = Schema.Struct({
   id: Schema.String,
@@ -29,8 +29,9 @@ export const Row = Schema.Struct({
   durationMs: metric,
   firstEventMs: metric,
   prefix: Schema.optional(
-    Schema.Struct({ system: change, tools: change, history: change, compressed: Schema.Boolean }),
+    Schema.Struct({ system: PrefixChange, tools: PrefixChange, history: PrefixChange, compressed: Schema.Boolean }),
   ),
+  diagnostics: Schema.optional(Diagnostics),
 }).annotate({ identifier: "FlightRecorderRow" })
 export type Row = typeof Row.Type
 export const Page = Schema.Struct({

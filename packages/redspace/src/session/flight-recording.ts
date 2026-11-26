@@ -1,10 +1,11 @@
-import { Cause, Exit } from "effect"
+import { Cause, Exit, Schema } from "effect"
 import { and, desc, eq, notInArray } from "drizzle-orm"
 import type { LLMEvent } from "@redcode-ai/llm"
 import { Database } from "@/storage/db"
 import type { ModelID, ProviderID } from "@/provider/schema"
 import type { MessageID, SessionID } from "./schema"
 import { FlightRequestTable } from "./flight-request.sql"
+import { CaptureFailureReasons, tokenCount } from "./request-evidence"
 import type {
   CaptureObservation,
   EventObservation,
@@ -20,7 +21,60 @@ export const KEEP_PER_SESSION = 128
 // provider/model/会话/消息/关联号都是短标识；超限视为不可信输入，整行跳过而不截断成另一个 ID。
 const MAX_ID_BYTES = 512
 
-export type PrefixChange = "baseline" | "unchanged" | "append" | "rewind" | "rewrite"
+export const PrefixChange = Schema.Literals(["baseline", "unchanged", "append", "rewind", "rewrite"])
+type PrefixChange = typeof PrefixChange.Type
+
+const metric = Schema.optional(Schema.Finite)
+const Section = Schema.Struct({
+  change: PrefixChange,
+  count: Schema.Int,
+  bytes: Schema.Int,
+  countDelta: Schema.optional(Schema.Int),
+  bytesDelta: Schema.optional(Schema.Int),
+  firstDifference: Schema.optional(Schema.Int),
+})
+const Comparison = Schema.Literals(["baseline", "unchanged", "changed"])
+const Capture = Schema.Union([
+  Schema.Struct({
+    status: Schema.Literal("captured"),
+    previousRequestID: Schema.optional(Schema.String),
+    system: Section,
+    tools: Section,
+    history: Section,
+    parameters: PrefixChange,
+    wire: Comparison,
+    serialized: Comparison,
+    affinity: Schema.Literals(["baseline", "unchanged", "changed", "unknown"]),
+    compacted: Schema.optional(Schema.Literal(true)),
+    compression: Schema.optional(
+      Schema.Struct({
+        receipts: Schema.Int,
+        blockCount: Schema.Finite,
+        inputTokensEstimated: Schema.Finite,
+        summaryTokensEstimated: Schema.Finite,
+        netSavingsEstimated: Schema.Finite,
+      }),
+    ),
+  }),
+  Schema.Struct({ status: Schema.Literal("unsupported"), reason: Schema.Literals(CaptureFailureReasons) }),
+])
+
+export const Diagnostics = Schema.Struct({
+  version: Schema.Literal(1),
+  runtime: Schema.Literals(["ai-sdk", "native"]),
+  capture: Schema.optional(Capture),
+  instructions: Schema.optional(
+    Schema.Struct({
+      source: Schema.Literal("provider"),
+      inputTokens: metric,
+      cachedTokens: metric,
+      cacheWriteTokens: metric,
+      missTokens: metric,
+    }),
+  ),
+  unattributedInputTokens: metric,
+}).annotate({ identifier: "FlightRecorderDiagnostics" })
+type Diagnostics = typeof Diagnostics.Type
 
 // 261126 Red 行 data 的唯一契约：只允许这些白名单字段。present zero 与 missing 由键是否
 // 出现区分；缺 usage/时间就是未知，不借用同一步、重试或续写的另一份数字。
@@ -45,19 +99,21 @@ export type RequestData = {
     readonly history: PrefixChange
     readonly compressed: boolean
   }
+  readonly diagnostics?: Diagnostics
 }
 
 type Usage = Pick<RequestData, "input" | "output" | "cacheRead" | "cacheWrite" | "cacheMiss">
-type Prefix = NonNullable<RequestData["prefix"]>
+type SectionObservation = Extract<CaptureObservation, { status: "captured" }>["system"]
+type UsageEvent = Extract<EventObservation, { type: "usage" }>
 
 type Attempt = {
   readonly requestID: string
   readonly startedAt: number
-  prefix?: Prefix
+  capture?: typeof Capture.Type
   firstEventAt?: number
   // 261126 Red AI SDK 只认同 ID 的原始 vendor usage；native 用共享 LLMEvent 的归一化值。
   raw?: ProviderUsageObservation
-  usage?: Usage
+  usage?: UsageEvent
   // SDK 的 finish part（providerUsage 钩子）或 native 的 finish 事件是本请求完成的证据；
   // 不用整流退出/总量推断单次请求。
   finishedAt?: number
@@ -75,27 +131,58 @@ export type CreateInput = {
   readonly providerID: ProviderID
   readonly modelID: ModelID
   readonly runtime: Runtime
+  readonly anthropic?: boolean
 }
 
 const cacheMiss = (input: number | undefined, cacheRead: number | undefined) =>
   input === undefined || cacheRead === undefined || cacheRead > input ? undefined : input - cacheRead
 
-// 261126 Red 原始 vendor usage → 行字段。只读同 ID 观察过的白名单数值：
-// - OpenAI Chat: prompt_tokens/completion_tokens（总输入已含缓存）
-// - OpenAI Responses: input_tokens/output_tokens（总输入已含缓存）
-// - Anthropic: input_tokens 是未缓存部分，需加上 cache_read/cache_creation 才是总输入
-// 任一缓存字段缺失就保持 missing（不补 0）；read > input 的矛盾样本只保留原值、不派生 miss。
-function reportedUsage(observation: ProviderUsageObservation): Usage {
-  const fields = observation.fields
-  const cacheRead =
-    fields["input_tokens_details.cached_tokens"] ??
-    fields["prompt_tokens_details.cached_tokens"] ??
-    fields["cache_read_input_tokens"]
-  const cacheWrite = fields["input_tokens_details.cache_write_tokens"] ?? fields["cache_creation_input_tokens"]
-  const anthropic = fields["cache_read_input_tokens"] !== undefined || fields["cache_creation_input_tokens"] !== undefined
-  const base = fields["input_tokens"] ?? fields["prompt_tokens"]
-  const input = base === undefined ? undefined : anthropic ? base + (cacheRead ?? 0) + (cacheWrite ?? 0) : base
-  const output = fields["output_tokens"] ?? fields["completion_tokens"]
+// 261126 Red Anthropic 把输入拆成未缓存、缓存读取、缓存写入三项，三项齐全才能确定总量。
+function splitInput(base: number | undefined, read: number | undefined, write: number | undefined) {
+  return base === undefined || read === undefined || write === undefined ? undefined : tokenCount(base + read + write)
+}
+
+function reportedUsage(fields: ProviderUsageObservation["fields"], anthropic: boolean | undefined): Usage {
+  const base = tokenCount(fields["input_tokens"] ?? fields["prompt_tokens"])
+  const read = tokenCount(fields["cache_read_input_tokens"])
+  const write = tokenCount(fields["cache_creation_input_tokens"])
+  const split = anthropic || read !== undefined || write !== undefined
+  const input = split ? splitInput(base, read, write) : base
+  const hit = tokenCount(fields["prompt_cache_hit_tokens"])
+  const miss = tokenCount(fields["prompt_cache_miss_tokens"])
+  // 261126 Red 部分兼容网关的 hit 是累计值。按本次输入上限和可用的 hit+miss 分项核验。
+  const validBreakdown =
+    !split &&
+    input !== undefined &&
+    (hit === undefined || hit <= input) &&
+    (miss === undefined || miss <= input) &&
+    (hit === undefined || miss === undefined || hit + miss === input)
+  const cacheRead = split
+    ? read
+    : (tokenCount(fields["input_tokens_details.cached_tokens"] ?? fields["prompt_tokens_details.cached_tokens"]) ??
+      (validBreakdown ? hit : undefined))
+  const cacheWrite = split ? write : tokenCount(fields["input_tokens_details.cache_write_tokens"])
+  const output = tokenCount(fields["output_tokens"] ?? fields["completion_tokens"])
+  const uncached = cacheMiss(input, cacheRead) ?? (cacheRead === undefined && validBreakdown ? miss : undefined)
+  return {
+    ...(input === undefined ? {} : { input }),
+    ...(output === undefined ? {} : { output }),
+    ...(cacheRead === undefined ? {} : { cacheRead }),
+    ...(cacheWrite === undefined ? {} : { cacheWrite }),
+    ...(uncached === undefined ? {} : { cacheMiss: uncached }),
+  }
+}
+
+// 261126 Red native 走共享 LLMEvent 的归一化 usage：inputTokens 已是含缓存的总输入，
+// 三个 breakdown 字段各自可选，缺失仍然保持缺失。
+function normalizedUsage(observation: UsageEvent, anthropic: boolean | undefined): Usage {
+  const usage = observation.rawUsage
+  const cacheRead = tokenCount(usage?.cacheReadInputTokens)
+  const cacheWrite = tokenCount(usage?.cacheWriteInputTokens)
+  const input = anthropic
+    ? splitInput(tokenCount(usage?.nonCachedInputTokens), cacheRead, cacheWrite)
+    : tokenCount(usage?.inputTokens)
+  const output = tokenCount(usage?.outputTokens)
   const miss = cacheMiss(input, cacheRead)
   return {
     ...(input === undefined ? {} : { input }),
@@ -106,31 +193,46 @@ function reportedUsage(observation: ProviderUsageObservation): Usage {
   }
 }
 
-// 261126 Red native 走共享 LLMEvent 的归一化 usage：inputTokens 已是含缓存的总输入，
-// 三个 breakdown 字段各自可选，缺失仍然保持缺失。
-function normalizedUsage(observation: EventObservation): Usage | undefined {
-  if (observation.type !== "usage" || observation.usageStatus !== "reported") return
-  const input = observation.rawUsage?.inputTokens
-  const cacheRead = observation.rawUsage?.cacheReadInputTokens
-  const miss = cacheMiss(input, cacheRead)
+function section(observation: SectionObservation): typeof Section.Type {
   return {
-    ...(input === undefined ? {} : { input }),
-    ...(observation.rawUsage?.outputTokens === undefined ? {} : { output: observation.rawUsage.outputTokens }),
-    ...(cacheRead === undefined ? {} : { cacheRead }),
-    ...(observation.rawUsage?.cacheWriteInputTokens === undefined
-      ? {}
-      : { cacheWrite: observation.rawUsage.cacheWriteInputTokens }),
-    ...(miss === undefined ? {} : { cacheMiss: miss }),
+    change: observation.change,
+    count: observation.count,
+    bytes: observation.length,
+    countDelta: observation.countDelta,
+    bytesDelta: observation.lengthDelta,
+    firstDifference: observation.difference?.index,
   }
 }
 
-function prefix(observation: Extract<CaptureObservation, { status: "captured" }>): Prefix {
+function diagnosticsCapture(observation: CaptureObservation): typeof Capture.Type {
+  if (observation.status === "unsupported") return { status: observation.status, reason: observation.reason }
+  const receipts = observation.afterCompression
   return {
-    system: observation.system.change,
-    tools: observation.tools.change,
-    history: observation.history.change,
-    // DCP 回执与本地 native compaction 标记任一成立即算「压缩过」；首次基线不猜。
-    compressed: observation.afterCompression.length > 0 || observation.compacted === true,
+    status: observation.status,
+    previousRequestID: observation.previousRequestID,
+    system: section(observation.system),
+    tools: section(observation.tools),
+    history: section(observation.history),
+    parameters: observation.parameters.change,
+    wire: observation.wire.change,
+    serialized: observation.serialized.change,
+    affinity: observation.affinityChange,
+    compacted: observation.compacted === true ? true : undefined,
+    compression:
+      receipts.length === 0
+        ? undefined
+        : {
+            receipts: receipts.length,
+            ...receipts.reduce(
+              (total, record) => ({
+                blockCount: total.blockCount + record.blockCount,
+                inputTokensEstimated: total.inputTokensEstimated + record.inputTokensEstimated,
+                summaryTokensEstimated: total.summaryTokensEstimated + record.summaryTokensEstimated,
+                netSavingsEstimated: total.netSavingsEstimated + record.netSavingsEstimated,
+              }),
+              { blockCount: 0, inputTokensEstimated: 0, summaryTokensEstimated: 0, netSavingsEstimated: 0 },
+            ),
+          },
   }
 }
 
@@ -142,16 +244,20 @@ function supersededOutcome(attempt: Attempt): RequestData["outcome"] {
 
 export function create(input: CreateInput): Recorder {
   let current: Attempt | undefined
+  const baseDiagnostics = { version: 1 as const, runtime: input.runtime }
 
   const settle = (attempt: Attempt, outcome: RequestData["outcome"]) => {
     if (attempt.settled) return
     attempt.settled = true
     // 261126 Red AI SDK 只认同 ID 的原始 vendor usage；native 才用归一化的 step-finish。
-    const usage = attempt.raw
-      ? reportedUsage(attempt.raw)
-      : input.runtime === "native"
-        ? attempt.usage
+    const fields = attempt.raw?.fields ?? attempt.usage?.providerFields
+    const usage = fields
+      ? reportedUsage(fields, input.anthropic)
+      : attempt.usage
+        ? normalizedUsage(attempt.usage, input.anthropic)
         : undefined
+    const attribution = attempt.raw ?? attempt.usage
+    const capture = attempt.capture
     // 261126 Red SDK 收到 provider finish 后可能还要等本地工具或权限；那段不是模型耗时。
     const end = attempt.finishedAt ?? (outcome === "unknown" ? undefined : Date.now())
     const data: RequestData = {
@@ -161,7 +267,22 @@ export function create(input: CreateInput): Recorder {
       ...(attempt.firstEventAt === undefined || (end !== undefined && attempt.firstEventAt > end)
         ? {}
         : { firstEventMs: Math.max(0, attempt.firstEventAt - attempt.startedAt) }),
-      ...(attempt.prefix ? { prefix: attempt.prefix } : {}),
+      ...(capture?.status === "captured"
+        ? {
+            prefix: {
+              system: capture.system.change,
+              tools: capture.tools.change,
+              history: capture.history.change,
+              compressed: capture.compression !== undefined || capture.compacted === true,
+            },
+          }
+        : {}),
+      diagnostics: {
+        ...baseDiagnostics,
+        capture,
+        instructions: attribution?.instructions && { source: "provider", ...attribution.instructions },
+        unattributedInputTokens: attribution?.unattributedInputTokens,
+      },
     }
     try {
       // 只更新已插入的行：迟到结算不能把已裁剪/淘汰的请求重新写回来。
@@ -187,7 +308,7 @@ export function create(input: CreateInput): Recorder {
             provider_id: input.providerID,
             model_id: input.modelID,
             // 261126 Red 尝试开始就建行：网络/HTTP 失败或 body 超限也留一条，prefix 缺省=未观察。
-            data: { outcome: "unknown" },
+            data: { outcome: "unknown", diagnostics: baseDiagnostics },
           })
           .onConflictDoNothing()
           .run()
@@ -231,8 +352,7 @@ export function create(input: CreateInput): Recorder {
       // 261126 Red 只认与当前出站同 ID 的观察；迟到/不符 ID 的 capture 直接忽略，
       // 不抢新 current，也不会复活已淘汰的行。
       if (!current || current.requestID !== observation.requestID) return
-      // unsupported（body-too-large/invalid-json/shape）没有可比较前缀，保持 prefix 缺省。
-      if (observation.status === "captured") current.prefix = prefix(observation)
+      current.capture = diagnosticsCapture(observation)
     },
     event(event: LLMEvent, observation: EventObservation | undefined) {
       const attempt = current
@@ -249,7 +369,7 @@ export function create(input: CreateInput): Recorder {
         return
       }
       if (input.runtime !== "native" || event.type !== "step-finish" || attempt.usage) return
-      attempt.usage = observation ? normalizedUsage(observation) : undefined
+      if (observation?.type === "usage" && observation.usageStatus === "reported") attempt.usage = observation
     },
     providerUsage(observation) {
       // 261126 Red 同 ID 的 finish part 同时是本次请求的完成证据与 usage 来源；不符 ID 忽略。

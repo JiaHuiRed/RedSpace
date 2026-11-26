@@ -3,7 +3,7 @@ import { createStore } from "solid-js/store"
 import { CapsuleRow } from "@redcode-ai/ui/capsule"
 import { Icon } from "@redcode-ai/ui/icon"
 import { Meter } from "@redcode-ai/ui/meter"
-import type { FlightRecorderPage, FlightRecorderRow } from "@redcode-ai/sdk/v2/client"
+import type { FlightRecorderDiagnostics, FlightRecorderPage, FlightRecorderRow } from "@redcode-ai/sdk/v2/client"
 import { useLanguage } from "@/context/language"
 import { useSDK } from "@/context/sdk"
 import { useSessionLayout } from "@/context/session-layout"
@@ -317,6 +317,7 @@ function PrefixChip(props: { label: string; state: string; t: FlightRecorderTran
 
 function FlightRecorderDetail(props: {
   row: FlightRecorderRow
+  previous?: FlightRecorderRow
   source: FlightRecorderSource
   t: FlightRecorderTranslate
   format: FlightRecorderFormat
@@ -324,8 +325,7 @@ function FlightRecorderDetail(props: {
   const t = props.t
   const format = props.format
   const row = props.row
-  const outcome = () =>
-    row.outcome === "unknown" ? "—" : t(`context.flightRecorder.outcome.${row.outcome}`)
+  const outcome = () => (row.outcome === "unknown" ? "—" : t(`context.flightRecorder.outcome.${row.outcome}`))
   return (
     <div
       data-testid="flight-recorder-detail"
@@ -366,14 +366,19 @@ function FlightRecorderDetail(props: {
       <DetailField label={t("context.flightRecorder.field.duration")} value={format.duration(row.durationMs)} />
       <DetailField label={t("context.flightRecorder.field.firstEvent")} value={format.duration(row.firstEventMs)} />
       <div class="text-11-regular text-text-weaker">{t("context.flightRecorder.firstEventNote")}</div>
+      <Show when={row.diagnostics}>
+        {(data) => <RequestDiagnostics data={data()} previous={props.previous} t={t} format={format} />}
+      </Show>
       <Show
-        when={row.prefix}
+        when={!row.diagnostics?.capture && row.prefix}
         fallback={
-          <div class="text-11-regular text-text-weaker">
-            {props.source === "steps"
-              ? t("context.flightRecorder.prefix.missing.steps")
-              : t("context.flightRecorder.prefix.missing.requests")}
-          </div>
+          <Show when={!row.diagnostics?.capture}>
+            <div class="text-11-regular text-text-weaker">
+              {props.source === "steps"
+                ? t("context.flightRecorder.prefix.missing.steps")
+                : t("context.flightRecorder.prefix.missing.requests")}
+            </div>
+          </Show>
         }
       >
         {(prefix) => (
@@ -403,8 +408,98 @@ function FlightRecorderDetail(props: {
   )
 }
 
+function RequestDiagnostics(props: {
+  data: FlightRecorderDiagnostics
+  previous?: FlightRecorderRow
+  t: FlightRecorderTranslate
+  format: FlightRecorderFormat
+}) {
+  const t = props.t
+  const format = props.format
+  const label = (key: string, params?: Record<string, string>) => t(`context.flightRecorder.diagnostics.${key}`, params)
+  const transition = (change: string) => t(`context.flightRecorder.prefix.${change}`)
+  const amount = (value: number, delta?: number) =>
+    delta === undefined
+      ? format.number(value)
+      : `${format.number(value)} (${delta > 0 ? "+" : ""}${format.number(delta)})`
+  const fields = createMemo(() => {
+    const data = props.data
+    const fields = [{ label: label("runtime"), value: data.runtime === "native" ? "Native" : "AI SDK" }]
+    const capture = data.capture
+    if (capture?.status === "unsupported") {
+      fields.push({ label: label("captureFailure"), value: label(`reason.${capture.reason}`) })
+    }
+    if (capture?.status === "captured") {
+      fields.push({ label: label("previous"), value: capture.previousRequestID ?? transition("baseline") })
+      if (capture.previousRequestID) {
+        const rate = props.previous && flightRecorderCacheRatio(props.previous)
+        fields.push({ label: label("previousRate"), value: rate === undefined ? "—" : format.percent(rate * 100) })
+      }
+      for (const name of ["system", "tools", "history"] as const) {
+        const section = capture[name]
+        const value = label("section", {
+          change: transition(section.change),
+          count: amount(section.count, section.countDelta),
+          bytes: amount(section.bytes, section.bytesDelta),
+        })
+        fields.push({
+          label: t(`context.flightRecorder.prefix.${name}`),
+          value:
+            section.firstDifference === undefined
+              ? value
+              : `${value} · ${label("firstDifference", {
+                  index: format.number(section.firstDifference + 1),
+                })}`,
+        })
+      }
+      for (const name of ["parameters", "wire", "serialized", "affinity"] as const) {
+        fields.push({ label: label(name), value: transition(capture[name]) })
+      }
+      fields.push({
+        label: t("context.flightRecorder.field.compressed"),
+        value: t(
+          capture.compacted || capture.compression
+            ? "context.flightRecorder.prefix.compressed"
+            : "context.flightRecorder.prefix.noNewCompaction",
+        ),
+      })
+      const compression = capture.compression
+      if (compression)
+        fields.push({
+          label: label("compression"),
+          value: label("compressionStats", {
+            receipts: format.number(compression.receipts),
+            blocks: format.number(compression.blockCount),
+            input: format.number(compression.inputTokensEstimated),
+            summary: format.number(compression.summaryTokensEstimated),
+            saved: format.number(compression.netSavingsEstimated),
+          }),
+        })
+    }
+    const instructions = data.instructions
+    if (instructions) {
+      for (const name of ["inputTokens", "cachedTokens", "cacheWriteTokens", "missTokens"] as const) {
+        fields.push({ label: label(name), value: format.number(instructions[name]) })
+      }
+    }
+    if (data.unattributedInputTokens !== undefined) {
+      fields.push({ label: label("unattributed"), value: format.number(data.unattributedInputTokens) })
+    }
+    return fields
+  })
+  return (
+    <div data-testid="flight-recorder-diagnostics" class="flex flex-col gap-1">
+      <For each={fields()}>{(field) => <DetailField {...field} />}</For>
+      <Show when={props.data.capture?.status === "captured"}>
+        <div class="text-11-regular text-text-weaker">{t("context.flightRecorder.prefix.note")}</div>
+      </Show>
+    </div>
+  )
+}
+
 function FlightRecorderRowItem(props: {
   row: FlightRecorderRow
+  previous?: FlightRecorderRow
   source: FlightRecorderSource
   t: FlightRecorderTranslate
   format: FlightRecorderFormat
@@ -474,7 +569,13 @@ function FlightRecorderRowItem(props: {
         </div>
       </button>
       <Show when={props.open}>
-        <FlightRecorderDetail row={props.row} source={props.source} t={props.t} format={props.format} />
+        <FlightRecorderDetail
+          row={props.row}
+          previous={props.previous}
+          source={props.source}
+          t={props.t}
+          format={props.format}
+        />
       </Show>
     </div>
   )
@@ -679,16 +780,25 @@ export function FlightRecorderPanel(props: {
 
         <div class="flex flex-col gap-1">
           <For each={state.state.rows}>
-            {(row) => (
-              <FlightRecorderRowItem
-                row={row}
-                source={state.state.source}
-                t={props.t}
-                format={format()}
-                open={selected() === row.id}
-                onToggle={() => toggleRow(row.id)}
-              />
-            )}
+            {(row) => {
+              const previous = () => {
+                const capture = row.diagnostics?.capture
+                return capture?.status === "captured" && capture.previousRequestID
+                  ? state.state.rows.find((item) => item.id === capture.previousRequestID)
+                  : undefined
+              }
+              return (
+                <FlightRecorderRowItem
+                  row={row}
+                  previous={previous()}
+                  source={state.state.source}
+                  t={props.t}
+                  format={format()}
+                  open={selected() === row.id}
+                  onToggle={() => toggleRow(row.id)}
+                />
+              )
+            }}
           </For>
         </div>
 

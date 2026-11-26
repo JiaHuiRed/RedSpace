@@ -99,6 +99,8 @@ export type OpenAIChatBody = Schema.Schema.Type<typeof OpenAIChatBody>
 // this provider-native event shape.
 const OpenAIChatUsage = Schema.Struct({
   prompt_tokens: Schema.optional(Schema.Number),
+  prompt_cache_hit_tokens: optionalNull(Schema.Number),
+  prompt_cache_miss_tokens: optionalNull(Schema.Number),
   completion_tokens: Schema.optional(Schema.Number),
   total_tokens: Schema.optional(Schema.Number),
   prompt_tokens_details: optionalNull(

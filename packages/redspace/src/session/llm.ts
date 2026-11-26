@@ -286,6 +286,7 @@ const live: Layer.Layer<
               providerID: input.model.providerID,
               modelID: input.model.id,
               runtime: "native",
+              anthropic: input.model.api.npm === "@ai-sdk/anthropic",
             })
           : undefined
         const requestEvidence = RequestEvidence.create(
@@ -358,6 +359,7 @@ const live: Layer.Layer<
             providerID: input.model.providerID,
             modelID: input.model.id,
             runtime: "ai-sdk",
+            anthropic: input.model.api.npm === "@ai-sdk/anthropic",
           })
         : undefined
       const requestEvidence = RequestEvidence.create(

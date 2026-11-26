@@ -17178,9 +17178,251 @@
             },
             "required": ["system", "tools", "history", "compressed"],
             "additionalProperties": false
+          },
+          "diagnostics": {
+            "$ref": "#/components/schemas/FlightRecorderDiagnostics"
           }
         },
         "required": ["id", "messageID", "time", "providerID", "modelID", "outcome"],
+        "additionalProperties": false
+      },
+      "FlightRecorderDiagnostics": {
+        "type": "object",
+        "properties": {
+          "version": {
+            "type": "number",
+            "enum": [1]
+          },
+          "runtime": {
+            "type": "string",
+            "enum": ["ai-sdk", "native"]
+          },
+          "capture": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": ["captured"]
+                  },
+                  "previousRequestID": {
+                    "type": "string"
+                  },
+                  "system": {
+                    "type": "object",
+                    "properties": {
+                      "change": {
+                        "type": "string",
+                        "enum": ["baseline", "unchanged", "append", "rewind", "rewrite"]
+                      },
+                      "count": {
+                        "type": "integer",
+                        "minimum": -9007199254740991,
+                        "maximum": 9007199254740991
+                      },
+                      "bytes": {
+                        "type": "integer",
+                        "minimum": -9007199254740991,
+                        "maximum": 9007199254740991
+                      },
+                      "countDelta": {
+                        "type": "integer",
+                        "minimum": -9007199254740991,
+                        "maximum": 9007199254740991
+                      },
+                      "bytesDelta": {
+                        "type": "integer",
+                        "minimum": -9007199254740991,
+                        "maximum": 9007199254740991
+                      },
+                      "firstDifference": {
+                        "type": "integer",
+                        "minimum": -9007199254740991,
+                        "maximum": 9007199254740991
+                      }
+                    },
+                    "required": ["change", "count", "bytes"],
+                    "additionalProperties": false
+                  },
+                  "tools": {
+                    "type": "object",
+                    "properties": {
+                      "change": {
+                        "type": "string",
+                        "enum": ["baseline", "unchanged", "append", "rewind", "rewrite"]
+                      },
+                      "count": {
+                        "type": "integer",
+                        "minimum": -9007199254740991,
+                        "maximum": 9007199254740991
+                      },
+                      "bytes": {
+                        "type": "integer",
+                        "minimum": -9007199254740991,
+                        "maximum": 9007199254740991
+                      },
+                      "countDelta": {
+                        "type": "integer",
+                        "minimum": -9007199254740991,
+                        "maximum": 9007199254740991
+                      },
+                      "bytesDelta": {
+                        "type": "integer",
+                        "minimum": -9007199254740991,
+                        "maximum": 9007199254740991
+                      },
+                      "firstDifference": {
+                        "type": "integer",
+                        "minimum": -9007199254740991,
+                        "maximum": 9007199254740991
+                      }
+                    },
+                    "required": ["change", "count", "bytes"],
+                    "additionalProperties": false
+                  },
+                  "history": {
+                    "type": "object",
+                    "properties": {
+                      "change": {
+                        "type": "string",
+                        "enum": ["baseline", "unchanged", "append", "rewind", "rewrite"]
+                      },
+                      "count": {
+                        "type": "integer",
+                        "minimum": -9007199254740991,
+                        "maximum": 9007199254740991
+                      },
+                      "bytes": {
+                        "type": "integer",
+                        "minimum": -9007199254740991,
+                        "maximum": 9007199254740991
+                      },
+                      "countDelta": {
+                        "type": "integer",
+                        "minimum": -9007199254740991,
+                        "maximum": 9007199254740991
+                      },
+                      "bytesDelta": {
+                        "type": "integer",
+                        "minimum": -9007199254740991,
+                        "maximum": 9007199254740991
+                      },
+                      "firstDifference": {
+                        "type": "integer",
+                        "minimum": -9007199254740991,
+                        "maximum": 9007199254740991
+                      }
+                    },
+                    "required": ["change", "count", "bytes"],
+                    "additionalProperties": false
+                  },
+                  "parameters": {
+                    "type": "string",
+                    "enum": ["baseline", "unchanged", "append", "rewind", "rewrite"]
+                  },
+                  "wire": {
+                    "type": "string",
+                    "enum": ["baseline", "unchanged", "changed"]
+                  },
+                  "serialized": {
+                    "type": "string",
+                    "enum": ["baseline", "unchanged", "changed"]
+                  },
+                  "affinity": {
+                    "type": "string",
+                    "enum": ["baseline", "unchanged", "changed", "unknown"]
+                  },
+                  "compacted": {
+                    "type": "boolean",
+                    "enum": [true]
+                  },
+                  "compression": {
+                    "type": "object",
+                    "properties": {
+                      "receipts": {
+                        "type": "integer",
+                        "minimum": -9007199254740991,
+                        "maximum": 9007199254740991
+                      },
+                      "blockCount": {
+                        "type": "number"
+                      },
+                      "inputTokensEstimated": {
+                        "type": "number"
+                      },
+                      "summaryTokensEstimated": {
+                        "type": "number"
+                      },
+                      "netSavingsEstimated": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "receipts",
+                      "blockCount",
+                      "inputTokensEstimated",
+                      "summaryTokensEstimated",
+                      "netSavingsEstimated"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "required": ["status", "system", "tools", "history", "parameters", "wire", "serialized", "affinity"],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": ["unsupported"]
+                  },
+                  "reason": {
+                    "type": "string",
+                    "enum": [
+                      "body-too-large",
+                      "body-unavailable",
+                      "invalid-json",
+                      "unsupported-shape",
+                      "message-limit",
+                      "field-limit"
+                    ]
+                  }
+                },
+                "required": ["status", "reason"],
+                "additionalProperties": false
+              }
+            ]
+          },
+          "instructions": {
+            "type": "object",
+            "properties": {
+              "source": {
+                "type": "string",
+                "enum": ["provider"]
+              },
+              "inputTokens": {
+                "type": "number"
+              },
+              "cachedTokens": {
+                "type": "number"
+              },
+              "cacheWriteTokens": {
+                "type": "number"
+              },
+              "missTokens": {
+                "type": "number"
+              }
+            },
+            "required": ["source"],
+            "additionalProperties": false
+          },
+          "unattributedInputTokens": {
+            "type": "number"
+          }
+        },
+        "required": ["version", "runtime"],
         "additionalProperties": false
       },
       "ContextSnapshot": {

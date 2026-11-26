@@ -81,13 +81,14 @@ const rows = (sessionID: string) =>
       .all(),
   )
 
-const flightFor = (sessionID: string, messageID: string, runtime: "ai-sdk" | "native" = "ai-sdk") =>
+const flightFor = (sessionID: string, messageID: string, runtime: "ai-sdk" | "native" = "ai-sdk", anthropic = false) =>
   FlightRecording.create({
     sessionID: SessionID.make(sessionID),
     messageID: MessageID.make(messageID),
     providerID: model.providerID,
     modelID: model.id,
     runtime,
+    anthropic,
   })
 
 const context = (
@@ -122,7 +123,7 @@ const sse = (chunks: readonly string[]) =>
     headers: { "Content-Type": "text/event-stream" },
   })
 
-const successSse = (cached: number | undefined) =>
+const successSse = (cached: number | undefined, raw: Record<string, number> = {}) =>
   sse([
     JSON.stringify({ choices: [{ index: 0, delta: { role: "assistant", content: "ok" }, finish_reason: null }] }),
     JSON.stringify({
@@ -132,6 +133,7 @@ const successSse = (cached: number | undefined) =>
         completion_tokens: 10,
         total_tokens: 110,
         ...(cached === undefined ? {} : { prompt_tokens_details: { cached_tokens: cached } }),
+        ...raw,
       },
     }),
   ])
@@ -291,6 +293,7 @@ test("records independent rows for real middleware attempts including a failure"
     "durationMs",
     "firstEventMs",
     "prefix",
+    "diagnostics",
   ])
   for (const value of data) {
     for (const key of Object.keys(value)) expect(allowed.has(key)).toBe(true)
@@ -350,6 +353,10 @@ test("keeps a row for rejected doStream and body-too-large attempts", async () =
   expect(rejected?.data).toMatchObject({ outcome: "failed" })
   expect(rejected?.data.prefix).toBeUndefined()
   expect(oversized?.data.prefix).toBeUndefined()
+  expect(oversized?.data.diagnostics).toMatchObject({
+    runtime: "ai-sdk",
+    capture: { status: "unsupported", reason: "body-too-large" },
+  })
   expect(cancelled?.data.prefix).toBeUndefined()
 })
 
@@ -418,6 +425,114 @@ test("uses same-attempt raw provider usage and keeps missing distinct from zero"
   done()
   expect(row(contradictory.requestID)?.data).toMatchObject({ input: 10, cacheRead: 50 })
   expect(row(contradictory.requestID)?.data).not.toHaveProperty("cacheMiss")
+})
+
+test("reads DeepSeek usage through the SDK and ties high, low and recovered hits to the observed baseline", async () => {
+  const sessionID = "ses_flight_deepseek"
+  const messageID = "msg_flight_deepseek"
+  seed(sessionID, messageID)
+  const flight = flightFor(sessionID, messageID)
+  const observer = RequestEvidence.create(context(sessionID), ConfigRequestEvidence.resolve(), flight)
+  const samples = [
+    { hit: 98, miss: 2, rate: 98 },
+    { hit: 32, miss: 68, rate: 32 },
+    { hit: 99, miss: 1, rate: 99 },
+    { hit: 0, miss: 100, rate: 0 },
+    { hit: 150, miss: 1, rate: undefined },
+    { hit: 76, miss: 90, rate: undefined },
+    { hit: -1, miss: 100, rate: undefined },
+  ]
+  let index = 0
+  const sent: unknown[] = []
+  const fetch = Object.assign(
+    async (_: Parameters<typeof globalThis.fetch>[0], init: Parameters<typeof globalThis.fetch>[1]) => {
+      sent.push(init?.body)
+      const sample = samples[index++]!
+      return successSse(undefined, { prompt_cache_hit_tokens: sample.hit, prompt_cache_miss_tokens: sample.miss })
+    },
+    { preconnect: () => undefined },
+  ) satisfies typeof globalThis.fetch
+  const languageModel = chatLanguageModel(observer, fetch)
+  const seen = new Set<string>()
+  let previous: string | undefined
+  for (const sample of samples) {
+    expect(await drive(observer, languageModel, [{ role: "user", content: "same flight body" }])).toBeUndefined()
+    flight.settle(Exit.succeed(undefined))
+    const current = rows(sessionID).find((item) => !seen.has(item.id))!
+    expect(current.data.input).toBe(100)
+    expect(current.data.cacheRead).toBe(sample.rate)
+    expect(current.data.cacheWrite).toBeUndefined()
+    if (sample.rate !== undefined) expect(current.data.cacheMiss).toBe(sample.miss)
+    const capture = current.data.diagnostics?.capture
+    expect(capture?.status).toBe("captured")
+    expect(capture?.status === "captured" && capture.previousRequestID).toBe(previous)
+    seen.add(current.id)
+    previous = current.id
+  }
+  expect(new Set(sent).size).toBe(1)
+})
+
+test("does not turn missing Anthropic cache components into zero or a total", () => {
+  const sessionID = "ses_flight_anthropic_missing"
+  const messageID = "msg_flight_anthropic_missing"
+  seed(sessionID, messageID)
+  const flight = flightFor(sessionID, messageID, "ai-sdk", true)
+  const observer = RequestEvidence.create(context(sessionID), ConfigRequestEvidence.resolve(), flight)
+  const attempt = observe(observer, chatBody())
+  observer.providerUsage?.({
+    requestID: attempt.requestID,
+    cachedTokens: "missing",
+    fields: { input_tokens: 15, output_tokens: 2 },
+  })
+  flight.settle(Exit.succeed(undefined))
+  const data = rows(sessionID)[0]?.data
+  expect(data?.output).toBe(2)
+  expect(data?.input).toBeUndefined()
+  expect(data?.cacheRead).toBeUndefined()
+  expect(data?.cacheWrite).toBeUndefined()
+})
+
+test("projects only bounded prefix evidence and skips unsupported bodies in the baseline chain", () => {
+  const sessionID = "ses_flight_diagnostics"
+  const messageID = "msg_flight_diagnostics"
+  seed(sessionID, messageID)
+  const flight = flightFor(sessionID, messageID)
+  const observer = RequestEvidence.create(context(sessionID), ConfigRequestEvidence.resolve(), flight)
+  const body = { ...chatBody(), prompt_cache_key: "private-affinity" }
+  const first = observe(observer, body)
+  const failed = RequestEvidence.withRequest(observer, () => observer.capture("{bad JSON"))
+  const reordered = observe(observer, {
+    ...body,
+    messages: [...body.messages].reverse(),
+    prompt_cache_key: "new-private-affinity",
+  })
+  const appended = observe(observer, { ...body, messages: [...body.messages, { role: "user", content: "added" }] })
+  const rewritten = observe(observer, chatBody("changed original"))
+  flight.settle(Exit.succeed(undefined))
+  const all = rows(sessionID)
+  const capture = (id: string) => all.find((row) => row.id === id)?.data.diagnostics?.capture
+  expect(capture(failed.requestID)).toEqual({ status: "unsupported", reason: "invalid-json" })
+  expect(capture(reordered.requestID)).toMatchObject({
+    status: "captured",
+    previousRequestID: first.requestID,
+    wire: "changed",
+    serialized: "changed",
+    parameters: "rewrite",
+    affinity: "changed",
+    system: { change: "unchanged", countDelta: 0, bytesDelta: 0 },
+    history: { change: "unchanged" },
+  })
+  expect(capture(appended.requestID)).toMatchObject({
+    previousRequestID: reordered.requestID,
+    history: { change: "append", count: 2, countDelta: 1, bytesDelta: expect.any(Number), firstDifference: 1 },
+  })
+  expect(capture(rewritten.requestID)).toMatchObject({
+    history: { change: "rewrite", countDelta: -1, firstDifference: 0 },
+  })
+  expect(JSON.stringify(all)).not.toMatch(/private-affinity|private flight system|sha256/)
+  RequestEvidence.reset()
+  expect(observe(observer, body)).toMatchObject({ previousRequestID: undefined, affinityChange: "baseline" })
+  flight.settle(Exit.succeed(undefined))
 })
 
 // 261126 Red 取消尝试按 interrupted exit 记 cancelled，且不写入任何未实报 usage。
@@ -493,7 +608,23 @@ test("flags compression only when a comparable same-bucket marker advanced", () 
       }),
     }),
   )
-  expect(observe(dcp, chatBody("dcp two")).afterCompression).toHaveLength(1)
+  const compressed = observe(dcp, chatBody("dcp two"))
+  expect(compressed.afterCompression).toHaveLength(1)
+  flight.settle(Exit.succeed(undefined))
+  expect(rows(sessionID).find((row) => row.id === compressed.requestID)?.data).toMatchObject({
+    prefix: { compressed: true },
+    diagnostics: {
+      capture: {
+        compression: {
+          receipts: 1,
+          blockCount: 1,
+          inputTokensEstimated: 10,
+          summaryTokensEstimated: 2,
+          netSavingsEstimated: 8,
+        },
+      },
+    },
+  })
 })
 
 // 261126 Red 截断：每会话只保留最近 128 行；时间由 started 固定，验证删的是旧行。
@@ -511,6 +642,7 @@ test("keeps the newest 128 rows per session and never resurrects pruned rows", (
     parameters: { sha256: "parameters", count: 0, length: 0, change: "unchanged" },
     serialized: { sha256: "serialized", length: 1, change: "changed" },
     affinity: {},
+    affinityChange: "baseline",
     wire: { sha256: "wire", length: 1, change: "changed" },
     afterCompression: [],
   })
@@ -579,6 +711,9 @@ it.effect("records a native attempt from the actual wire body and protocol event
                   output_tokens: 10,
                   total_tokens: 110,
                   input_tokens_details: { cached_tokens: 80 },
+                  attribution: {
+                    request_fields: { instructions: { input_tokens: 10, cached_tokens: 0, cache_write_tokens: 0 } },
+                  },
                 },
               },
             })}`,
@@ -623,6 +758,11 @@ it.effect("records a native attempt from the actual wire body and protocol event
       cacheRead: 80,
       cacheMiss: 20,
       prefix: { system: "baseline", tools: "baseline", history: "baseline", compressed: false },
+      diagnostics: {
+        runtime: "native",
+        instructions: { source: "provider", inputTokens: 10, cachedTokens: 0, cacheWriteTokens: 0, missTokens: 10 },
+        unattributedInputTokens: 10,
+      },
     })
     expect(row?.data.durationMs).toBeGreaterThanOrEqual(0)
     expect(row?.data.firstEventMs).toBeGreaterThanOrEqual(0)

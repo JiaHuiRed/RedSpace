@@ -17,6 +17,7 @@ const templates: Record<string, string> = {
   "context.flightRecorder.coverage": "coverage {{covered}}/{{total}}",
   "context.flightRecorder.costCoverage": "cost {{covered}}/{{total}}",
   "context.flightRecorder.lowPoint": "lowest {{percent}} · {{time}}",
+  "context.flightRecorder.diagnostics.firstDifference": "entry {{index}}",
 }
 
 const t: FlightRecorderTranslate = (key, params) =>
@@ -253,6 +254,50 @@ test("requests hit rate only uses reported values and keeps request-specific pre
     expect(mounted.container.querySelector('[data-testid="flight-recorder-detail"]')?.textContent).not.toContain(
       "context.flightRecorder.prefix.missing.steps",
     )
+  } finally {
+    mounted.dispose()
+  }
+})
+
+test("request diagnostics show the actual prior capture, the first difference, and reported attribution", async () => {
+  const section = { change: "unchanged", count: 1, bytes: 50, countDelta: 0, bytesDelta: 0 } as const
+  const prior = row({ id: "baseline-request", cacheRead: 98 })
+  const adjacent = row({ id: "other-bucket-request", cacheRead: 65 })
+  const low = row({
+    id: "low-request",
+    cacheRead: 32,
+    diagnostics: {
+      version: 1,
+      runtime: "ai-sdk",
+      capture: {
+        status: "captured",
+        previousRequestID: prior.id,
+        system: section,
+        tools: section,
+        history: { ...section, change: "rewrite", firstDifference: 0 },
+        parameters: "unchanged",
+        wire: "changed",
+        serialized: "changed",
+        affinity: "unchanged",
+      },
+      instructions: { source: "provider", inputTokens: 30, cachedTokens: 0, missTokens: 30 },
+      unattributedInputTokens: 38,
+    },
+  })
+  const mounted = mount(async () => ({ items: [low, adjacent, prior] }))
+  try {
+    await open(mounted.container)
+    click(mounted.container, '[data-testid="flight-recorder-source-requests"]')
+    await flush()
+    click(mounted.container, '[data-row-id="low-request"] button')
+    const detail = mounted.container.querySelector('[data-testid="flight-recorder-diagnostics"]')?.textContent
+    expect(detail).toContain("baseline-request")
+    expect(detail).toContain("98%")
+    expect(detail).not.toContain("65%")
+    expect(detail).toContain("entry 1")
+    expect(detail).toContain("cachedTokens0")
+    expect(detail).toContain("cacheWriteTokens—")
+    expect(detail).toContain("unattributed38")
   } finally {
     mounted.dispose()
   }
