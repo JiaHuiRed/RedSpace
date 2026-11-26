@@ -220,6 +220,10 @@ import type {
   SessionEditQueuedMessageResponses,
   SessionFlightRecorderErrors,
   SessionFlightRecorderResponses,
+  SessionFlightRecorderRowsErrors,
+  SessionFlightRecorderRowsResponses,
+  SessionFlightRecorderSummaryErrors,
+  SessionFlightRecorderSummaryResponses,
   SessionForkErrors,
   SessionForkResponses,
   SessionGetErrors,
@@ -3755,6 +3759,106 @@ export class Session2 extends HeyApiClient {
       ThrowOnError
     >({
       url: "/session/{sessionID}/flight-recorder",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Aggregate execution history
+   *
+   * Aggregate booked steps and observed requests across sessions in the current project (and workspace when the instance is workspace-scoped). Both ledgers are computed separately over a bounded window taken from the global (time,id) index; project, workspace, provider, model, session and detached filters are applied inside that window. When a window fills the scan budget the response carries next: pass it back as before to scan older rows (only ledgers present in the cursor are scanned; the others return zero summaries with coverage.scanned=0). Window results are partial by construction: sum additive fields across windows; session counts and latency percentiles are per window. provider/model matches are not limited to the first window, but callers must follow next until it is absent. Cache hit rate is sum(cacheRead)/sum(input) over valid samples only; missing values stay missing. Cost exists only for the steps ledger, grouped by recorded currency with no conversion, and estimated costs are listed apart from booked cost. Request attempts are not linked to steps or retries.
+   */
+  public flightRecorderSummary<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      from?: number
+      to?: number
+      providerID?: string
+      modelID?: string
+      sessionID?: string
+      workspaceID?: string
+      before?: string
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "from" },
+            { in: "query", key: "to" },
+            { in: "query", key: "providerID" },
+            { in: "query", key: "modelID" },
+            { in: "query", key: "sessionID" },
+            { in: "query", key: "workspaceID" },
+            { in: "query", key: "before" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      SessionFlightRecorderSummaryResponses,
+      SessionFlightRecorderSummaryErrors,
+      ThrowOnError
+    >({
+      url: "/session/flight-recorder/summary",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Page cross-session execution history
+   *
+   * Page booked steps (default) or observed requests across sessions with the same filters as the aggregate. Each call examines at most the page scan budget from the global (time,id) index, then applies project/workspace/session/provider/model/detached filters inside that window. Rows are ordered by (time, id) so same-millisecond entries are not skipped; a cursor is bound to the project/workspace scope, source and every filter. An empty page with truncated=true is not proof of absence: follow next, which resumes after the last examined row, until it is absent. scanned reports examined rows before filters.
+   */
+  public flightRecorderRows<ThrowOnError extends boolean = false>(
+    parameters?: {
+      directory?: string
+      workspace?: string
+      from?: number
+      to?: number
+      providerID?: string
+      modelID?: string
+      sessionID?: string
+      workspaceID?: string
+      source?: "steps" | "requests"
+      before?: string
+      limit?: number
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "from" },
+            { in: "query", key: "to" },
+            { in: "query", key: "providerID" },
+            { in: "query", key: "modelID" },
+            { in: "query", key: "sessionID" },
+            { in: "query", key: "workspaceID" },
+            { in: "query", key: "source" },
+            { in: "query", key: "before" },
+            { in: "query", key: "limit" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      SessionFlightRecorderRowsResponses,
+      SessionFlightRecorderRowsErrors,
+      ThrowOnError
+    >({
+      url: "/session/flight-recorder/rows",
       ...options,
       ...params,
     })

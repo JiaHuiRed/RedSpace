@@ -260,6 +260,7 @@ export type StepFinishPart = {
   cost: number
   estimated?: boolean
   currency?: "USD" | "CNY"
+  requestID?: string
   tokens: {
     total?: number
     context?: number
@@ -967,12 +968,14 @@ export type TextPartInput = {
   }
 }
 
-export type FlightRecorderPage = {
-  items: Array<FlightRecorderRow>
+export type FlightRecorderGlobalPage = {
+  items: Array<FlightRecorderGlobalRow>
   next?: string
+  scanned: number
+  truncated: boolean
 }
 
-export type FlightRecorderRow = {
+export type FlightRecorderGlobalRow = {
   id: string
   messageID: string
   time: number
@@ -980,6 +983,7 @@ export type FlightRecorderRow = {
   modelID: string
   outcome: "booked" | "estimated" | "completed" | "failed" | "cancelled" | "unknown"
   summary?: boolean
+  requestID?: string
   input?: number
   output?: number
   cacheRead?: number
@@ -996,6 +1000,9 @@ export type FlightRecorderRow = {
     compressed: boolean
   }
   diagnostics?: FlightRecorderDiagnostics
+  sessionID: string
+  workspaceID?: string
+  sub: boolean
 }
 
 export type FlightRecorderDiagnostics = {
@@ -1055,6 +1062,165 @@ export type FlightRecorderDiagnostics = {
     missTokens?: number
   }
   unattributedInputTokens?: number
+}
+
+export type FlightRecorderGlobalSummary = {
+  from?: number
+  to?: number
+  steps: FlightRecorderStepSummary
+  requests: FlightRecorderRequestSummary
+  ownership: {
+    steps: {
+      main: FlightRecorderUsage
+      sub: FlightRecorderUsage
+    }
+    requests: {
+      main: FlightRecorderUsage
+      sub: FlightRecorderUsage
+    }
+  }
+  models: Array<{
+    providerID: string
+    modelID: string
+    steps: FlightRecorderStepSummary
+    requests: FlightRecorderRequestSummary
+  }>
+  workspaces: Array<{
+    workspaceID: string
+    steps: FlightRecorderStepSummary
+    requests: FlightRecorderRequestSummary
+  }>
+  daily: Array<{
+    day: string
+    steps: FlightRecorderStepSummary
+    requests: FlightRecorderRequestSummary
+  }>
+  coverage: {
+    steps: FlightRecorderCoverage
+    requests: FlightRecorderCoverage
+  }
+  truncated: boolean
+  next?: string
+  breakdownsTruncated: boolean
+  limits: {
+    scan: number
+    pageScan?: number
+    groups: number
+    trendDays: number
+  }
+  retention: {
+    requestsPerSession: number
+    totalRequests?: number
+    retentionMs?: number
+  }
+}
+
+export type FlightRecorderCoverage = {
+  from?: number
+  to?: number
+  scanned: number
+  truncated: boolean
+}
+
+export type FlightRecorderRequestSummary = {
+  samples: number
+  sessions: {
+    main: number
+    sub: number
+  }
+  usage: FlightRecorderUsage
+  outcomes: {
+    completed: number
+    failed: number
+    cancelled: number
+    unknown: number
+  }
+  latency: {
+    samples: number
+    durationMs: FlightRecorderPercentiles
+    firstEventMs: FlightRecorderPercentiles
+  }
+}
+
+export type FlightRecorderPercentiles = {
+  p50?: number
+  p95?: number
+  max?: number
+}
+
+export type FlightRecorderUsage = {
+  samples: number
+  input: number
+  output: number
+  cacheRead: number
+  cacheWrite: number
+  cacheMiss: number
+  cache: FlightRecorderCacheStats
+}
+
+export type FlightRecorderCacheStats = {
+  input: number
+  read: number
+  samples: number
+  hitRate?: number
+  excluded: {
+    invalid: number
+    incomplete: number
+  }
+}
+
+export type FlightRecorderStepSummary = {
+  samples: number
+  sessions: {
+    main: number
+    sub: number
+  }
+  usage: FlightRecorderUsage
+  outcomes: {
+    booked: number
+    estimated: number
+  }
+  cost: Array<FlightRecorderCostBucket>
+}
+
+export type FlightRecorderCostBucket = {
+  currency: string
+  booked: number
+  estimated: number
+  samples: number
+  missing: number
+}
+
+export type FlightRecorderPage = {
+  items: Array<FlightRecorderRow>
+  next?: string
+}
+
+export type FlightRecorderRow = {
+  id: string
+  messageID: string
+  time: number
+  providerID: string
+  modelID: string
+  outcome: "booked" | "estimated" | "completed" | "failed" | "cancelled" | "unknown"
+  summary?: boolean
+  requestID?: string
+  input?: number
+  output?: number
+  cacheRead?: number
+  cacheWrite?: number
+  cacheMiss?: number
+  cost?: number
+  currency?: string
+  durationMs?: number
+  firstEventMs?: number
+  prefix?: {
+    system: "baseline" | "unchanged" | "append" | "rewind" | "rewrite"
+    tools: "baseline" | "unchanged" | "append" | "rewind" | "rewrite"
+    history: "baseline" | "unchanged" | "append" | "rewind" | "rewrite"
+    compressed: boolean
+  }
+  diagnostics?: FlightRecorderDiagnostics
 }
 
 export type ContextSnapshot = {
@@ -1627,6 +1793,21 @@ export type ConsoleState = {
   consoleManagedProviders: Array<string>
   activeOrgName?: string
   switchableOrgCount: number
+}
+
+export type FlightRecorderConfig = {
+  /**
+   * Maximum flight-recorder request rows kept per session (default: 128; maximum: 1000000). Older rows are removed in small batches.
+   */
+  max_requests_per_session?: number
+  /**
+   * Maximum flight-recorder request rows kept in the database (default: 100000; maximum: 1000000). Beyond this cap the oldest requests are permanently removed in small batches. Steps, messages and sessions are never deleted.
+   */
+  max_total_requests?: number
+  /**
+   * Maximum age of a flight-recorder request row in milliseconds (maximum: 315360000000, about 10 years). Omit to disable age-based retention (default: disabled).
+   */
+  retention_ms?: number
 }
 
 export type NativeCompactionConfig = {
@@ -2257,6 +2438,10 @@ export type Config = {
     retention_ms?: number
     page_size?: number
   }
+  /**
+   * Capacity limits for the flight-recorder request history. Per-session retention defaults to 128 rows and the global cap defaults to 100000; beyond the cap the oldest requests are removed in batches. Steps, messages and sessions are never deleted. Age retention is disabled unless configured.
+   */
+  flight_recorder?: FlightRecorderConfig
   experimental?: {
     disable_paste_summary?: boolean
     /**
@@ -8148,6 +8333,81 @@ export type SessionFlightRecorderResponses = {
 }
 
 export type SessionFlightRecorderResponse = SessionFlightRecorderResponses[keyof SessionFlightRecorderResponses]
+
+export type SessionFlightRecorderSummaryData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+    from?: number
+    to?: number
+    providerID?: string
+    modelID?: string
+    sessionID?: string
+    workspaceID?: string
+    before?: string
+  }
+  url: "/session/flight-recorder/summary"
+}
+
+export type SessionFlightRecorderSummaryErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+}
+
+export type SessionFlightRecorderSummaryError =
+  SessionFlightRecorderSummaryErrors[keyof SessionFlightRecorderSummaryErrors]
+
+export type SessionFlightRecorderSummaryResponses = {
+  /**
+   * Bounded cross-session execution aggregates
+   */
+  200: FlightRecorderGlobalSummary
+}
+
+export type SessionFlightRecorderSummaryResponse =
+  SessionFlightRecorderSummaryResponses[keyof SessionFlightRecorderSummaryResponses]
+
+export type SessionFlightRecorderRowsData = {
+  body?: never
+  path?: never
+  query?: {
+    directory?: string
+    workspace?: string
+    from?: number
+    to?: number
+    providerID?: string
+    modelID?: string
+    sessionID?: string
+    workspaceID?: string
+    source?: "steps" | "requests"
+    before?: string
+    limit?: number
+  }
+  url: "/session/flight-recorder/rows"
+}
+
+export type SessionFlightRecorderRowsErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+}
+
+export type SessionFlightRecorderRowsError = SessionFlightRecorderRowsErrors[keyof SessionFlightRecorderRowsErrors]
+
+export type SessionFlightRecorderRowsResponses = {
+  /**
+   * Bounded cross-session execution rows
+   */
+  200: FlightRecorderGlobalPage
+}
+
+export type SessionFlightRecorderRowsResponse =
+  SessionFlightRecorderRowsResponses[keyof SessionFlightRecorderRowsResponses]
 
 export type SessionOutlineData = {
   body?: never
