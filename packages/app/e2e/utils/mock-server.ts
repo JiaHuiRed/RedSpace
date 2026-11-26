@@ -25,6 +25,9 @@ export interface MockServerConfig {
   project: unknown
   sessions: ({ id: string } & Record<string, unknown>)[]
   pageMessages: (sessionId: string, limit: number, before?: string) => { items: unknown[]; cursor?: string }
+  // 261126 Red Flight Recorder 新路由：返回与真实契约一致的 { items, next }。
+  // 不配置时给空页，避免兜底 {} 被当成有数据的面板。
+  flightRecorder?: (sessionID: string, source: string, before?: string) => { items: unknown[]; next?: string }
 }
 
 export async function mockRedCodeServer(page: Page, config: MockServerConfig) {
@@ -111,6 +114,17 @@ export async function mockRedCodeServer(page: Page, config: MockServerConfig) {
         tools: { count: 0, tokens: 0, confidence: "low", top: [] },
         messages: { count: 0, tokens: 0, confidence: "low", byRole: [] },
       } satisfies SessionContextInspectResponse)
+    }
+
+    const flightRecorderMatch = path.match(/^\/session\/([^/]+)\/flight-recorder$/)
+    if (flightRecorderMatch) {
+      const page =
+        config.flightRecorder?.(
+          flightRecorderMatch[1],
+          url.searchParams.get("source") ?? "steps",
+          url.searchParams.get("before") ?? undefined,
+        ) ?? { items: [] }
+      return json(route, page)
     }
 
     const messagesMatch = path.match(/^\/session\/([^/]+)\/message$/)

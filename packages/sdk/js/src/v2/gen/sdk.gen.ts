@@ -218,6 +218,8 @@ import type {
   SessionDiffResponses,
   SessionEditQueuedMessageErrors,
   SessionEditQueuedMessageResponses,
+  SessionFlightRecorderErrors,
+  SessionFlightRecorderResponses,
   SessionForkErrors,
   SessionForkResponses,
   SessionGetErrors,
@@ -3683,7 +3685,7 @@ export class Session2 extends HeyApiClient {
   /**
    * Inspect session context
    *
-   * Break down the most recent request sent for this session into system prompt, tool schemas and conversation, with per-segment token estimates. Returns 404 until the session sends a request (the snapshot lives in memory only).
+   * Break down the latest recorded session context into system prompt, tool schemas and conversation, with per-segment token estimates. Returns 404 when no snapshot is available.
    */
   public contextInspect<ThrowOnError extends boolean = false>(
     parameters: {
@@ -3711,6 +3713,48 @@ export class Session2 extends HeyApiClient {
       ThrowOnError
     >({
       url: "/session/{sessionID}/context-inspect",
+      ...options,
+      ...params,
+    })
+  }
+
+  /**
+   * Read session execution history
+   *
+   * Page through booked steps (default) or recently observed provider requests, newest first. Missing observations are omitted. A cursor belongs to one session and source.
+   */
+  public flightRecorder<ThrowOnError extends boolean = false>(
+    parameters: {
+      sessionID: string
+      directory?: string
+      workspace?: string
+      source?: "steps" | "requests"
+      before?: string
+      limit?: number
+    },
+    options?: Options<never, ThrowOnError>,
+  ) {
+    const params = buildClientParams(
+      [parameters],
+      [
+        {
+          args: [
+            { in: "path", key: "sessionID" },
+            { in: "query", key: "directory" },
+            { in: "query", key: "workspace" },
+            { in: "query", key: "source" },
+            { in: "query", key: "before" },
+            { in: "query", key: "limit" },
+          ],
+        },
+      ],
+    )
+    return (options?.client ?? this.client).get<
+      SessionFlightRecorderResponses,
+      SessionFlightRecorderErrors,
+      ThrowOnError
+    >({
+      url: "/session/{sessionID}/flight-recorder",
       ...options,
       ...params,
     })

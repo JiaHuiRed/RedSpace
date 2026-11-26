@@ -1537,7 +1537,8 @@ export const layer = Layer.effect(
               ctx.stepFinishBooked = false
               ctx.bookingEstimatedUsage = false
               stepFinishSeen = yield* Deferred.make<void>()
-              const stream = llm.stream(streamInput)
+              // 261126 Red 普通回复与压缩摘要的实际请求都归属这个助手消息；重试不另建消息。
+              const stream = llm.stream({ ...streamInput, messageID: ctx.assistantMessage.id })
               // 261104 Red 网关收尾挂起兜底：GLM 实测吐完 usage（step-finish 已到）后不关流，
               //   streamText 卡在 step 边界等 EOF，idleMs（300s）全程空转、在途工具被误标
               //   aborted（ses_ffe5e5bdeb 2026-11-04 六次实测，301s 整拍）。step-finish 到达后

@@ -3,6 +3,7 @@ import { PermissionID } from "@/permission/schema"
 import { ModelID, ProviderID } from "@/provider/schema"
 import { Session } from "@/session/session"
 import { ContextSnapshot } from "@/session/context-snapshot"
+import * as FlightRecorder from "@/session/flight-recorder"
 import { Goal } from "@/session/goal"
 import { MessageV2 } from "@/session/message-v2"
 import { SessionPrompt } from "@/session/prompt"
@@ -60,6 +61,12 @@ export const MessagesQuery = Schema.Struct({
   limit: Schema.optional(Schema.NumberFromString.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(0))),
   before: Schema.optional(Schema.String),
   after: Schema.optional(Schema.String),
+})
+export const FlightRecorderQuery = Schema.Struct({
+  ...WorkspaceRoutingQueryFields,
+  source: Schema.optional(FlightRecorder.Source),
+  before: Schema.optional(Schema.String.check(Schema.isMaxLength(1024))),
+  limit: Schema.optional(Schema.NumberFromString.check(Schema.isInt(), Schema.isBetween({ minimum: 1, maximum: FlightRecorder.MAX_PAGE }))),
 })
 export const ChangesQuery = Schema.Struct({
   after: Schema.optional(
@@ -165,6 +172,7 @@ export const SessionPaths = {
   // 它读的 session_message 表在摘除双写后不再有对话内容，是个空壳。名字撞上只会让人以为
   // 是同一个东西的两个版本。
   contextInspect: `${root}/:sessionID/context-inspect`,
+  flightRecorder: `${root}/:sessionID/flight-recorder`,
   goal: `${root}/:sessionID/goal`,
   diff: `${root}/:sessionID/diff`,
   outline: `${root}/:sessionID/outline`,
@@ -296,9 +304,19 @@ export const SessionApi = HttpApi.make("session")
             identifier: "session.contextInspect",
             summary: "Inspect session context",
             description:
-              "Break down the most recent request sent for this session into system prompt, tool schemas and conversation, with per-segment token estimates. Returns 404 until the session sends a request (the snapshot lives in memory only).",
+              "Break down the latest recorded session context into system prompt, tool schemas and conversation, with per-segment token estimates. Returns 404 when no snapshot is available.",
           }),
         ),
+        HttpApiEndpoint.get("flightRecorder", SessionPaths.flightRecorder, {
+          params: { sessionID: SessionID },
+          query: FlightRecorderQuery,
+          success: described(FlightRecorder.Page, "A page of execution history without prompt or tool bodies"),
+          error: [HttpApiError.BadRequest, ApiNotFoundError],
+        }).annotateMerge(OpenApi.annotations({
+          identifier: "session.flightRecorder",
+          summary: "Read session execution history",
+          description: "Page through booked steps (default) or recently observed provider requests, newest first. Missing observations are omitted. A cursor belongs to one session and source.",
+        })),
         HttpApiEndpoint.get("outline", SessionPaths.outline, {
           params: { sessionID: SessionID },
           success: described(SessionOutline.Info, "Turn outline for the whole session log"),

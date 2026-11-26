@@ -154,6 +154,12 @@ export const PartTable = sqliteTable(
     index("part_session_tool_idx")
       .on(table.session_id, table.message_id, table.id)
       .where(sql`json_extract(${table.data}, '$.type') = 'tool'`),
+    // 261126 Red Flight Recorder 按 (session_id, time_created, id) 读 step-finish 分页；
+    // 旧 (session_id, id) 统计形态会扫整场并 USE TEMP B-TREE。partial index 只收
+    // step-finish 行，生产首次升级需要一次扫描。json 路径必须是字面量，不能是绑定参数。
+    index("part_session_flight_step_idx")
+      .on(table.session_id, table.time_created, table.id)
+      .where(sql`json_extract(${table.data}, '$.type') = 'step-finish'`),
   ],
 )
 

@@ -12,6 +12,7 @@ import { NativeCompaction } from "@/config/native-compaction"
 import * as Database from "@/storage/db"
 import * as SessionQuery from "@/tool/session-query"
 import { ContextSnapshot } from "@/session/context-snapshot"
+import * as FlightRecorder from "@/session/flight-recorder"
 import { Goal } from "@/session/goal"
 import { MessageV2 } from "@/session/message-v2"
 import { SessionPrompt } from "@/session/prompt"
@@ -35,6 +36,7 @@ import {
   CommandPayload,
   ChangesQuery,
   DiffQuery,
+  FlightRecorderQuery,
   ForkPayload,
   InitPayload,
   ListQuery,
@@ -179,6 +181,16 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       // 会被 UI 画成「构成全是 0」，那是在说谎；404 让 UI 老实显示「等下一轮请求」。
       if (!snapshot) return yield* notFound(`No context snapshot yet for session ${ctx.params.sessionID}`)
       return snapshot
+    })
+
+    const flightRecorder = Effect.fn("SessionHttpApi.flightRecorder")(function* (ctx: {
+      params: { sessionID: SessionID }
+      query: typeof FlightRecorderQuery.Type
+    }) {
+      yield* requireSession(ctx.params.sessionID)
+      const page = FlightRecorder.page(ctx.params.sessionID, ctx.query.source ?? "steps", ctx.query.limit, ctx.query.before)
+      if (!page) return yield* new HttpApiError.BadRequest({})
+      return page
     })
 
     const diff = Effect.fn("SessionHttpApi.diff")(function* (ctx: {
@@ -726,6 +738,7 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       .handle("todo", todo)
       .handle("goal", goal)
       .handle("contextInspect", contextInspect)
+      .handle("flightRecorder", flightRecorder)
       .handle("diff", diff)
       .handle("outline", outline)
       .handle("messages", messages)

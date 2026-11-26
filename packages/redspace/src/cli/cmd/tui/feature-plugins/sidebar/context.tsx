@@ -7,6 +7,7 @@ import { createEffect, createMemo, createResource, createSignal, onCleanup, Show
 import { useEvent } from "@tui/context/event"
 import { useSDK } from "@tui/context/sdk"
 import { ContextComposition } from "./context-composition"
+import { SidebarFlightRecorder } from "./dialog-flight-recorder"
 
 const id = "internal:sidebar-context"
 
@@ -401,6 +402,12 @@ function View(props: { api: TuiPluginApi; session_id: string }) {
       </Show>
       <ContextComposition api={props.api} sessionID={props.session_id} messages={msg()} compact={compact}
         load={(sessionID) => sdk.client.session.contextInspect({ sessionID })} />
+      {/* 261126 Red Flight Recorder V1：默认不拉取，点开或 <leader>o 才请求；只读取当前会话记录。 */}
+      <SidebarFlightRecorder
+        api={props.api}
+        sessionID={props.session_id}
+        load={(input) => sdk.client.session.flightRecorder(input, { throwOnError: true })}
+      />
       <box height={1} />
       <text fg={theme()?.textMuted}>
         Session total <span style={{ fg: tokenColor.total }}>{state().sessionTotal.toLocaleString()}</span>

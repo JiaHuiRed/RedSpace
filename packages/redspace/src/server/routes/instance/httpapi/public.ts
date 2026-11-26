@@ -1,4 +1,5 @@
 import { OpenApi } from "effect/http-api"
+import { MAX_PAGE as MAX_FLIGHT_ROWS } from "@/session/flight-recorder"
 import { RedCodeHttpApi } from "./api"
 import { QueryBooleanOpenApi } from "./groups/query"
 
@@ -67,6 +68,7 @@ const QueryParameterSchemas: Record<string, OpenApiSchema> = {
   "GET /session roots": QueryBooleanOpenApi,
   "GET /session limit": { type: "number" },
   "GET /session/{sessionID}/message limit": { type: "integer", minimum: 0, maximum: Number.MAX_SAFE_INTEGER },
+  "GET /session/{sessionID}/flight-recorder limit": { type: "integer", minimum: 1, maximum: MAX_FLIGHT_ROWS },
   "GET /session/{sessionID}/diff patch": QueryBooleanOpenApi,
   "GET /api/session limit": { type: "number" },
   "GET /api/session start": { type: "number" },

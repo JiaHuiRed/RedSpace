@@ -21,7 +21,7 @@ import { Permission } from "@/permission"
 import { PermissionID } from "@/permission/schema"
 import { Bus } from "@/bus"
 import { Wildcard } from "@/util/wildcard"
-import { SessionID } from "@/session/schema"
+import { SessionID, MessageID } from "@/session/schema"
 import { Auth } from "@/auth"
 import { EffectBridge } from "@/effect/bridge"
 import { RuntimeFlags } from "@/effect/runtime-flags"
@@ -31,6 +31,7 @@ import { LLMAISDK } from "./llm/ai-sdk"
 import { LLMNativeRuntime } from "./llm/native-runtime"
 import { LLMRequestPrep } from "./llm/request"
 import { RequestEvidence } from "./request-evidence"
+import { FlightRecording } from "./flight-recording"
 
 const log = Log.create({ service: "llm" })
 export const OUTPUT_TOKEN_MAX = ProviderTransform.OUTPUT_TOKEN_MAX
@@ -52,6 +53,9 @@ export type StreamInput = {
   parentSessionID?: string
   // 261122 Red 第二批：本次流对应的助手消息 ID，进日志关联号（llm.setup / llm.ttft / llm.slow）。
   messageID?: string
+  // 261126 Red Flight Recorder 的本地压缩标记（最近 native compaction committedAt）。
+  // 只用于同桶前后比较，不进入 wire、不改变模型可见输入。
+  lastCompactionAt?: number
   model: Provider.Model
   agent: Agent.Info
   permission?: Permission.Ruleset
@@ -272,15 +276,28 @@ const live: Layer.Layer<
       // Runtime seam: native is an opt-in adapter over @redcode-ai/llm. It
       // either returns a ready LLMEvent stream or a concrete fallback reason.
       const evidenceLimits = ConfigRequestEvidence.resolve(cfg.experimental?.requestEvidence)
+      // 261126 Red Flight Recorder：只录明确绑定实际会话助手消息的调用。标题/无消息的调用
+      // 不建立 recorder，也就不产生无法确定归属的行；ID 在这里一次性收窄成品牌类型。
       if (flags.experimentalNativeLlm) {
+        const flight = input.messageID
+          ? FlightRecording.create({
+              sessionID: SessionID.make(input.sessionID),
+              messageID: MessageID.make(input.messageID),
+              providerID: input.model.providerID,
+              modelID: input.model.id,
+              runtime: "native",
+            })
+          : undefined
         const requestEvidence = RequestEvidence.create(
           {
             sessionID: input.sessionID,
             modelKey: `${input.model.providerID}/${input.model.id}`,
             runtime: "native",
             model: input.model,
+            lastCompactionAt: input.lastCompactionAt,
           },
           evidenceLimits,
+          flight,
         )
         const native = LLMNativeRuntime.stream({
           model: input.model,
@@ -312,6 +329,7 @@ const live: Layer.Layer<
             type: "native" as const,
             stream: native.stream.pipe(Stream.tap((event) => Effect.sync(() => requestEvidence.event(event)))),
             evidence: requestEvidence,
+            flight,
             toolInputGuard,
           }
         }
@@ -333,14 +351,25 @@ const live: Layer.Layer<
           "llm.model": input.model.id,
         }),
       )
+      const flight = input.messageID
+        ? FlightRecording.create({
+            sessionID: SessionID.make(input.sessionID),
+            messageID: MessageID.make(input.messageID),
+            providerID: input.model.providerID,
+            modelID: input.model.id,
+            runtime: "ai-sdk",
+          })
+        : undefined
       const requestEvidence = RequestEvidence.create(
         {
           sessionID: input.sessionID,
           modelKey: `${input.model.providerID}/${input.model.id}`,
           runtime: "ai-sdk",
           model: input.model,
+          lastCompactionAt: input.lastCompactionAt,
         },
         evidenceLimits,
+        flight,
       )
       // Default runtime path: AI SDK owns provider execution and tool dispatch;
       // LLMAISDK.toLLMEvents below normalizes fullStream parts for the processor.
@@ -441,9 +470,14 @@ const live: Layer.Layer<
         type: "ai-sdk" as const,
         result: withContinuation(streamOnce, prepared.messages, input.model),
         evidence: requestEvidence,
+        flight,
         toolInputGuard,
       }
     })
+
+    // 261126 Red Flight Recorder 只在该流终止时结算一次（成功/失败/取消），不逐 chunk 写库。
+    const conclude = <S, E>(stream: Stream.Stream<S, E>, flight: FlightRecording.Recorder | undefined) =>
+      flight ? Stream.onExit(stream, (exit) => Effect.sync(() => flight.settle(exit))) : stream
 
     const stream: Interface["stream"] = (input) =>
       Stream.scoped(
@@ -457,7 +491,8 @@ const live: Layer.Layer<
             const result = yield* run({ ...input, abort: ctrl.signal })
 
             const guardLimits = { toolInput: result.toolInputGuard }
-            if (result.type === "native") return guardFirstEvent(result.stream, ctrl, undefined, guardLimits)
+            if (result.type === "native")
+              return conclude(guardFirstEvent(result.stream, ctrl, undefined, guardLimits), result.flight)
 
             // Adapter seam: both runtimes expose the same LLMEvent stream. Native
             // already returns one; AI SDK streams are converted here.
@@ -471,28 +506,31 @@ const live: Layer.Layer<
                 state.routedVia = routedVia(meta.headers)
               })
               .catch(() => {})
-            return guardFirstEvent(
-              Stream.fromAsyncIterable(result.result.fullStream, (e) =>
-                e instanceof Error ? e : new Error(String(e)),
-              ).pipe(
-                Stream.mapEffect((event) => LLMAISDK.toLLMEvents(state, event)),
-                Stream.flatMap((events) => Stream.fromIterable(events)),
-                // 260803 Red consumption protection: when the stream dies mid-flight the
-                // provider usage chunk never arrives, so the session would bill zero cost
-                // for a large aborted response. Emit an estimated step-finish before the
-                // original failure propagates (processor taps it and books usage, then
-                // halt runs as usual). Interruption passes through untouched so the
-                // processor's onInterrupt -> abort path is preserved.
-                Stream.catchCause((cause) =>
-                  Cause.hasInterruptsOnly(cause)
-                    ? Stream.failCause(cause)
-                    : Stream.fromIterable(estimatedFinishEvents(state)).pipe(Stream.concat(Stream.failCause(cause))),
+            return conclude(
+              guardFirstEvent(
+                Stream.fromAsyncIterable(result.result.fullStream, (e) =>
+                  e instanceof Error ? e : new Error(String(e)),
+                ).pipe(
+                  Stream.mapEffect((event) => LLMAISDK.toLLMEvents(state, event)),
+                  Stream.flatMap((events) => Stream.fromIterable(events)),
+                  // 260803 Red consumption protection: when the stream dies mid-flight the
+                  // provider usage chunk never arrives, so the session would bill zero cost
+                  // for a large aborted response. Emit an estimated step-finish before the
+                  // original failure propagates (processor taps it and books usage, then
+                  // halt runs as usual). Interruption passes through untouched so the
+                  // processor's onInterrupt -> abort path is preserved.
+                  Stream.catchCause((cause) =>
+                    Cause.hasInterruptsOnly(cause)
+                      ? Stream.failCause(cause)
+                      : Stream.fromIterable(estimatedFinishEvents(state)).pipe(Stream.concat(Stream.failCause(cause))),
+                  ),
+                  Stream.tap((event) => Effect.sync(() => result.evidence.event(event))),
                 ),
-                Stream.tap((event) => Effect.sync(() => result.evidence.event(event))),
+                ctrl,
+                undefined,
+                guardLimits,
               ),
-              ctrl,
-              undefined,
-              guardLimits,
+              result.flight,
             )
           }),
         ),

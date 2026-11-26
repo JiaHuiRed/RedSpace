@@ -78,6 +78,8 @@ export const Definitions = {
   sidebar_toggle: keybind("<leader>b", "Toggle sidebar"),
   // 261104 Red Context 构成的键盘入口：侧栏折叠件此前只有 onMouseDown。
   sidebar_composition_toggle: keybind("<leader>i", "Inspect context composition"),
+  // 261126 Red Flight Recorder V1：与 Composition 同在侧栏 Context 段，默认不拉取。
+  sidebar_flight_recorder_open: keybind("<leader>o", "Open execution history"),
   scrollbar_toggle: keybind("none", "Toggle session scrollbar"),
   status_view: keybind("<leader>s", "View status"),
 
@@ -286,6 +288,7 @@ export const CommandMap = {
   theme_mode_lock: "theme.mode.lock",
   sidebar_toggle: "session.sidebar.toggle",
   sidebar_composition_toggle: "sidebar.composition.toggle",
+  sidebar_flight_recorder_open: "sidebar.flight_recorder.open",
   scrollbar_toggle: "session.toggle.scrollbar",
   status_view: "redcode.status",
   session_export: "session.export",

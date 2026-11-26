@@ -15,6 +15,7 @@ import { Plugin } from "../../src/plugin"
 import { Provider } from "@/provider/provider"
 import { ModelID, ProviderID } from "../../src/provider/schema"
 import { Session } from "@/session/session"
+import * as Flight from "@/session/flight-recorder"
 import { LLM } from "../../src/session/llm"
 import { MessageV2 } from "../../src/session/message-v2"
 import { SessionProcessor } from "../../src/session/processor"
@@ -27,7 +28,7 @@ import * as Log from "@redcode-ai/core/util/log"
 import { CrossSpawnSpawner } from "@redcode-ai/core/cross-spawn-spawner"
 import { provideTmpdirServer, TestInstance } from "../fixture/fixture"
 import { awaitWithTimeout, testEffect } from "../lib/effect"
-import { raw, reply, TestLLMServer } from "../lib/llm-server"
+import { httpError, raw, reply, TestLLMServer } from "../lib/llm-server"
 import { SyncEvent } from "@/sync"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { EventV2Bridge } from "@/event-v2-bridge"
@@ -448,7 +449,7 @@ it.live("session.processor effect tests capture llm input cleanly", () =>
       Effect.gen(function* () {
         const { processors, session, provider } = yield* boot()
 
-        yield* llm.text("hello")
+        yield* llm.text("hello", { usage: { input: 120, output: 2 } })
 
         const chat = yield* session.create({})
         const parent = yield* user(chat.id, "hi")
@@ -484,6 +485,59 @@ it.live("session.processor effect tests capture llm input cleanly", () =>
         expect(value).toBe("continue")
         expect(calls).toBe(1)
         expect(parts.some((part) => part.type === "text" && part.text === "hello")).toBe(true)
+        const attempts = Flight.page(chat.id, "requests")!.items
+        expect(attempts).toHaveLength(1)
+        expect(attempts[0]).toMatchObject({
+          messageID: msg.id, modelID: ref.modelID, outcome: "completed", input: 120, output: 2,
+        })
+        expect(attempts[0]?.cacheRead).toBeUndefined()
+        expect(Flight.page(chat.id, "steps")!.items[0]).toMatchObject({
+          messageID: msg.id, outcome: "booked", input: 120, output: 2, cacheRead: 0,
+        })
+      }),
+    { config: (url) => providerCfg(url) },
+  ),
+)
+
+it.live("flight history separates an HTTP retry and a length continuation under the same assistant", () =>
+  provideTmpdirServer(
+    ({ dir, llm }) =>
+      Effect.gen(function* () {
+        const { processors, session, provider } = yield* boot()
+        yield* llm.push(
+          httpError(503, { error: { message: "retry fixture" } }),
+          raw({
+            head: [
+              { choices: [{ index: 0, delta: { role: "assistant", content: "first half" } }] },
+              {
+                choices: [{ index: 0, delta: {}, finish_reason: "length" }],
+                usage: { prompt_tokens: 100, completion_tokens: 20, prompt_tokens_details: { cached_tokens: 0 } },
+              },
+            ],
+          }),
+          reply().text("second half").usage({ input: 144, output: 7 }).stop(),
+        )
+        const chat = yield* session.create({})
+        const parent = yield* user(chat.id, "continue fixture")
+        const msg = yield* assistant(chat.id, parent.id, path.resolve(dir))
+        const base = yield* provider.getModel(ref.providerID, ref.modelID)
+        const model = { ...base, api: { ...base.api, id: "deepseek-fixture" } }
+        const handle = yield* processors.create({ assistantMessage: msg, sessionID: chat.id, model })
+        yield* handle.process({
+          user: parent, sessionID: chat.id, model, retries: 1, agent: agent(), system: [],
+          messages: [{ role: "user", content: "continue fixture" }], tools: {},
+        })
+        expect(yield* llm.calls).toBe(3)
+        const rows = Flight.page(chat.id, "requests")!.items
+        expect(rows).toHaveLength(3)
+        expect(new Set(rows.map((r) => r.id)).size).toBe(3)
+        expect(rows.every((r) => r.messageID === msg.id)).toBe(true)
+        expect(rows.map((r) => r.outcome).sort()).toEqual(["completed", "completed", "failed"])
+        expect(rows.find((r) => r.outcome === "failed")?.input).toBeUndefined()
+        expect(rows.find((r) => r.input === 100)).toMatchObject({ output: 20, cacheRead: 0 })
+        const continuation = rows.find((r) => r.input === 144)
+        expect(continuation).toMatchObject({ output: 7 })
+        expect(continuation?.cacheRead).toBeUndefined()
       }),
     { config: (url) => providerCfg(url) },
   ),

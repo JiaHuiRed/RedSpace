@@ -6508,12 +6508,120 @@
             }
           }
         },
-        "description": "Break down the most recent request sent for this session into system prompt, tool schemas and conversation, with per-segment token estimates. Returns 404 until the session sends a request (the snapshot lives in memory only).",
+        "description": "Break down the latest recorded session context into system prompt, tool schemas and conversation, with per-segment token estimates. Returns 404 when no snapshot is available.",
         "summary": "Inspect session context",
         "x-codeSamples": [
           {
             "lang": "js",
             "source": "import { createOpencodeClient } from \"@redcode-ai/sdk\n\nconst client = createOpencodeClient()\nawait client.session.contextInspect({\n  ...\n})"
+          }
+        ]
+      }
+    },
+    "/session/{sessionID}/flight-recorder": {
+      "get": {
+        "tags": ["session"],
+        "operationId": "session.flightRecorder",
+        "parameters": [
+          {
+            "name": "sessionID",
+            "in": "path",
+            "schema": {
+              "type": "string",
+              "pattern": "^ses"
+            },
+            "required": true
+          },
+          {
+            "name": "directory",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            },
+            "required": false
+          },
+          {
+            "name": "source",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": ["steps", "requests"]
+            },
+            "required": false
+          },
+          {
+            "name": "before",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "maxLength": 1024
+            },
+            "required": false
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50
+            },
+            "required": false
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A page of execution history without prompt or tool bodies",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FlightRecorderPage"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "BadRequest | InvalidRequestError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/effect_HttpApiError_BadRequest"
+                    },
+                    {
+                      "$ref": "#/components/schemas/InvalidRequestError"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "NotFoundError",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NotFoundError"
+                }
+              }
+            }
+          }
+        },
+        "description": "Page through booked steps (default) or recently observed provider requests, newest first. Missing observations are omitted. A cursor belongs to one session and source.",
+        "summary": "Read session execution history",
+        "x-codeSamples": [
+          {
+            "lang": "js",
+            "source": "import { createOpencodeClient } from \"@redcode-ai/sdk\n\nconst client = createOpencodeClient()\nawait client.session.flightRecorder({\n  ...\n})"
           }
         ]
       }
@@ -16979,6 +17087,100 @@
           }
         },
         "required": ["type", "text"],
+        "additionalProperties": false
+      },
+      "FlightRecorderPage": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FlightRecorderRow"
+            }
+          },
+          "next": {
+            "type": "string"
+          }
+        },
+        "required": ["items"],
+        "additionalProperties": false
+      },
+      "FlightRecorderRow": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "messageID": {
+            "type": "string"
+          },
+          "time": {
+            "type": "number"
+          },
+          "providerID": {
+            "type": "string"
+          },
+          "modelID": {
+            "type": "string"
+          },
+          "outcome": {
+            "type": "string",
+            "enum": ["booked", "estimated", "completed", "failed", "cancelled", "unknown"]
+          },
+          "summary": {
+            "type": "boolean"
+          },
+          "input": {
+            "type": "number"
+          },
+          "output": {
+            "type": "number"
+          },
+          "cacheRead": {
+            "type": "number"
+          },
+          "cacheWrite": {
+            "type": "number"
+          },
+          "cacheMiss": {
+            "type": "number"
+          },
+          "cost": {
+            "type": "number"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "durationMs": {
+            "type": "number"
+          },
+          "firstEventMs": {
+            "type": "number"
+          },
+          "prefix": {
+            "type": "object",
+            "properties": {
+              "system": {
+                "type": "string",
+                "enum": ["baseline", "unchanged", "append", "rewind", "rewrite"]
+              },
+              "tools": {
+                "type": "string",
+                "enum": ["baseline", "unchanged", "append", "rewind", "rewrite"]
+              },
+              "history": {
+                "type": "string",
+                "enum": ["baseline", "unchanged", "append", "rewind", "rewrite"]
+              },
+              "compressed": {
+                "type": "boolean"
+              }
+            },
+            "required": ["system", "tools", "history", "compressed"],
+            "additionalProperties": false
+          }
+        },
+        "required": ["id", "messageID", "time", "providerID", "modelID", "outcome"],
         "additionalProperties": false
       },
       "ContextSnapshot": {

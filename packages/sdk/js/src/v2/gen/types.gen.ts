@@ -967,6 +967,36 @@ export type TextPartInput = {
   }
 }
 
+export type FlightRecorderPage = {
+  items: Array<FlightRecorderRow>
+  next?: string
+}
+
+export type FlightRecorderRow = {
+  id: string
+  messageID: string
+  time: number
+  providerID: string
+  modelID: string
+  outcome: "booked" | "estimated" | "completed" | "failed" | "cancelled" | "unknown"
+  summary?: boolean
+  input?: number
+  output?: number
+  cacheRead?: number
+  cacheWrite?: number
+  cacheMiss?: number
+  cost?: number
+  currency?: string
+  durationMs?: number
+  firstEventMs?: number
+  prefix?: {
+    system: "baseline" | "unchanged" | "append" | "rewind" | "rewrite"
+    tools: "baseline" | "unchanged" | "append" | "rewind" | "rewrite"
+    history: "baseline" | "unchanged" | "append" | "rewind" | "rewrite"
+    compressed: boolean
+  }
+}
+
 export type ContextSnapshot = {
   providerID: string
   modelID: string
@@ -8021,6 +8051,43 @@ export type SessionContextInspectResponses = {
 }
 
 export type SessionContextInspectResponse = SessionContextInspectResponses[keyof SessionContextInspectResponses]
+
+export type SessionFlightRecorderData = {
+  body?: never
+  path: {
+    sessionID: string
+  }
+  query?: {
+    directory?: string
+    workspace?: string
+    source?: "steps" | "requests"
+    before?: string
+    limit?: number
+  }
+  url: "/session/{sessionID}/flight-recorder"
+}
+
+export type SessionFlightRecorderErrors = {
+  /**
+   * BadRequest | InvalidRequestError
+   */
+  400: EffectHttpApiErrorBadRequest | InvalidRequestError
+  /**
+   * NotFoundError
+   */
+  404: NotFoundError
+}
+
+export type SessionFlightRecorderError = SessionFlightRecorderErrors[keyof SessionFlightRecorderErrors]
+
+export type SessionFlightRecorderResponses = {
+  /**
+   * A page of execution history without prompt or tool bodies
+   */
+  200: FlightRecorderPage
+}
+
+export type SessionFlightRecorderResponse = SessionFlightRecorderResponses[keyof SessionFlightRecorderResponses]
 
 export type SessionOutlineData = {
   body?: never

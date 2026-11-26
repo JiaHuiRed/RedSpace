@@ -112,15 +112,24 @@ export function stream(input: StreamInput): StreamResult {
               : body
             : undefined
       const dispatch = async () => {
-        const result = await Reflect.apply(target, thisArg, args) as Response
-        if (observed !== undefined) {
-          try {
-            input.observeRequest?.(observed)
-          } catch {
-            // 261004 Red Diagnostic failures must never prevent the configured provider fetch from running.
+        try {
+          const result = await Reflect.apply(target, thisArg, args) as Response
+          if (observed !== undefined) {
+            try {
+              input.observeRequest?.(observed)
+            } catch {
+              // 261004 Red Diagnostic failures must never prevent the configured provider fetch from running.
+            }
           }
+          return result
+        } catch (error) {
+          // 261126 Red 出站失败按同一关联号留下失败证据；取消（AbortError）交给流退出结算。
+          const aborted =
+            error instanceof Error &&
+            (error.name === "AbortError" || (error.cause instanceof Error && error.cause.name === "AbortError"))
+          if (!aborted) RequestEvidence.observeRequestFailure()
+          throw error
         }
-        return result
       }
       return input.requestEvidence ? RequestEvidence.withRequest(input.requestEvidence, dispatch) : dispatch()
     },

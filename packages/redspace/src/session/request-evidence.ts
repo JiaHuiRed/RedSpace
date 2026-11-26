@@ -10,7 +10,9 @@ import { ConfigRequestEvidence } from "@/config/request-evidence"
 const log = Log.create({ service: "request-evidence" })
 // 261012 Red 中间件与 native 只强制 capture；transport 与 providerUsage 是按观察器
 // 实现装配的可选钩子，capture-only 的测试替身因此保持可用。
-type ScopedObserver = Pick<Observer, "capture"> & Partial<Pick<Observer, "transport" | "providerUsage">>
+// 261126 Red started 是 Flight Recorder 的计时接缝：只传本次请求的关联号与起始时刻。
+type ScopedObserver = Pick<Observer, "capture"> &
+  Partial<Pick<Observer, "transport" | "providerUsage" | "started" | "rejected">>
 const transportScope = new AsyncLocalStorage<{
   observer: ScopedObserver
   requestID: string
@@ -26,6 +28,9 @@ export type Context = {
   readonly modelKey: string
   readonly runtime: Runtime
   readonly model?: Provider.Model
+  // 261126 Red Flight Recorder 的本地压缩标记（nativeBlocks 最近 committedAt）。只做
+  // 同桶前后比较，不进入 wire，也不改变模型可见输入。
+  readonly lastCompactionAt?: number
 }
 
 type Entry = {
@@ -75,6 +80,9 @@ type Fingerprint = {
 type Bucket = {
   fingerprint?: Fingerprint
   pending: Map<string, Compression>
+  // 261126 Red 上一次观察到的本地压缩标记（同桶比较用）。undefined = 未知；0 = 明确没有
+  // 已提交的压缩块。只在调用方提供 lastCompactionAt 的请求上更新，标题/无消息调用不污染。
+  compactionAt?: number
   // 261013 Red 连续零命中计数（口径见 core/util/cache-streak.ts）。桶按 会话×模型×runtime
   // 键控且跨请求延续。undefined 是「边界后等待首根」态：边界后的首根 miss 是合法冷启动，
   // 置 0 跳过不计，之后连续计数 —— 与客户端的边界跳过同口径，服务端不会早一轮报警。
@@ -97,6 +105,8 @@ export type CaptureObservation =
         readonly change: "baseline" | "unchanged" | "changed"
       }
       readonly afterCompression: readonly Compression[]
+      // 261126 Red 同桶前次本地标记可比且本次更新 → true；首次基线/缺标记/不确定时不出现。
+      readonly compacted?: boolean
     }
   | {
       readonly status: "unsupported"
@@ -137,6 +147,21 @@ export type Observer = {
   // 261012 Red AI SDK finish 事件的原始 vendor usage（归一化之前）经中间件旁路观察；
   // 保持可选，capture-only 的替身与 native 路径无需实现。
   providerUsage?(observation: ProviderUsageObservation): void
+  // 261126 Red Flight Recorder 计时接缝：withRequest 在真实出站前调用一次。
+  started?(requestID: string, startedAt: number): void
+  // 261126 Red 出站被拒绝（HTTP/网络失败）且 SDK 可能自行重试：按同一关联号留给调用方结算，
+  // 不能等整流退出——那时 current 可能已经换成重试后的尝试。
+  rejected?(requestID: string): void
+}
+
+// 261126 Red Flight Recorder 只消费观察器已经算好的有界指纹与白名单数值，不重新序列化
+// 请求体。回调内任何失败都必须被吞掉：采集失败不能改变请求、流或计费。
+export type ObserverHooks = {
+  readonly started?: (requestID: string, startedAt: number) => void
+  readonly capture?: (observation: CaptureObservation) => void
+  readonly event?: (event: LLMEvent, observation: EventObservation | undefined) => void
+  readonly providerUsage?: (observation: ProviderUsageObservation) => void
+  readonly rejected?: (requestID: string) => void
 }
 
 // 261012 Red finish 事件里原始 vendor usage 的白名单投影。@ai-sdk/openai 的 Responses
@@ -146,12 +171,20 @@ export type Observer = {
 // 261118 Red attribution 是 Codex OAuth 端点按字段返回的缓存归因（codex#62109）：
 // AI SDK 的 Responses usage schema 对未知键透传，orchestration_* 字段已证明这点。
 // 口径与验证步骤见 docs/notes/implemented/feature/2026-11-18-cache-attribution-diagnostics.md。
+// 261126 Red Flight Recorder 需要按同 ID 的原始 vendor usage 判定「显式 0 vs 缺失」；
+// Chat 用 prompt_tokens/completion_tokens，Anthropic 用 cache_read/creation_input_tokens。
+// 仍然只收下列有限数值标量（字段数上界 = 白名单长度）。
 const PROVIDER_USAGE_FIELDS = [
   "input_tokens",
   "output_tokens",
   "total_tokens",
+  "prompt_tokens",
+  "completion_tokens",
   "input_tokens_details.cached_tokens",
   "input_tokens_details.cache_write_tokens",
+  "prompt_tokens_details.cached_tokens",
+  "cache_read_input_tokens",
+  "cache_creation_input_tokens",
   "input_tokens_details.orchestration_input_tokens",
   "input_tokens_details.orchestration_input_cached_tokens",
   "output_tokens_details.reasoning_tokens",
@@ -220,6 +253,14 @@ function record(message: string, fields: Record<string, unknown>) {
     log.warn(message, fields)
   } catch {
     // 261004 Red Log sink failures must not change provider request or stream behavior.
+  }
+}
+
+function notify(run: () => void) {
+  try {
+    run()
+  } catch {
+    // 261126 Red Flight Recorder hooks are best-effort; capture failures must not affect the request.
   }
 }
 
@@ -555,7 +596,11 @@ function observeCompression(
   return { type: "compression", status: "recorded", ...value }
 }
 
-export function create(context: Context, limits = ConfigRequestEvidence.resolve()): Observer {
+export function create(
+  context: Context,
+  limits = ConfigRequestEvidence.resolve(),
+  hooks?: ObserverHooks,
+): Observer {
   const sessionID = context.sessionID
   const modelKey = context.modelKey
   const runtime = context.runtime
@@ -568,6 +613,97 @@ export function create(context: Context, limits = ConfigRequestEvidence.resolve(
     runtime,
     requestID,
   })
+
+  // 261126 Red 原 event 方法体抽成纯函数，Flight Recorder 的钩子统一在包装层触发——
+  // 包括 finish / provider-error 这类原来提前 return 的事件。usage 口径与日志不变。
+  const observe = (event: LLMEvent): EventObservation | undefined => {
+    if (event.type === "tool-result") {
+      if (event.name !== "compress" || event.providerExecuted) return
+      const bucket = buckets.get(id) ?? { pending: new Map<string, Compression>() }
+      buckets.set(id, bucket)
+      evictor.touch(id)
+      const observed = observeCompression(bucket, event, limits.maxPendingCompressions)
+      if (!observed) return
+      if (observed.status === "recorded") {
+        lastCompression = {
+          blockCount: observed.blockCount,
+          inputTokensEstimated: observed.inputTokensEstimated,
+          summaryTokensEstimated: observed.summaryTokensEstimated,
+          netSavingsEstimated: observed.netSavingsEstimated,
+        }
+        // 261013 Red 压缩后前缀重置，其后首根 miss 是合法冷启动：回到边界等待态
+        // （undefined），口径同 core/util/cache-streak.ts 的边界跳过。
+        bucket.missStreak = undefined
+      }
+      record("request.compression", { ...common(), ...observed })
+      return observed
+    }
+    if (event.type !== "step-finish") return
+
+    const usageStatus = event.usage?.inputTokens !== undefined
+      ? "reported"
+      : event.usage?.outputTokens !== undefined
+        ? "output-only-estimated"
+        : "missing"
+    const rawUsage = usageFields(event.usage)
+    // 261118 Red native 路径把原始 usage 放在 Usage.providerMetadata.openai，
+    // 与 AI SDK 的 usage.raw 共用同一套白名单投影与派生。
+    const providerRaw = isRecord(event.usage?.providerMetadata)
+      ? event.usage.providerMetadata["openai"]
+      : undefined
+    const derivation = usageDerivation(providerFields(providerRaw))
+    const cacheReadInputTokens = event.usage?.cacheReadInputTokens
+    const cacheWriteInputTokens = event.usage?.cacheWriteInputTokens
+    const observation: EventObservation = {
+      type: "usage",
+      usageStatus,
+      ...(rawUsage ? { rawUsage } : {}),
+      ...derivation,
+      cache:
+        cacheReadInputTokens === undefined && cacheWriteInputTokens === undefined
+          ? { status: "unknown" }
+          : {
+              status: "reported",
+              ...(cacheReadInputTokens === undefined ? {} : { cacheReadInputTokens }),
+              ...(cacheWriteInputTokens === undefined ? {} : { cacheWriteInputTokens }),
+            },
+      ...(lastCompression ? { lastCompression } : {}),
+    }
+    // 261013 Red 连续零命中预警（口径同 core/util/cache-streak.ts）：同桶（会话×模型×
+    // runtime）内，边界后首根实报 cacheRead=0 的 miss 是合法冷启动（undefined → 0 跳过
+    // 不计），其后连续 ≥2 轮且 inputTokens 超阈值 → 独立 WARN 一次。命中清零回边界等待
+    // 态之后的正常计数；usage 缺失或小请求跳过（不计数也不清零）。只在恰好到达报警线的
+    // 这一轮打点，长 streak 由逐请求 reported-zero 行延续，不刷屏。
+    if (usageStatus === "reported" && cacheReadInputTokens !== undefined) {
+      const streakBucket = buckets.get(id) ?? { pending: new Map<string, Compression>() }
+      buckets.set(id, streakBucket)
+      evictor.touch(id)
+      if (cacheReadInputTokens > 0) streakBucket.missStreak = 0
+      else {
+        const inputTokens = event.usage?.inputTokens ?? 0
+        if (inputTokens > CACHE_STREAK_MIN_CONTEXT_TOKENS) {
+          if (streakBucket.missStreak === undefined) streakBucket.missStreak = 0
+          else {
+            streakBucket.missStreak++
+            if (streakBucket.missStreak === CACHE_STREAK_ALERT_TURNS)
+              record("request.cache-miss-streak", {
+                ...common(),
+                streak: streakBucket.missStreak,
+                inputTokens,
+              })
+          }
+        }
+      }
+    }
+    record("request.usage", {
+      ...common(),
+      ...observation,
+      costObservation: "delegated-to-session-processor",
+      costSource: "Session.getUsage",
+      costReason: "The processor owns model rates, cache rules, and currency normalization.",
+    })
+    return observation
+  }
 
   const observer: Observer = {
     limits,
@@ -658,6 +794,13 @@ export function create(context: Context, limits = ConfigRequestEvidence.resolve(
       // 原生 Compaction 不走 compress 工具事件，这条是它唯一的重置信号。
       if (historyObservation.change === "rewind" || historyObservation.change === "rewrite")
         bucket.missStreak = undefined
+      // 261126 Red 压缩标记同桶比较：只有前次与本次都有明确标记、且本次提交更晚才算
+      // 「本请求之前发生过新压缩」。首次基线、缺标记、标记回退都不猜。标题/压缩摘要等
+      // 没有本地标记的调用不更新它，避免无消息请求污染 handle.process 的序列。
+      const compactionAt = context.lastCompactionAt
+      const compacted =
+        compactionAt !== undefined && bucket.compactionAt !== undefined && compactionAt > bucket.compactionAt
+      if (compactionAt !== undefined) bucket.compactionAt = compactionAt
       const observation: CaptureObservation = {
         status: "captured",
         requestID,
@@ -686,6 +829,7 @@ export function create(context: Context, limits = ConfigRequestEvidence.resolve(
             : "baseline",
         },
         afterCompression,
+        ...(compacted ? { compacted: true } : {}),
       }
 
       record("request.prefix", {
@@ -699,95 +843,14 @@ export function create(context: Context, limits = ConfigRequestEvidence.resolve(
         affinity: observation.affinity,
         wire: observation.wire,
         afterCompression: observation.afterCompression,
+        ...(observation.compacted === undefined ? {} : { compacted: observation.compacted }),
       })
+      notify(() => hooks?.capture?.(observation))
       return observation
     },
     event(event) {
-      if (event.type === "tool-result") {
-        if (event.name !== "compress" || event.providerExecuted) return
-        const bucket = buckets.get(id) ?? { pending: new Map<string, Compression>() }
-        buckets.set(id, bucket)
-        evictor.touch(id)
-        const observed = observeCompression(bucket, event, limits.maxPendingCompressions)
-        if (!observed) return
-        if (observed.status === "recorded") {
-          lastCompression = {
-            blockCount: observed.blockCount,
-            inputTokensEstimated: observed.inputTokensEstimated,
-            summaryTokensEstimated: observed.summaryTokensEstimated,
-            netSavingsEstimated: observed.netSavingsEstimated,
-          }
-          // 261013 Red 压缩后前缀重置，其后首根 miss 是合法冷启动：回到边界等待态
-          // （undefined），口径同 core/util/cache-streak.ts 的边界跳过。
-          bucket.missStreak = undefined
-        }
-        record("request.compression", { ...common(), ...observed })
-        return observed
-      }
-      if (event.type !== "step-finish") return
-
-      const usageStatus = event.usage?.inputTokens !== undefined
-        ? "reported"
-        : event.usage?.outputTokens !== undefined
-          ? "output-only-estimated"
-          : "missing"
-      const rawUsage = usageFields(event.usage)
-      // 261118 Red native 路径把原始 usage 放在 Usage.providerMetadata.openai，
-      // 与 AI SDK 的 usage.raw 共用同一套白名单投影与派生。
-      const providerRaw = isRecord(event.usage?.providerMetadata)
-        ? event.usage.providerMetadata["openai"]
-        : undefined
-      const derivation = usageDerivation(providerFields(providerRaw))
-      const cacheReadInputTokens = event.usage?.cacheReadInputTokens
-      const cacheWriteInputTokens = event.usage?.cacheWriteInputTokens
-      const observation: EventObservation = {
-        type: "usage",
-        usageStatus,
-        ...(rawUsage ? { rawUsage } : {}),
-        ...derivation,
-        cache:
-          cacheReadInputTokens === undefined && cacheWriteInputTokens === undefined
-            ? { status: "unknown" }
-            : {
-                status: "reported",
-                ...(cacheReadInputTokens === undefined ? {} : { cacheReadInputTokens }),
-                ...(cacheWriteInputTokens === undefined ? {} : { cacheWriteInputTokens }),
-              },
-        ...(lastCompression ? { lastCompression } : {}),
-      }
-      // 261013 Red 连续零命中预警（口径同 core/util/cache-streak.ts）：同桶（会话×模型×
-      // runtime）内，边界后首根实报 cacheRead=0 的 miss 是合法冷启动（undefined → 0 跳过
-      // 不计），其后连续 ≥2 轮且 inputTokens 超阈值 → 独立 WARN 一次。命中清零回边界等待
-      // 态之后的正常计数；usage 缺失或小请求跳过（不计数也不清零）。只在恰好到达报警线的
-      // 这一轮打点，长 streak 由逐请求 reported-zero 行延续，不刷屏。
-      if (usageStatus === "reported" && cacheReadInputTokens !== undefined) {
-        const streakBucket = buckets.get(id) ?? { pending: new Map<string, Compression>() }
-        buckets.set(id, streakBucket)
-        evictor.touch(id)
-        if (cacheReadInputTokens > 0) streakBucket.missStreak = 0
-        else {
-          const inputTokens = event.usage?.inputTokens ?? 0
-          if (inputTokens > CACHE_STREAK_MIN_CONTEXT_TOKENS) {
-            if (streakBucket.missStreak === undefined) streakBucket.missStreak = 0
-            else {
-              streakBucket.missStreak++
-              if (streakBucket.missStreak === CACHE_STREAK_ALERT_TURNS)
-                record("request.cache-miss-streak", {
-                  ...common(),
-                  streak: streakBucket.missStreak,
-                  inputTokens,
-                })
-            }
-          }
-        }
-      }
-      record("request.usage", {
-        ...common(),
-        ...observation,
-        costObservation: "delegated-to-session-processor",
-        costSource: "Session.getUsage",
-        costReason: "The processor owns model rates, cache rules, and currency normalization.",
-      })
+      const observation = observe(event)
+      notify(() => hooks?.event?.(event, observation))
       return observation
     },
     transport(input, scopedRequestID) {
@@ -804,6 +867,13 @@ export function create(context: Context, limits = ConfigRequestEvidence.resolve(
     },
     providerUsage(observation) {
       record("request.provider-usage", { ...common(), ...observation })
+      notify(() => hooks?.providerUsage?.(observation))
+    },
+    started(requestID, startedAt) {
+      notify(() => hooks?.started?.(requestID, startedAt))
+    },
+    rejected(requestID) {
+      notify(() => hooks?.rejected?.(requestID))
     },
   }
   return observer
@@ -811,7 +881,23 @@ export function create(context: Context, limits = ConfigRequestEvidence.resolve(
 
 // 261007 Red 只传播诊断关联号，不加 HTTP header，也不修改 SDK 参数或实际 body。
 export function withRequest<T>(observer: ScopedObserver, work: () => T): T {
-  return transportScope.run({ observer, requestID: crypto.randomUUID() }, work)
+  const requestID = crypto.randomUUID()
+  const startedAt = Date.now()
+  // 261126 Red Flight Recorder 在真实出站前拿到同一关联号与起始时刻；钩子失败不得中断请求。
+  notify(() => observer.started?.(requestID, startedAt))
+  return transportScope.run({ observer, requestID }, work)
+}
+
+// 261126 Red native 出站拒绝使用同一关联号通知观察器；SDK 中间件在自己的 reject 分支调用
+// hooks.rejected，native-runtime 在 fetch 失败时调用这里。
+export function observeRequestFailure(): void {
+  const scoped = transportScope.getStore()
+  if (!scoped?.observer.rejected) return
+  try {
+    scoped.observer.rejected(scoped.requestID)
+  } catch {
+    // 261126 Red 取证失败不得改变 fetch 错误本身。
+  }
 }
 
 export function observeTransport(input: TransportInput): TransportObservation | undefined {
@@ -839,7 +925,19 @@ export function middleware(observer: ScopedObserver) {
     specificationVersion: "v3" as const,
     async wrapStream<T>({ doStream }: { readonly doStream: () => PromiseLike<T> }): Promise<T> {
       return withRequest(observer, async () => {
-        const result = await doStream()
+        let result: T
+        try {
+          result = await doStream()
+        } catch (error) {
+          // 261126 Red SDK 可能在内部重试并吞掉这次的拒绝；同一关联号上先留失败证据。
+          // 取消（AbortError，含被包装成 cause 的形态）不是失败尝试，交给调用方取消。
+          const aborted =
+            error instanceof Error &&
+            (error.name === "AbortError" || (error.cause instanceof Error && error.cause.name === "AbortError"))
+          const scoped = transportScope.getStore()
+          if (!aborted && scoped?.observer === observer) notify(() => observer.rejected?.(scoped.requestID))
+          throw error
+        }
         // 261012 Red requestID 在 wrapStream 当刻定影：流的消费发生在 ALS 之外，
         // 关联号必须先于流对象存活下来。
         const scoped = transportScope.getStore()

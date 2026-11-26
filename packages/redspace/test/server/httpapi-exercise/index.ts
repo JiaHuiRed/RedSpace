@@ -1317,6 +1317,14 @@ const scenarios: Scenario[] = [
       check(isRecord(body) && body.turn_count === 0 && body.tokens_used === 0, "budget counters start at zero")
     }),
   http.protected
+    .get("/session/{sessionID}/flight-recorder", "session.flightRecorder")
+    .seeded((ctx) => ctx.session({ title: "Flight recorder" }))
+    .at((ctx) => ({
+      path: route("/session/{sessionID}/flight-recorder", { sessionID: ctx.state.id }) + "?source=requests&limit=1",
+      headers: ctx.headers(),
+    }))
+    .json(200, (body) => check(stable(body) === stable({ items: [] }), "a new session has no recorded attempts")),
+  http.protected
     .get("/session/{sessionID}/context-inspect", "session.contextInspect")
     .seeded((ctx) =>
       Effect.gen(function* () {

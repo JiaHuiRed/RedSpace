@@ -31,6 +31,7 @@ import {
   type InspectKey,
 } from "./session-context-summary"
 import { estimateSessionContextBreakdown, type SessionContextBreakdownKey } from "./session-context-breakdown"
+import { SessionFlightRecorderSection } from "./session-flight-recorder"
 
 const BREAKDOWN_COLOR: Record<SessionContextBreakdownKey, string> = {
   system: "var(--syntax-info)",
@@ -777,6 +778,7 @@ export function SessionContextTab(
             )}
           </Index>
 
+          <SessionFlightRecorderSection />
         </div>
       </div>
     </ScrollView>

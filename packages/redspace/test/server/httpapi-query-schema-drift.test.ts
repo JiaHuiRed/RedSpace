@@ -19,6 +19,7 @@ import {
 import { InstancePaths, VcsDiffQuery } from "../../src/server/routes/instance/httpapi/groups/instance"
 import { WorkspacePaths } from "../../src/server/routes/instance/httpapi/groups/workspace"
 import {
+  FlightRecorderQuery,
   ListQuery as SessionListQuery,
   MessagesQuery,
   SessionPaths,
@@ -49,6 +50,7 @@ type OpenApiOperation = { readonly parameters?: readonly OpenApiParameter[] }
 const openApiDriftRoutes = [
   { method: "get", path: SessionPaths.list, query: SessionListQuery },
   { method: "get", path: SessionPaths.messages, query: MessagesQuery },
+  { method: "get", path: SessionPaths.flightRecorder, query: FlightRecorderQuery },
   { method: "get", path: FilePaths.findFile, query: FindFileQuery },
   { method: "get", path: FilePaths.findText, query: FindTextQuery },
   { method: "get", path: FilePaths.list, query: FileQuery },
@@ -65,6 +67,7 @@ const numericSdkQueryParams = [
   { method: "get", path: FilePaths.findFile, name: "limit", schema: { type: "integer", minimum: 1, maximum: 200 } },
   { method: "get", path: SessionPaths.list, name: "start", schema: { type: "number" } },
   { method: "get", path: SessionPaths.list, name: "limit", schema: { type: "number" } },
+  { method: "get", path: SessionPaths.flightRecorder, name: "limit", schema: { type: "integer", minimum: 1, maximum: 50 } },
   {
     method: "get",
     path: SessionPaths.messages,
@@ -267,6 +270,30 @@ describe("httpapi query schema drift", () => {
         const url = `/session/${SessionID.descending()}/message?limit=80&${routingParams(tmp.path)}`
         const response = yield* request(url)
         expectNotSchemaRejection(response.status, url)
+      }),
+    ),
+  )
+
+  it.live(
+    "flight history rejects malformed cursors and invalid page sizes, not as empty history",
+    withTmp({ config: { formatter: false, lsp: false } }, (tmp) =>
+      Effect.gen(function* () {
+        const query = `directory=${encodeURIComponent(tmp.path)}`
+        const response = yield* request(`/session?${query}`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{}",
+        })
+        expect(response.status).toBe(200)
+        const { id } = yield* Effect.promise(() => response.json() as Promise<{ id: string }>)
+        const uri = `/session/${id}/flight-recorder?${query}`
+        for (const fields of ["before=bad", "limit=0", "limit=51", "limit=1.5", "source=both"]) {
+          expect((yield* request(`${uri}&${fields}`)).status, fields).toBe(400)
+        }
+        expect((yield* request(`/session/${SessionID.descending()}/flight-recorder?${query}`)).status).toBe(404)
+        const empty = yield* request(`${uri}&limit=1`)
+        expect(empty.status).toBe(200)
+        expect(yield* Effect.promise(() => empty.json())).toEqual({ items: [] })
       }),
     ),
   )
