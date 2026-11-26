@@ -993,46 +993,71 @@ export const ShellTool = Tool.define(
             const logPath = path.join(jobDir, BACKGROUND_LOG)
             const statusPath = path.join(jobDir, BACKGROUND_STATUS)
             const argv = backgroundArgv(input.shell, input.command)
-            const child = yield* Effect.sync(() => {
-              // 261124 Red Git Bash on Windows drops output when it inherits an O_APPEND handle.
-              const fd = openSync(logPath, "w")
-              try {
-                const handle = nodeSpawn(argv.file, argv.args, {
-                  cwd: input.cwd,
-                  env: input.env,
-                  stdio: ["ignore", fd, fd],
-                  // 261124 Red Windows 下 detached 会让 fd 重定向失效（实测日志为空）；
-                  // Windows 子进程本来就不随父进程退出，unref 足够放行。Unix 仍需 detached
-                  // 脱离父进程组，否则父进程退出时会被一起带走。
-                  detached: process.platform !== "win32",
-                  windowsHide: true,
-                })
-                // spawn 失败是异步 error 事件；先挂监听，否则未捕获异常会掀翻宿主。
-                handle.on("error", (error) => log.warn("background.spawn.failed", { error }))
-                // 261124 Red Publish the terminal result atomically; host exit leaves it unknown.
-                handle.once("exit", (code, signal) => {
-                  const partial = `${statusPath}.tmp`
+            // 261126 Red Windows 后台作业必须与宿主控制台断链：直接 spawn 会继承宿主
+            // console，shell 的孙进程写 CONOUT$ 会刷进 TUI；Bun 下 detached 又会连
+            // stdout/stderr fd 一起丢掉（实测日志 0 字节）。Windows 改走 CreateProcessW +
+            // CREATE_NO_WINDOW（见 ./shell/background），Unix 保持原 detached spawn。
+            // 决策记录：docs/notes/implemented/bug-fix/2026-11-26-windows-background-console.md
+            const pid = yield* Effect.gen(function* () {
+              if (process.platform === "win32") {
+                const background = yield* Effect.promise(() => import("./shell/background"))
+                return yield* Effect.sync(() => {
                   try {
-                    writeFileSync(partial, `${backgroundStatus(code, signal)}\n`)
-                    renameSync(partial, statusPath)
+                    return background.spawnWindowsBackground({
+                      file: argv.file,
+                      args: argv.args,
+                      cwd: input.cwd,
+                      env: input.env,
+                      logPath,
+                      statusPath,
+                      onError: (error) => log.warn("background.status.failed", { error }),
+                    })
                   } catch (error) {
-                    log.warn("background.status.failed", { error })
+                    throw new Error(
+                      `Failed to start background command with ${input.shell}: ${error instanceof Error ? error.message : String(error)}`,
+                    )
                   }
                 })
-                return handle
-              } catch (error) {
-                throw new Error(
-                  `Failed to start background command with ${input.shell}: ${error instanceof Error ? error.message : String(error)}`,
-                )
-              } finally {
-                // 子进程已复制句柄；同步抛错时也必须关掉，否则日志 fd 泄漏。
-                closeSync(fd)
               }
+              const child = yield* Effect.sync(() => {
+                // 261124 Red Git Bash on Windows drops output when it inherits an O_APPEND handle.
+                const fd = openSync(logPath, "w")
+                try {
+                  const handle = nodeSpawn(argv.file, argv.args, {
+                    cwd: input.cwd,
+                    env: input.env,
+                    stdio: ["ignore", fd, fd],
+                    // 261124 Red Unix 需要 detached 脱离父进程组，否则父进程退出时会被一起带走。
+                    detached: true,
+                  })
+                  // spawn 失败是异步 error 事件；先挂监听，否则未捕获异常会掀翻宿主。
+                  handle.on("error", (error) => log.warn("background.spawn.failed", { error }))
+                  // 261124 Red Publish the terminal result atomically; host exit leaves it unknown.
+                  handle.once("exit", (code, signal) => {
+                    const partial = `${statusPath}.tmp`
+                    try {
+                      writeFileSync(partial, `${backgroundStatus(code, signal)}\n`)
+                      renameSync(partial, statusPath)
+                    } catch (error) {
+                      log.warn("background.status.failed", { error })
+                    }
+                  })
+                  return handle
+                } catch (error) {
+                  throw new Error(
+                    `Failed to start background command with ${input.shell}: ${error instanceof Error ? error.message : String(error)}`,
+                  )
+                } finally {
+                  // 子进程已复制句柄；同步抛错时也必须关掉，否则日志 fd 泄漏。
+                  closeSync(fd)
+                }
+              })
+              // spawn 失败时 pid 为 undefined（Node 与 Bun 一致）；此时不能报 Started。
+              if (child.pid === undefined)
+                throw new Error(`Failed to start background command with ${input.shell}`)
+              child.unref()
+              return child.pid
             })
-            // spawn 失败时 pid 为 undefined（Node 与 Bun 一致）；此时不能报 Started。
-            if (child.pid === undefined) throw new Error(`Failed to start background command with ${input.shell}`)
-            const pid = child.pid
-            child.unref()
             const poll = backgroundPoll(input.shell)
             const result: ShellResult = {
               title: input.description,

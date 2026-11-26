@@ -1876,3 +1876,99 @@ describe("tool.shell background", () => {
     30_000,
   )
 })
+
+
+// 261126 Red Windows 后台控制台串屏回归：在独立 PTY 里跑宿主 fixture，后台 shell 的
+// 孙进程直写 CONOUT$。real 走生产 helper，PTY 必须看不到 marker 且 log/status 仍真；
+// legacy 用旧 spawn 参数当 positive control，同一套 PTY 观测必须能看到 marker，否则
+// 这个回归抓不到串屏、等于空转。
+if (process.platform === "win32") {
+  const consoleFixture = path.join(__dirname, "shell-background.fixture.ts")
+  const powershell = Bun.which("pwsh") ?? Bun.which("powershell")
+
+  const runConsoleFixture = (mode: string, marker: string) =>
+    Effect.gen(function* () {
+      const shell = powershell
+      if (!shell) throw new Error("Windows background console regression requires PowerShell")
+      const tmp = yield* tmpdirScoped()
+      const log = path.join(tmp, "output.log")
+      const status = path.join(tmp, "status.txt")
+      const done = path.join(tmp, "done.txt")
+      const pty = yield* Effect.promise(() => import("../../src/pty/pty.node"))
+      const handle = pty.spawn(process.execPath, [consoleFixture, mode, shell, log, status, done, marker], {
+        cwd: projectRoot,
+        cols: 100,
+        rows: 30,
+        name: "xterm",
+      })
+      const chunks: string[] = []
+      handle.onData((data) => chunks.push(data))
+      yield* Effect.promise(
+        () =>
+          new Promise<void>((resolve, reject) => {
+            const timer = setTimeout(() => {
+              handle.kill()
+              reject(new Error(`background console fixture timed out: ${mode}`))
+            }, 20_000)
+            handle.onExit(({ exitCode }) => {
+              clearTimeout(timer)
+              if (exitCode === 0) resolve()
+              else reject(new Error(`background console fixture ${mode} exited with ${exitCode}`))
+            })
+          }),
+      )
+      return { terminal: chunks.join(""), log, status, done }
+    })
+
+  describe("tool.shell background console isolation", () => {
+    it.live(
+      "keeps a background job's direct console writes out of the host PTY",
+      () =>
+        Effect.gen(function* () {
+          const marker = `BACKGROUND_CONSOLE_${Date.now()}_${Math.random().toString(16).slice(2)}`
+          const result = yield* runConsoleFixture("real", marker)
+          expect(result.terminal).not.toContain(marker)
+          expect(yield* waitStatus(result.status)).toBe("exit 0")
+          const log = yield* Effect.promise(() => fs.readFile(result.log, "utf8"))
+          expect(log).toContain("PROBE_STDOUT")
+          expect(log).toContain("PROBE_STDERR")
+        }),
+      30_000,
+    )
+
+    it.live(
+      "positive control: the legacy spawn leaks the same console write",
+      () =>
+        Effect.gen(function* () {
+          const marker = `BACKGROUND_CONSOLE_${Date.now()}_${Math.random().toString(16).slice(2)}`
+          const result = yield* runConsoleFixture("legacy", marker)
+          expect(result.terminal).toContain(marker)
+          expect(yield* waitStatus(result.status)).toBe("exit 0")
+        }),
+      30_000,
+    )
+
+    it.live(
+      "keeps the background job alive after the host console closes",
+      () =>
+        Effect.gen(function* () {
+          const marker = `BACKGROUND_CONSOLE_${Date.now()}_${Math.random().toString(16).slice(2)}`
+          const result = yield* runConsoleFixture("orphan", marker)
+          const done = yield* pollWithTimeout(
+            Effect.promise(async () => {
+              try {
+                return await fs.readFile(result.done, "utf8")
+              } catch (error) {
+                if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined
+                throw error
+              }
+            }),
+            "background job did not survive host exit",
+            "10 seconds",
+          )
+          expect(done.trim()).toBe("done")
+        }),
+      30_000,
+    )
+  })
+}
