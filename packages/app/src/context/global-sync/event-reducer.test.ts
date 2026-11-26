@@ -1,5 +1,13 @@
 import { describe, expect, test } from "bun:test"
-import type { Message, Part, PermissionRequest, Project, QuestionRequest, Session } from "@redcode-ai/sdk/v2/client"
+import type {
+  Message,
+  Part,
+  PermissionRequest,
+  Project,
+  QuestionRequest,
+  Session,
+  SnapshotFileDiff,
+} from "@redcode-ai/sdk/v2/client"
 import { createStore } from "solid-js/store"
 import { QueryClient } from "@tanstack/solid-query"
 import type { State } from "./types"
@@ -963,5 +971,58 @@ describe("applyDirectoryEvent", () => {
     } finally {
       release()
     }
+  })
+
+  test("projects live session diffs to lightweight metadata without retaining patch bodies", () => {
+    const sessionID = "ses_diff_large"
+    const patch = "@@ -1 +1 @@\n+" + "x".repeat(256 * 1024)
+    const diff = [
+      { file: "src/a.ts", patch, additions: 10, deletions: 2, status: "modified" },
+      { file: "src/b.ts", patch: "@@ -0,0 +1 @@\n+b", additions: 1, deletions: 0, status: "added" },
+      { file: "src/c.ts", patch: "@@ -3 +0 @@\n-c", additions: 0, deletions: 3, status: "deleted" },
+      { file: "src/d.ts", patch: "@@ -1 +1 @@\n-d\n+e", additions: 1, deletions: 1 },
+    ] satisfies SnapshotFileDiff[]
+    const event = { type: "session.diff", properties: { sessionID, diff } }
+    const [store, setStore] = createStore(baseState())
+
+    applyDirectoryEvent({ event, store, setStore, push() {}, directory: "/tmp", loadLsp() {} })
+
+    expect(store.session_diff[sessionID]).toEqual([
+      { file: "src/a.ts", patch: "", additions: 10, deletions: 2, status: "modified" },
+      { file: "src/b.ts", patch: "", additions: 1, deletions: 0, status: "added" },
+      { file: "src/c.ts", patch: "", additions: 0, deletions: 3, status: "deleted" },
+      { file: "src/d.ts", patch: "", additions: 1, deletions: 1 },
+    ])
+    // 原事件不被污染：其他订阅方拿到的仍是完整正文
+    expect(event.properties.diff[0].patch).toBe(patch)
+  })
+
+  // 同名文件后续事件要按 file 键更新增删数；清空事件也不能把后台会话（不在 session
+  // 列表里）的键静默删掉——prompt-input 靠这个键决定评论落哪个标签页。
+  test("reconciles live session diffs by file and keeps cleared background sessions", () => {
+    const sessionID = "ses_diff_background"
+    const [store, setStore] = createStore(baseState())
+    const send = (diff: SnapshotFileDiff[]) =>
+      applyDirectoryEvent({
+        event: { type: "session.diff", properties: { sessionID, diff } },
+        store,
+        setStore,
+        push() {},
+        directory: "/tmp",
+        loadLsp() {},
+      })
+
+    send([{ file: "a.ts", patch: "@@ -1 +1 @@\n-a\n+b\n", additions: 1, deletions: 1, status: "modified" }])
+    send([{ file: "a.ts", patch: "@@ -1,2 +1,3 @@\n-a\n+b\n+c\n", additions: 2, deletions: 1, status: "modified" }])
+
+    expect(store.session).toEqual([])
+    expect(store.session_diff[sessionID]).toEqual([
+      { file: "a.ts", patch: "", additions: 2, deletions: 1, status: "modified" },
+    ])
+
+    send([])
+
+    expect(store.session_diff[sessionID]).toEqual([])
+    expect(Object.keys(store.session_diff)).toContain(sessionID)
   })
 })

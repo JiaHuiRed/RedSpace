@@ -3,26 +3,42 @@ import type { Message } from "@redcode-ai/sdk/v2/client"
 
 type Diff = SnapshotFileDiff | VcsFileDiff
 
-function diff(value: unknown): value is Diff {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false
-  if (!("file" in value) || typeof value.file !== "string") return false
-  if (!("patch" in value) || typeof value.patch !== "string") return false
-  if (!("additions" in value) || typeof value.additions !== "number") return false
-  if (!("deletions" in value) || typeof value.deletions !== "number") return false
-  if (!("status" in value) || value.status === undefined) return true
-  return value.status === "added" || value.status === "deleted" || value.status === "modified"
-}
-
 function object(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value)
 }
 
+function fileChange(value: unknown): value is Omit<VcsFileDiff, "patch"> {
+  if (!object(value)) return false
+  if (typeof value.file !== "string") return false
+  if (typeof value.additions !== "number") return false
+  if (typeof value.deletions !== "number") return false
+  if (value.status === undefined) return true
+  return value.status === "added" || value.status === "deleted" || value.status === "modified"
+}
+
+function withPatch(value: unknown): value is Diff {
+  return fileChange(value) && "patch" in value && typeof value.patch === "string"
+}
+
+function collect<T>(value: unknown, valid: (item: unknown) => item is T): T[] {
+  if (Array.isArray(value)) return value.every(valid) ? value : value.filter(valid)
+  if (valid(value)) return [value]
+  return object(value) ? Object.values(value).filter(valid) : []
+}
+
 export function diffs(value: unknown): Diff[] {
-  if (Array.isArray(value) && value.every(diff)) return value
-  if (Array.isArray(value)) return value.filter(diff)
-  if (diff(value)) return [value]
-  if (!object(value)) return []
-  return Object.values(value).filter(diff)
+  return collect(value, withPatch)
+}
+
+// 261126 Red HTTP patch:false 省略正文，实时事件带正文；会话文件列表只保留元数据。
+export function sessionDiffs(value: unknown): SnapshotFileDiff[] {
+  return collect(value, fileChange).map(({ file, additions, deletions, status }) => ({
+    file,
+    additions,
+    deletions,
+    status,
+    patch: "",
+  }))
 }
 
 export function message(value: Message): Message {

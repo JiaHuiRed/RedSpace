@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test"
 import { QueryClient } from "@tanstack/solid-query"
 import { createRoot } from "solid-js"
 import { createStore, produce } from "solid-js/store"
-import type { Message, OpencodeClient, Session } from "@redcode-ai/sdk/v2/client"
+import type { Message, OpencodeClient, Session, SnapshotFileDiff } from "@redcode-ai/sdk/v2/client"
 import { createSessionCacheLedger, dropSessionCaches } from "./global-sync/session-cache"
 import { createDirSyncContext } from "./directory-sync"
 import { pathKey } from "@/utils/path-key"
@@ -20,7 +20,7 @@ const message = (index: number): Message =>
     model: { providerID: "openai", modelID: "gpt" },
   }) as Message
 
-function createHarness(options: { failFirstSnapshot?: boolean } = {}) {
+function createHarness(options: { failFirstSnapshot?: boolean; diffData?: SnapshotFileDiff[] } = {}) {
   const session = {
     id: sessionID,
     directory,
@@ -95,7 +95,7 @@ function createHarness(options: { failFirstSnapshot?: boolean } = {}) {
         }
       },
       message: async () => ({ data: { info: message(0), parts: [] } }),
-      diff: async () => ({ data: [] }),
+      diff: async () => ({ data: options.diffData ?? [] }),
       todo: async () => ({ data: [] }),
       goal: async () => ({ data: undefined }),
     },
@@ -150,6 +150,28 @@ describe("directory sync cold journal initialization", () => {
 
     expect(harness.messageCalls()).toBe(1)
     expect(harness.afterCalls).toEqual([-1, 7, 7])
+    harness.dispose()
+  })
+})
+
+describe("directory sync session diff", () => {
+  test("keeps file rows when the server omits patch (patch:false)", async () => {
+    const harness = createHarness({
+      // 服务端 patch:false 是解构省略 patch（Snapshot.FileDiff 里 patch optional）
+      diffData: [
+        { file: "src/a.ts", additions: 4, deletions: 1, status: "modified" },
+        { file: "src/b.ts", additions: 2, deletions: 0, status: "added" },
+      ],
+    })
+
+    await harness.context.session.diff(sessionID)
+
+    expect(harness.store.session_diff).toEqual({
+      [sessionID]: [
+        { file: "src/a.ts", patch: "", additions: 4, deletions: 1, status: "modified" },
+        { file: "src/b.ts", patch: "", additions: 2, deletions: 0, status: "added" },
+      ],
+    })
     harness.dispose()
   })
 })

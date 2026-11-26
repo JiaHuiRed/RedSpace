@@ -12,7 +12,7 @@ import { trackForegroundMessageLoad } from "./foreground-loads"
 import { fetchMessageGap } from "./reconnect"
 import type { Message, OpencodeClient, Part } from "@redcode-ai/sdk/v2/client"
 import { SESSION_CACHE_LIMIT } from "./global-sync/session-cache"
-import { diffs as list, message as clean } from "@/utils/diffs"
+import { message as clean, sessionDiffs } from "@/utils/diffs"
 import { compareTime } from "@/utils/id"
 import { pathKey } from "@/utils/path-key"
 import {
@@ -891,7 +891,7 @@ export const createDirSyncContext = (
           // 只读 diff.file 文件名，正文一个字节用不上。需要正文的地方走 turn 级 summary 或 vcs 查询。
           retry(() => client.session.diff({ sessionID, patch: false })).then((diff) => {
             if (!tracked(directory, sessionID)) return
-            setStore("session_diff", sessionID, reconcile(list(diff.data), { key: "file" }))
+            setStore("session_diff", sessionID, reconcile(sessionDiffs(diff.data), { key: "file" }))
           }),
         )
       },

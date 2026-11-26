@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test"
 import type { SnapshotFileDiff } from "@redcode-ai/sdk/v2"
 import type { Message } from "@redcode-ai/sdk/v2/client"
-import { diffs, message } from "./diffs"
+import { diffs, message, sessionDiffs } from "./diffs"
 
 const item = {
   file: "src/app.ts",
@@ -22,6 +22,13 @@ describe("diffs", () => {
 
   test("reads keyed diff objects", () => {
     expect(diffs({ a: item })).toEqual([item])
+  })
+
+  test("keeps single and keyed session file rows without requiring or retaining patches", () => {
+    const { patch, ...metadata } = item
+    expect(sessionDiffs(metadata)).toEqual([{ ...metadata, patch: "" }])
+    expect(sessionDiffs({ a: item })).toEqual([{ ...metadata, patch: "" }])
+    expect(diffs(item)[0]?.patch).toBe(patch)
   })
 
   test("drops invalid entries", () => {
