@@ -187,6 +187,8 @@ export const {
     // sync）；server.connected 计数用于区分首连（bootstrap 已全量加载）与重连补拉。
     let currentSessionID: string | undefined
     let serverConnections = 0
+    // 261126 Red 删除会话时撤销它尚未落地的快照；请求结束后不用记住已删会话。
+    const pendingSnapshots = new Set<{ sessionID: string }>()
 
     function sessionListQuery(): { scope?: "project" | "global"; path?: string } {
       if (!kv.get("session_directory_filter_enabled", true)) return { scope: "global" }
@@ -431,15 +433,31 @@ export const {
           break
 
         case "session.deleted": {
-          const result = Binary.search(store.session, event.properties.info.id, (s) => s.id)
-          if (result.found) {
-            setStore(
-              "session",
-              produce((draft) => {
-                draft.splice(result.index, 1)
-              }),
-            )
+          const sessionID = event.properties.info.id
+          for (const pending of pendingSnapshots) {
+            if (pending.sessionID === sessionID) pendingSnapshots.delete(pending)
           }
+          fullSyncedSessions.delete(sessionID)
+          if (currentSessionID === sessionID) currentSessionID = undefined
+          sessionStatusRecovery.changed(sessionID)
+          setStore(
+            produce((draft) => {
+              const result = Binary.search(draft.session, sessionID, (s) => s.id)
+              if (result.found) draft.session.splice(result.index, 1)
+              for (const message of draft.message[sessionID] ?? []) delete draft.part[message.id]
+              // 261126 Red 分片事件可以先于消息到达；这些正文不在上面的窗口里。
+              for (const id of Object.keys(draft.part)) {
+                if (draft.part[id]?.[0]?.sessionID === sessionID) delete draft.part[id]
+              }
+              delete draft.message[sessionID]
+              delete draft.todo[sessionID]
+              delete draft.goal[sessionID]
+              delete draft.message_versions[sessionID]
+              delete draft.session_diff[sessionID]
+              delete draft.session_status[sessionID]
+            }),
+          )
+          seedNavigation()
           break
         }
         case "session.updated": {
@@ -520,22 +538,17 @@ export const {
           break
         }
         case "message.removed": {
-          const messages = store.message[event.properties.sessionID]
-          // 261108 Red 审计 RC-P2-02：其他客户端同步过来的删除可能命中未加载会话，
-          // store 里没有这个 key 时直接 findIndex 会 TypeError。没有缓存就是已经没了，
-          // 幂等跳过；不要顺手建空数组，那会把「未加载」伪装成「空会话」。
-          if (!messages) break
-          // 260814 Red 线性定位（数组 ≤100）：二分只对排序键成立，而数组按 created 排
-          const index = messages.findIndex((m) => m.id === event.properties.messageID)
-          if (index >= 0) {
-            setStore(
-              "message",
-              event.properties.sessionID,
-              produce((draft) => {
-                draft.splice(index, 1)
-              }),
-            )
-          }
+          const { sessionID, messageID } = event.properties
+          setStore(
+            produce((draft) => {
+              delete draft.part[messageID]
+              const messages = draft.message[sessionID]
+              if (!messages) return
+              // 260814 Red 线性定位：二分只对排序键成立，而数组按 created 排。
+              const index = messages.findIndex((m) => m.id === messageID)
+              if (index >= 0) messages.splice(index, 1)
+            }),
+          )
           break
         }
         case "message.branches.switched": {
@@ -945,40 +958,51 @@ export const {
     // 260923 Red sync 与 reconcile 共用：拉当前 session 快照并整体写入 store。
     // 服务端快照权威，message 数组整体替换——重复调用天然幂等，不叠消息/part。
     async function loadSessionSnapshot(sessionID: string) {
-      const [session, messages, todo, diff, goal, versions] = await Promise.all([
-        sdk.client.session.get({ sessionID }, { throwOnError: true }),
-        // 261108 Red 审计 RC-P1-03：此前没传 throwOnError，请求失败时 data 是 undefined，
-        // 被下面的 `?? []` 当成合法空历史整体替换，已有消息在界面里凭空消失；而 sync()
-        // 只在 await 不抛时才推进 fullSyncedSessions，所以「失败也标已加载」是假象 ——
-        // 真正的原因是失败被这里吞成了空数组。抛出后调用方不标记、下次仍会重试。
-        sdk.client.session.messages({ sessionID, limit: 100 }, { throwOnError: true }),
-        sdk.client.session.todo({ sessionID }),
-        // 260904 cc 只拉元数据（patch=false），Files 侧栏只要文件名与增删数。260903 因为带正文的那份
-        // 能到 33MB、卡 23s 把这条 fetch 删了；此后侧栏只靠 session.diff 事件填充，服务端为此
-        // 在指纹命中时也照发大 payload。现在 fetch 回来了、事件只在 diff 真变时才发。
-        sdk.client.session.diff({ sessionID, patch: false }).catch(() => undefined),
-        // 没钉目标时服务端 404，这是常态不是错误
-        sdk.client.session.goal({ sessionID }).catch(() => undefined),
-        // 261114 Red 分支版本组：导航元数据，失败不打断快照装载
-        sdk.client.session.messageVersions({ sessionID }).catch(() => undefined),
-      ])
-      setStore(
-        produce((draft) => {
-          const match = Binary.search(draft.session, sessionID, (s) => s.id)
-          if (match.found) draft.session[match.index] = session.data!
-          if (!match.found) draft.session.splice(match.index, 0, session.data!)
-          draft.todo[sessionID] = todo.data ?? []
-          draft.goal[sessionID] = goal?.data ?? undefined
-          const infos: (typeof draft.message)[string] = []
-          for (const message of messages.data ?? []) {
-            infos.push(message.info)
-            draft.part[message.info.id] = message.parts
-          }
-          draft.message[sessionID] = infos
-          draft.message_versions[sessionID] = versions?.data ?? []
-          if (diff?.data) draft.session_diff[sessionID] = sidebarDiff(diff.data)
-        }),
-      )
+      const pending = { sessionID }
+      pendingSnapshots.add(pending)
+      try {
+        const [session, messages, todo, diff, goal, versions] = await Promise.all([
+          sdk.client.session.get({ sessionID }, { throwOnError: true }),
+          // 261108 Red 审计 RC-P1-03：此前没传 throwOnError，请求失败时 data 是 undefined，
+          // 被下面的 `?? []` 当成合法空历史整体替换，已有消息在界面里凭空消失；而 sync()
+          // 只在 await 不抛时才推进 fullSyncedSessions，所以「失败也标已加载」是假象 ——
+          // 真正的原因是失败被这里吞成了空数组。抛出后调用方不标记、下次仍会重试。
+          sdk.client.session.messages({ sessionID, limit: 100 }, { throwOnError: true }),
+          sdk.client.session.todo({ sessionID }),
+          // 260904 cc 只拉元数据（patch=false），Files 侧栏只要文件名与增删数。260903 因为带正文的那份
+          // 能到 33MB、卡 23s 把这条 fetch 删了；此后侧栏只靠 session.diff 事件填充，服务端为此
+          // 在指纹命中时也照发大 payload。现在 fetch 回来了、事件只在 diff 真变时才发。
+          sdk.client.session.diff({ sessionID, patch: false }).catch(() => undefined),
+          // 没钉目标时服务端 404，这是常态不是错误
+          sdk.client.session.goal({ sessionID }).catch(() => undefined),
+          // 261114 Red 分支版本组：导航元数据，失败不打断快照装载
+          sdk.client.session.messageVersions({ sessionID }).catch(() => undefined),
+        ])
+        if (!pendingSnapshots.has(pending)) return
+        setStore(
+          produce((draft) => {
+            const match = Binary.search(draft.session, sessionID, (s) => s.id)
+            if (match.found) draft.session[match.index] = session.data!
+            if (!match.found) draft.session.splice(match.index, 0, session.data!)
+            draft.todo[sessionID] = todo.data ?? []
+            draft.goal[sessionID] = goal?.data ?? undefined
+            const dropped = new Set((draft.message[sessionID] ?? []).map((message) => message.id))
+            const infos: (typeof draft.message)[string] = []
+            for (const message of messages.data ?? []) {
+              infos.push(message.info)
+              dropped.delete(message.info.id)
+              draft.part[message.info.id] = message.parts
+            }
+            for (const id of dropped) delete draft.part[id]
+            draft.message[sessionID] = infos
+            draft.message_versions[sessionID] = versions?.data ?? []
+            if (diff?.data) draft.session_diff[sessionID] = sidebarDiff(diff.data)
+          }),
+        )
+        fullSyncedSessions.add(sessionID)
+      } finally {
+        pendingSnapshots.delete(pending)
+      }
     }
 
     // 260923 Red 重连补拉入口：只补当前 session，失败只记日志——补拉是恢复手段，
@@ -1003,6 +1027,7 @@ export const {
         { sessionID, limit: 100, before: oldest.id },
         { throwOnError: true },
       )
+      if (store.message[sessionID] !== loaded) return false
       const items = page.data ?? []
       if (!items.length) return false
       // 261113 Red 边界必须是「完整」摘要：finish="length"/"unknown" 的失败摘要没真正
@@ -1068,7 +1093,6 @@ export const {
           currentSessionID = sessionID
           if (fullSyncedSessions.has(sessionID)) return
           await loadSessionSnapshot(sessionID)
-          fullSyncedSessions.add(sessionID)
         },
         // 260923 Red 断线恢复补拉：绕过 fullSyncedSessions 短路（sync 对已加载会话直接
         // return），服务端快照整体替换本地。与 sync 的「首次完整加载」语义分开，不共用
@@ -1076,7 +1100,6 @@ export const {
         async reconcile(sessionID: string) {
           currentSessionID = sessionID
           await loadSessionSnapshot(sessionID)
-          fullSyncedSessions.add(sessionID)
         },
         // 261110 Red 阅读位置恢复用：向前补取一页并前置，不推进 fullSyncedSessions。
         loadEarlier(sessionID: string) {
@@ -1092,7 +1115,6 @@ export const {
           if (result.error) return result
           currentSessionID = input.sessionID
           await loadSessionSnapshot(input.sessionID)
-          fullSyncedSessions.add(input.sessionID)
           return result
         },
       },
