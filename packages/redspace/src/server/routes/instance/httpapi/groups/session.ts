@@ -1,3 +1,4 @@
+import { WorkspaceID } from "@/control-plane/schema"
 import { Permission } from "@/permission"
 import { PermissionID } from "@/permission/schema"
 import { ModelID, ProviderID } from "@/provider/schema"
@@ -54,7 +55,12 @@ export const DiffQuery = Schema.Struct({
 })
 export const MessageQuery = Schema.Struct({
   ...WorkspaceRoutingQueryFields,
-  view: Schema.optional(described(Schema.Literal("display"), "Keep the edit/write diagnostics visible in the GUI. Omit to retrieve full tool records.")),
+  view: Schema.optional(
+    described(
+      Schema.Literal("display"),
+      "Keep the edit/write diagnostics visible in the GUI. Omit to retrieve full tool records.",
+    ),
+  ),
 })
 export const MessagesQuery = Schema.Struct({
   ...MessageQuery.fields,
@@ -66,7 +72,39 @@ export const FlightRecorderQuery = Schema.Struct({
   ...WorkspaceRoutingQueryFields,
   source: Schema.optional(FlightRecorder.Source),
   before: Schema.optional(Schema.String.check(Schema.isMaxLength(1024))),
-  limit: Schema.optional(Schema.NumberFromString.check(Schema.isInt(), Schema.isBetween({ minimum: 1, maximum: FlightRecorder.MAX_PAGE }))),
+  limit: Schema.optional(
+    Schema.NumberFromString.check(Schema.isInt(), Schema.isBetween({ minimum: 1, maximum: FlightRecorder.MAX_PAGE })),
+  ),
+})
+// 261126 Red FR-04 全局观测。from/to 是毫秒时间戳，[from, to)；provider/model/session/workspace
+// 只做收窄。项目作用域不在 query 里——服务端只认 InstanceState，避免用户参数扩大权限。
+const FlightTimeQuery = Schema.optional(
+  Schema.NumberFromString.check(
+    Schema.isInt(),
+    Schema.isGreaterThanOrEqualTo(0),
+    Schema.isLessThanOrEqualTo(Number.MAX_SAFE_INTEGER),
+  ),
+)
+const FlightGlobalFields = {
+  ...WorkspaceRoutingQueryFields,
+  from: FlightTimeQuery,
+  to: FlightTimeQuery,
+  providerID: Schema.optional(Schema.String.check(Schema.isMaxLength(256))),
+  modelID: Schema.optional(Schema.String.check(Schema.isMaxLength(256))),
+  sessionID: Schema.optional(SessionID),
+  workspaceID: Schema.optional(WorkspaceID),
+}
+export const FlightRecorderSummaryQuery = Schema.Struct({
+  ...FlightGlobalFields,
+  before: Schema.optional(Schema.String.check(Schema.isMaxLength(1024))),
+})
+export const FlightRecorderRowsQuery = Schema.Struct({
+  ...FlightGlobalFields,
+  source: Schema.optional(FlightRecorder.Source),
+  before: Schema.optional(Schema.String.check(Schema.isMaxLength(1024))),
+  limit: Schema.optional(
+    Schema.NumberFromString.check(Schema.isInt(), Schema.isBetween({ minimum: 1, maximum: FlightRecorder.MAX_PAGE })),
+  ),
 })
 export const ChangesQuery = Schema.Struct({
   after: Schema.optional(
@@ -173,6 +211,9 @@ export const SessionPaths = {
   // 是同一个东西的两个版本。
   contextInspect: `${root}/:sessionID/context-inspect`,
   flightRecorder: `${root}/:sessionID/flight-recorder`,
+  // 261126 Red 静态子路径与 /:sessionID/flight-recorder 段数不同，不会互相吞路由。
+  flightRecorderSummary: `${root}/flight-recorder/summary`,
+  flightRecorderRows: `${root}/flight-recorder/rows`,
   goal: `${root}/:sessionID/goal`,
   diff: `${root}/:sessionID/diff`,
   outline: `${root}/:sessionID/outline`,
@@ -312,11 +353,38 @@ export const SessionApi = HttpApi.make("session")
           query: FlightRecorderQuery,
           success: described(FlightRecorder.Page, "A page of execution history without prompt or tool bodies"),
           error: [HttpApiError.BadRequest, ApiNotFoundError],
-        }).annotateMerge(OpenApi.annotations({
-          identifier: "session.flightRecorder",
-          summary: "Read session execution history",
-          description: "Page through booked steps (default) or recently observed provider requests, newest first. Missing observations are omitted. A cursor belongs to one session and source.",
-        })),
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.flightRecorder",
+            summary: "Read session execution history",
+            description:
+              "Page through booked steps (default) or recently observed provider requests, newest first. Missing observations are omitted. A cursor belongs to one session and source.",
+          }),
+        ),
+        HttpApiEndpoint.get("flightRecorderSummary", SessionPaths.flightRecorderSummary, {
+          query: FlightRecorderSummaryQuery,
+          success: described(FlightRecorder.GlobalSummary, "Bounded cross-session execution aggregates"),
+          error: HttpApiError.BadRequest,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.flightRecorderSummary",
+            summary: "Aggregate execution history",
+            description:
+              "Aggregate booked steps and observed requests across sessions in the current project (and workspace when the instance is workspace-scoped). Both ledgers are computed separately over a bounded window taken from the global (time,id) index; project, workspace, provider, model, session and detached filters are applied inside that window. When a window fills the scan budget the response carries next: pass it back as before to scan older rows (only ledgers present in the cursor are scanned; the others return zero summaries with coverage.scanned=0). Window results are partial by construction: sum additive fields across windows; session counts and latency percentiles are per window. provider/model matches are not limited to the first window, but callers must follow next until it is absent. Cache hit rate is sum(cacheRead)/sum(input) over valid samples only; missing values stay missing. Cost exists only for the steps ledger, grouped by recorded currency with no conversion, and estimated costs are listed apart from booked cost. Request attempts are not linked to steps or retries.",
+          }),
+        ),
+        HttpApiEndpoint.get("flightRecorderRows", SessionPaths.flightRecorderRows, {
+          query: FlightRecorderRowsQuery,
+          success: described(FlightRecorder.GlobalPage, "Bounded cross-session execution rows"),
+          error: HttpApiError.BadRequest,
+        }).annotateMerge(
+          OpenApi.annotations({
+            identifier: "session.flightRecorderRows",
+            summary: "Page cross-session execution history",
+            description:
+              "Page booked steps (default) or observed requests across sessions with the same filters as the aggregate. Each call examines at most the page scan budget from the global (time,id) index, then applies project/workspace/session/provider/model/detached filters inside that window. Rows are ordered by (time, id) so same-millisecond entries are not skipped; a cursor is bound to the project/workspace scope, source and every filter. An empty page with truncated=true is not proof of absence: follow next, which resumes after the last examined row, until it is absent. scanned reports examined rows before filters.",
+          }),
+        ),
         HttpApiEndpoint.get("outline", SessionPaths.outline, {
           params: { sessionID: SessionID },
           success: described(SessionOutline.Info, "Turn outline for the whole session log"),
@@ -640,13 +708,7 @@ export const SessionApi = HttpApi.make("session")
           params: { sessionID: SessionID, messageID: MessageID },
           query: WorkspaceRoutingQuery,
           success: described(Session.Info, "Updated session"),
-          error: [
-            HttpApiError.BadRequest,
-            ApiNotFoundError,
-            SessionBusyError,
-            InvalidRequestError,
-            ConflictError,
-          ],
+          error: [HttpApiError.BadRequest, ApiNotFoundError, SessionBusyError, InvalidRequestError, ConflictError],
         }).annotateMerge(
           OpenApi.annotations({
             identifier: "session.selectVersion",

@@ -20,6 +20,8 @@ import { InstancePaths, VcsDiffQuery } from "../../src/server/routes/instance/ht
 import { WorkspacePaths } from "../../src/server/routes/instance/httpapi/groups/workspace"
 import {
   FlightRecorderQuery,
+  FlightRecorderRowsQuery,
+  FlightRecorderSummaryQuery,
   ListQuery as SessionListQuery,
   MessagesQuery,
   SessionPaths,
@@ -51,6 +53,8 @@ const openApiDriftRoutes = [
   { method: "get", path: SessionPaths.list, query: SessionListQuery },
   { method: "get", path: SessionPaths.messages, query: MessagesQuery },
   { method: "get", path: SessionPaths.flightRecorder, query: FlightRecorderQuery },
+  { method: "get", path: SessionPaths.flightRecorderSummary, query: FlightRecorderSummaryQuery },
+  { method: "get", path: SessionPaths.flightRecorderRows, query: FlightRecorderRowsQuery },
   { method: "get", path: FilePaths.findFile, query: FindFileQuery },
   { method: "get", path: FilePaths.findText, query: FindTextQuery },
   { method: "get", path: FilePaths.list, query: FileQuery },
@@ -67,7 +71,42 @@ const numericSdkQueryParams = [
   { method: "get", path: FilePaths.findFile, name: "limit", schema: { type: "integer", minimum: 1, maximum: 200 } },
   { method: "get", path: SessionPaths.list, name: "start", schema: { type: "number" } },
   { method: "get", path: SessionPaths.list, name: "limit", schema: { type: "number" } },
-  { method: "get", path: SessionPaths.flightRecorder, name: "limit", schema: { type: "integer", minimum: 1, maximum: 50 } },
+  {
+    method: "get",
+    path: SessionPaths.flightRecorder,
+    name: "limit",
+    schema: { type: "integer", minimum: 1, maximum: 50 },
+  },
+  {
+    method: "get",
+    path: SessionPaths.flightRecorderSummary,
+    name: "from",
+    schema: { type: "integer", minimum: 0, maximum: Number.MAX_SAFE_INTEGER },
+  },
+  {
+    method: "get",
+    path: SessionPaths.flightRecorderSummary,
+    name: "to",
+    schema: { type: "integer", minimum: 0, maximum: Number.MAX_SAFE_INTEGER },
+  },
+  {
+    method: "get",
+    path: SessionPaths.flightRecorderRows,
+    name: "from",
+    schema: { type: "integer", minimum: 0, maximum: Number.MAX_SAFE_INTEGER },
+  },
+  {
+    method: "get",
+    path: SessionPaths.flightRecorderRows,
+    name: "to",
+    schema: { type: "integer", minimum: 0, maximum: Number.MAX_SAFE_INTEGER },
+  },
+  {
+    method: "get",
+    path: SessionPaths.flightRecorderRows,
+    name: "limit",
+    schema: { type: "integer", minimum: 1, maximum: 50 },
+  },
   {
     method: "get",
     path: SessionPaths.messages,
@@ -294,6 +333,39 @@ describe("httpapi query schema drift", () => {
         const empty = yield* request(`${uri}&limit=1`)
         expect(empty.status).toBe(200)
         expect(yield* Effect.promise(() => empty.json())).toEqual({ items: [] })
+      }),
+    ),
+  )
+
+  it.live(
+    "global flight history rejects invalid ranges and cursors, and reports empty coverage",
+    withTmp({ config: { formatter: false, lsp: false } }, (tmp) =>
+      Effect.gen(function* () {
+        const query = `directory=${encodeURIComponent(tmp.path)}`
+        const base = "/session/flight-recorder"
+        for (const fields of ["from=10&to=5", "from=-1", "from=1.5", "before=bad"]) {
+          expect((yield* request(`${base}/summary?${query}&${fields}`)).status, fields).toBe(400)
+        }
+        for (const fields of ["limit=0", "limit=51", "limit=1.5", "source=both", "before=bad"]) {
+          expect((yield* request(`${base}/rows?${query}&${fields}`)).status, fields).toBe(400)
+        }
+        const summary = yield* request(`${base}/summary?${query}`)
+        expect(summary.status).toBe(200)
+        const body = yield* Effect.promise(
+          () =>
+            summary.json() as Promise<{
+              steps: { samples: number }
+              requests: { samples: number }
+              truncated: boolean
+              retention: { requestsPerSession: number }
+              coverage: { steps: { scanned: number; truncated: boolean } }
+            }>,
+        )
+        expect(body.steps.samples).toBe(0)
+        expect(body.requests.samples).toBe(0)
+        expect(body.truncated).toBe(false)
+        expect(body.retention.requestsPerSession).toBe(128)
+        expect(body.coverage.steps).toEqual({ scanned: 0, truncated: false })
       }),
     ),
   )

@@ -8,6 +8,7 @@ import z from "zod"
 import type { Agent } from "../../src/agent/agent"
 import { Agent as AgentSvc } from "../../src/agent/agent"
 import { Bus } from "../../src/bus"
+import { InstanceState } from "@/effect/instance-state"
 import { Config } from "@/config/config"
 import { Image } from "@/image/image"
 import { Permission } from "../../src/permission"
@@ -16,6 +17,7 @@ import { Provider } from "@/provider/provider"
 import { ModelID, ProviderID } from "../../src/provider/schema"
 import { Session } from "@/session/session"
 import * as Flight from "@/session/flight-recorder"
+import * as FlightRequestWriter from "@/session/flight-request-writer"
 import { LLM } from "../../src/session/llm"
 import { MessageV2 } from "../../src/session/message-v2"
 import { SessionProcessor } from "../../src/session/processor"
@@ -485,13 +487,15 @@ it.live("session.processor effect tests capture llm input cleanly", () =>
         expect(value).toBe("continue")
         expect(calls).toBe(1)
         expect(parts.some((part) => part.type === "text" && part.text === "hello")).toBe(true)
-        const attempts = Flight.page(chat.id, "requests")!.items
+        FlightRequestWriter.flush()
+        const scope = { projectID: (yield* InstanceState.context).project.id }
+        const attempts = Flight.page(chat.id, scope, "requests")!.items
         expect(attempts).toHaveLength(1)
         expect(attempts[0]).toMatchObject({
           messageID: msg.id, modelID: ref.modelID, outcome: "completed", input: 120, output: 2,
         })
         expect(attempts[0]?.cacheRead).toBeUndefined()
-        expect(Flight.page(chat.id, "steps")!.items[0]).toMatchObject({
+        expect(Flight.page(chat.id, scope, "steps")!.items[0]).toMatchObject({
           messageID: msg.id, outcome: "booked", input: 120, output: 2, cacheRead: 0,
         })
       }),
@@ -528,7 +532,9 @@ it.live("flight history separates an HTTP retry and a length continuation under 
           messages: [{ role: "user", content: "continue fixture" }], tools: {},
         })
         expect(yield* llm.calls).toBe(3)
-        const rows = Flight.page(chat.id, "requests")!.items
+        FlightRequestWriter.flush()
+        const scope = { projectID: (yield* InstanceState.context).project.id }
+        const rows = Flight.page(chat.id, scope, "requests")!.items
         expect(rows).toHaveLength(3)
         expect(new Set(rows.map((r) => r.id)).size).toBe(3)
         expect(rows.every((r) => r.messageID === msg.id)).toBe(true)

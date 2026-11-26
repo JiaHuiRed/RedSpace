@@ -160,6 +160,9 @@ export const PartTable = sqliteTable(
     index("part_session_flight_step_idx")
       .on(table.session_id, table.time_created, table.id)
       .where(sql`json_extract(${table.data}, '$.type') = 'step-finish'`),
+    // 261126 Red FR-04 的全局窗口由 flight_scope 授权索引承担，part 上不再保留
+    // (time_created,id) 全局 partial 索引：真实库升级要额外约 9s 建树、常驻空间，
+    // 而 scope 化后没有任何查询消费者。
   ],
 )
 

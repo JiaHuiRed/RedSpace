@@ -37,6 +37,8 @@ import {
   ChangesQuery,
   DiffQuery,
   FlightRecorderQuery,
+  FlightRecorderRowsQuery,
+  FlightRecorderSummaryQuery,
   ForkPayload,
   InitPayload,
   ListQuery,
@@ -187,8 +189,72 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       params: { sessionID: SessionID }
       query: typeof FlightRecorderQuery.Type
     }) {
-      yield* requireSession(ctx.params.sessionID)
-      const page = FlightRecorder.page(ctx.params.sessionID, ctx.query.source ?? "steps", ctx.query.limit, ctx.query.before)
+      const existing = yield* requireSession(ctx.params.sessionID)
+      const instance = yield* InstanceState.context
+      const workspaceID = yield* InstanceState.workspaceID
+      // session.get 是全局主键查询；必须再对照实例项目/工作区，否则知道别项目 session id 即可读记录。
+      if (existing.projectID !== instance.project.id)
+        return yield* notFound(`Session not found: ${ctx.params.sessionID}`)
+      if (workspaceID !== undefined && existing.workspaceID !== workspaceID)
+        return yield* notFound(`Session not found: ${ctx.params.sessionID}`)
+      const page = FlightRecorder.page(
+        ctx.params.sessionID,
+        { projectID: instance.project.id, workspaceID },
+        ctx.query.source ?? "steps",
+        ctx.query.limit,
+        ctx.query.before,
+      )
+      if (!page) return yield* new HttpApiError.BadRequest({})
+      return page
+    })
+
+    // 261126 Red 全局观测的作用域只来自 InstanceState：project.id 由实例决定，WorkspaceRef 由
+    // 工作区路由中间件提供。query 只带收窄筛选，不存在可扩大数据范围的 project 参数。
+    const invalidFlightRange = (query: { from?: number; to?: number }) =>
+      query.from !== undefined && query.to !== undefined && query.from > query.to
+
+    const flightRecorderSummary = Effect.fn("SessionHttpApi.flightRecorderSummary")(function* (ctx: {
+      query: typeof FlightRecorderSummaryQuery.Type
+    }) {
+      if (invalidFlightRange(ctx.query)) return yield* new HttpApiError.BadRequest({})
+      const instance = yield* InstanceState.context
+      const workspaceID = yield* InstanceState.workspaceID
+      const summary = FlightRecorder.overview(
+        { projectID: instance.project.id, workspaceID },
+        {
+          from: ctx.query.from,
+          to: ctx.query.to,
+          providerID: ctx.query.providerID,
+          modelID: ctx.query.modelID,
+          sessionID: ctx.query.sessionID,
+          workspaceID: ctx.query.workspaceID,
+        },
+        ctx.query.before,
+      )
+      if (!summary) return yield* new HttpApiError.BadRequest({})
+      return summary
+    })
+
+    const flightRecorderRows = Effect.fn("SessionHttpApi.flightRecorderRows")(function* (ctx: {
+      query: typeof FlightRecorderRowsQuery.Type
+    }) {
+      if (invalidFlightRange(ctx.query)) return yield* new HttpApiError.BadRequest({})
+      const instance = yield* InstanceState.context
+      const workspaceID = yield* InstanceState.workspaceID
+      const page = FlightRecorder.pageGlobal(
+        { projectID: instance.project.id, workspaceID },
+        {
+          from: ctx.query.from,
+          to: ctx.query.to,
+          providerID: ctx.query.providerID,
+          modelID: ctx.query.modelID,
+          sessionID: ctx.query.sessionID,
+          workspaceID: ctx.query.workspaceID,
+        },
+        ctx.query.source ?? "steps",
+        ctx.query.limit,
+        ctx.query.before,
+      )
       if (!page) return yield* new HttpApiError.BadRequest({})
       return page
     })
@@ -222,9 +288,11 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
           (ctx.query.before !== undefined && ctx.query.after !== undefined))
       )
         return yield* new HttpApiError.BadRequest({})
-      const before = ctx.query.before !== undefined ? yield* messagesBefore(ctx.params.sessionID, ctx.query.before) : undefined
+      const before =
+        ctx.query.before !== undefined ? yield* messagesBefore(ctx.params.sessionID, ctx.query.before) : undefined
       if (ctx.query.before !== undefined && !before) return yield* new HttpApiError.BadRequest({})
-      const after = ctx.query.after !== undefined ? yield* messagesBefore(ctx.params.sessionID, ctx.query.after) : undefined
+      const after =
+        ctx.query.after !== undefined ? yield* messagesBefore(ctx.params.sessionID, ctx.query.after) : undefined
       if (ctx.query.after !== undefined && !after) return yield* new HttpApiError.BadRequest({})
       yield* requireSession(ctx.params.sessionID)
       if (ctx.query.limit === undefined || ctx.query.limit === 0) {
@@ -286,24 +354,26 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       params: { sessionID: SessionID; messageID: MessageID }
     }) {
       yield* requireSession(ctx.params.sessionID)
-      return yield* branchSvc
-        .select({ sessionID: ctx.params.sessionID, messageID: ctx.params.messageID })
-        .pipe(
-          Effect.catchTag("InvalidBranch", (error) => new InvalidRequestError({ message: error.message })),
-          Effect.catchTag("RevertPending", (error) =>
+      return yield* branchSvc.select({ sessionID: ctx.params.sessionID, messageID: ctx.params.messageID }).pipe(
+        Effect.catchTag("InvalidBranch", (error) => new InvalidRequestError({ message: error.message })),
+        Effect.catchTag(
+          "RevertPending",
+          (error) =>
             new ConflictError({
               message: "session has a pending revert; send a message or unrevert before switching branches",
               resource: error.sessionID,
             }),
-          ),
-          Effect.catchTag("NotFoundError", (error) => notFound(error.message)),
-          Effect.catchTag("SessionBusyError", (error) =>
+        ),
+        Effect.catchTag("NotFoundError", (error) => notFound(error.message)),
+        Effect.catchTag(
+          "SessionBusyError",
+          (error) =>
             new SessionBusyError({
               sessionID: error.sessionID,
               message: `Session is busy: ${error.sessionID}`,
             }),
-          ),
-        )
+        ),
+      )
     })
 
     // 261115 Red UX-15 会话全文搜索：复用 session_query 工具的 resolve/run（同一套有界
@@ -532,31 +602,31 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
         ),
         Effect.forkIn(scope, { startImmediately: true }),
       )
-     return HttpApiSchema.NoContent.make()
-   })
+      return HttpApiSchema.NoContent.make()
+    })
 
-   // 261031 Red 打断发送：服务端单请求串行「取消 → 提交 → 起新轮」，客户端不参与顺序控制。
-   const interruptPrompt = Effect.fn("SessionHttpApi.interruptPrompt")(function* (ctx: {
-     params: { sessionID: SessionID }
-     payload: typeof PromptPayload.Type
-   }) {
-     yield* requireSession(ctx.params.sessionID)
-     yield* promptSvc.interruptPrompt({ ...ctx.payload, sessionID: ctx.params.sessionID }).pipe(
-       Effect.catchCause((cause) =>
-         Effect.gen(function* () {
-           yield* Effect.logError("interrupt_prompt failed").pipe(
-             Effect.annotateLogs({ sessionID: ctx.params.sessionID, cause: Cause.pretty(cause) }),
-           )
-           yield* bus.publish(Session.Event.Error, {
-             sessionID: ctx.params.sessionID,
-             error: new NamedError.Unknown({ message: Cause.pretty(cause) }).toObject(),
-           })
-         }),
-       ),
-       Effect.forkIn(scope, { startImmediately: true }),
-     )
-     return HttpApiSchema.NoContent.make()
-   })
+    // 261031 Red 打断发送：服务端单请求串行「取消 → 提交 → 起新轮」，客户端不参与顺序控制。
+    const interruptPrompt = Effect.fn("SessionHttpApi.interruptPrompt")(function* (ctx: {
+      params: { sessionID: SessionID }
+      payload: typeof PromptPayload.Type
+    }) {
+      yield* requireSession(ctx.params.sessionID)
+      yield* promptSvc.interruptPrompt({ ...ctx.payload, sessionID: ctx.params.sessionID }).pipe(
+        Effect.catchCause((cause) =>
+          Effect.gen(function* () {
+            yield* Effect.logError("interrupt_prompt failed").pipe(
+              Effect.annotateLogs({ sessionID: ctx.params.sessionID, cause: Cause.pretty(cause) }),
+            )
+            yield* bus.publish(Session.Event.Error, {
+              sessionID: ctx.params.sessionID,
+              error: new NamedError.Unknown({ message: Cause.pretty(cause) }).toObject(),
+            })
+          }),
+        ),
+        Effect.forkIn(scope, { startImmediately: true }),
+      )
+      return HttpApiSchema.NoContent.make()
+    })
 
     const command = Effect.fn("SessionHttpApi.command")(function* (ctx: {
       params: { sessionID: SessionID }
@@ -739,6 +809,8 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       .handle("goal", goal)
       .handle("contextInspect", contextInspect)
       .handle("flightRecorder", flightRecorder)
+      .handle("flightRecorderSummary", flightRecorderSummary)
+      .handle("flightRecorderRows", flightRecorderRows)
       .handle("diff", diff)
       .handle("outline", outline)
       .handle("messages", messages)
@@ -757,8 +829,8 @@ export const sessionHandlers = HttpApiBuilder.group(InstanceHttpApi, "session", 
       .handle("unshare", unshare)
       .handle("summarize", summarize)
       .handle("prompt", prompt)
-     .handle("promptAsync", promptAsync)
-     .handle("interruptPrompt", interruptPrompt)
+      .handle("promptAsync", promptAsync)
+      .handle("interruptPrompt", interruptPrompt)
       .handle("command", command)
       .handle("shell", shell)
       .handle("revert", revert)

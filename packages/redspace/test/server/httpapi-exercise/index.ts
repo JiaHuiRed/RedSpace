@@ -21,11 +21,15 @@
 // 任何模块拉起 core/global 之前生效。ESM 只求值一次，下面那条具名 import 不会重复执行。
 import "./environment"
 import { Effect } from "effect"
+import { sql } from "drizzle-orm"
 import { OpenApi } from "effect/http-api"
 import { TestLLMServer } from "../../lib/llm-server"
+import { Database } from "../../../src/storage/db"
 import { ContextSnapshot } from "../../../src/session/context-snapshot"
 import { Companion } from "../../../src/companion/companion"
-import { MessageID } from "../../../src/session/schema"
+import { ProjectID } from "../../../src/project/schema"
+import { FlightRequestTable } from "../../../src/session/flight-request.sql"
+import { MessageID, PartID, SessionID } from "../../../src/session/schema"
 import os from "os"
 import path from "path"
 import { array, boolean, check, isRecord, message, object, stable } from "./assertions"
@@ -47,6 +51,26 @@ void (await import("@redcode-ai/core/util/log")).init({ print: false })
 
 function cursor(input: Record<string, unknown>) {
   return Buffer.from(JSON.stringify(input)).toString("base64url")
+}
+
+// 261126 Red Flight Recorder 全局观测的场景种子。消息/分片直接写隔离库，避免为了喂
+// 聚合路由而真的跑一次模型请求；查询路径仍然走完整 HttpApi + 实例作用域。
+function assistantMessage(sessionID: string, providerID: string, modelID: string) {
+  const id = MessageID.ascending()
+  Database.use((db) =>
+    db.run(sql`insert into message (id, session_id, time_created, time_updated, data)
+      values (${id}, ${sessionID}, 1000, 1000, ${JSON.stringify({ role: "assistant", providerID, modelID })})`),
+  )
+  return id
+}
+
+function stepPart(sessionID: string, messageID: string, data: object) {
+  const id = PartID.ascending()
+  Database.use((db) =>
+    db.run(sql`insert into part (id, message_id, session_id, time_created, time_updated, data)
+      values (${id}, ${messageID}, ${sessionID}, 1000, 1000, ${JSON.stringify(data)})`),
+  )
+  return id
 }
 
 const scenarios: Scenario[] = [
@@ -1324,6 +1348,152 @@ const scenarios: Scenario[] = [
       headers: ctx.headers(),
     }))
     .json(200, (body) => check(stable(body) === stable({ items: [] }), "a new session has no recorded attempts")),
+  http.protected
+    .get("/session/{sessionID}/flight-recorder", "session.flightRecorder")
+    .seeded(() =>
+      Effect.gen(function* () {
+        const projectID = ProjectID.make("httpapi-foreign-flight-project")
+        const sessionID = SessionID.descending()
+        Database.use((db) =>
+          db.run(sql`insert or ignore into project (id, worktree, sandboxes, time_created, time_updated)
+            values (${projectID}, '/httpapi-foreign-flight', '[]', 1, 1)`),
+        )
+        Database.use((db) =>
+          db.run(sql`insert or ignore into session (id, project_id, slug, directory, title, version, time_created, time_updated)
+            values (${sessionID}, ${projectID}, ${sessionID}, '/httpapi-foreign-flight', 'Foreign flight', '0', 1, 1)`),
+        )
+        return { sessionID }
+      }),
+    )
+    .at((ctx) => ({
+      path: route("/session/{sessionID}/flight-recorder", { sessionID: ctx.state.sessionID }),
+      headers: ctx.headers(),
+    }))
+    .status(404),
+  http.protected
+    .get("/session/flight-recorder/summary", "session.flightRecorderSummary")
+    .seeded((ctx) =>
+      Effect.gen(function* () {
+        const main = yield* ctx.session({ title: "Global flight summary" })
+        const child = yield* ctx.session({ title: "Global flight summary child", parentID: main.id })
+        const mainMessage = assistantMessage(main.id, "flight-exercise-provider", "flight-exercise-model")
+        const childMessage = assistantMessage(child.id, "flight-exercise-provider", "flight-exercise-model")
+        stepPart(main.id, mainMessage, {
+          type: "step-finish",
+          cost: 0.25,
+          currency: "USD",
+          tokens: { context: 100, output: 10, cache: { read: 90 } },
+        })
+        stepPart(child.id, childMessage, {
+          type: "step-finish",
+          cost: 0.1,
+          currency: "USD",
+          tokens: { context: 50, output: 5, cache: { read: 50 } },
+        })
+        Database.use((db) =>
+          db
+            .insert(FlightRequestTable)
+            .values({
+              id: "req_exercise_global_summary",
+              session_id: main.id,
+              message_id: mainMessage,
+              time_created: 1100,
+              provider_id: "flight-exercise-provider",
+              model_id: "flight-exercise-model",
+              data: { outcome: "completed", input: 100, cacheRead: 90, durationMs: 40 },
+            })
+            .run(),
+        )
+        return main
+      }),
+    )
+    .at((ctx) => ({
+      path: "/session/flight-recorder/summary?providerID=flight-exercise-provider",
+      headers: ctx.headers(),
+    }))
+    .json(200, (body) => {
+      object(body)
+      const steps = body.steps
+      object(steps)
+      const sessions = steps.sessions
+      object(sessions)
+      check(steps.samples === 2, "both step rows should be aggregated")
+      check(sessions.main === 1 && sessions.sub === 1, "main and sub sessions should be counted once each")
+      const requests = body.requests
+      object(requests)
+      const outcomes = requests.outcomes
+      object(outcomes)
+      check(requests.samples === 1, "the request ledger should stay separate from steps")
+      check(outcomes.completed === 1, "completed attempts should be counted")
+      const coverage = body.coverage
+      object(coverage)
+      const stepCoverage = coverage.steps
+      object(stepCoverage)
+      check(
+        stepCoverage.scanned === 2 && stepCoverage.truncated === false,
+        "coverage should describe the scanned window",
+      )
+      const retention = body.retention
+      object(retention)
+      check(retention.requestsPerSession === 128, "request retention should be visible")
+      check(retention.totalRequests === 100000, "global request retention should be visible")
+      const limits = body.limits
+      object(limits)
+      check(limits.scan === 5000, "summary scan budget should be visible")
+      check(limits.pageScan === 1000, "page scan budget should be visible")
+      array(body.models)
+      check(body.models.length === 1, "both rows belong to one provider/model group")
+    }),
+  http.protected
+    .get("/session/flight-recorder/rows", "session.flightRecorderRows")
+    .seeded((ctx) =>
+      Effect.gen(function* () {
+        const session = yield* ctx.session({ title: "Global flight rows" })
+        const messageID = assistantMessage(session.id, "flight-exercise-rows-provider", "flight-exercise-model")
+        Database.use((db) =>
+          db
+            .insert(FlightRequestTable)
+            .values([
+              {
+                id: "req_exercise_rows_a",
+                session_id: session.id,
+                message_id: messageID,
+                time_created: 2000,
+                provider_id: "flight-exercise-rows-provider",
+                model_id: "flight-exercise-model",
+                data: { outcome: "completed", input: 10, cacheRead: 5 },
+              },
+              {
+                id: "req_exercise_rows_b",
+                session_id: session.id,
+                message_id: messageID,
+                time_created: 2000,
+                provider_id: "flight-exercise-rows-provider",
+                model_id: "flight-exercise-model",
+                data: { outcome: "failed" },
+              },
+            ])
+            .run(),
+        )
+        return session
+      }),
+    )
+    .at((ctx) => ({
+      path: "/session/flight-recorder/rows?source=requests&limit=1&providerID=flight-exercise-rows-provider",
+      headers: ctx.headers(),
+    }))
+    .json(200, (body, ctx) => {
+      object(body)
+      array(body.items)
+      check(body.items.length === 1, "limit should bound the page")
+      check(typeof body.scanned === "number" && body.scanned >= 2, "the page should report its examined rows")
+      check(body.truncated === false, "two rows fit inside the scan budget")
+      if (typeof body.next !== "string") throw new Error("same-millisecond rows should still have a next cursor")
+      const item = body.items[0]
+      object(item)
+      check(item.sessionID === ctx.state.id, "global rows should identify their session")
+      check(item.sub === false, "a root session row should not be marked sub")
+    }),
   http.protected
     .get("/session/{sessionID}/context-inspect", "session.contextInspect")
     .seeded((ctx) =>
