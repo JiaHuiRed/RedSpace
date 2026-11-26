@@ -3121,6 +3121,79 @@ describe("SessionNs.getUsage", () => {
     expect(result.tokens.cache.write).toBe(300)
   })
 
+  // FR-02: metadata.deepseek.promptCacheMissTokens 是「未命中缓存的普通输入」，不是
+  // cache write。inputTokens 已包含这部分，因此它既不能记进 write，也不能再加回 input。
+  describe("DeepSeek cache miss is uncached input, not cache write (FR-02)", () => {
+    const model = () =>
+      createModel({
+        context: 100_000,
+        output: 32_000,
+        cost: { input: 3, output: 15, cache: { read: 0.3, write: 9 } },
+      })
+
+    test("bills miss at input price when only metadata carries hit/miss", () => {
+      const result = SessionNs.getUsage({
+        model: model(),
+        usage: usage({ inputTokens: 100, outputTokens: 0, totalTokens: 100 }),
+        metadata: { deepseek: { promptCacheHitTokens: 32, promptCacheMissTokens: 68 } },
+      })
+
+      expect(result.tokens.input).toBe(68)
+      expect(result.tokens.cache).toEqual({ read: 32, write: 0, miss: 68 })
+      expect(result.cost).toBeCloseTo((68 * 3 + 32 * 0.3) / 1_000_000, 9)
+    })
+
+    test("explicit zero miss metadata stays zero", () => {
+      const result = SessionNs.getUsage({
+        model: model(),
+        usage: usage({ inputTokens: 100, outputTokens: 0, totalTokens: 100 }),
+        metadata: { deepseek: { promptCacheHitTokens: 100, promptCacheMissTokens: 0 } },
+      })
+
+      expect(result.tokens.input).toBe(0)
+      expect(result.tokens.cache).toEqual({ read: 100, write: 0, miss: 0 })
+    })
+
+    test("missing miss metadata does not fabricate a cache write", () => {
+      const result = SessionNs.getUsage({
+        model: model(),
+        usage: usage({ inputTokens: 100, outputTokens: 0, totalTokens: 100 }),
+        metadata: { deepseek: { promptCacheHitTokens: 32 } },
+      })
+
+      expect(result.tokens.input).toBe(68)
+      expect(result.tokens.cache).toEqual({ read: 32, write: 0, miss: 68 })
+    })
+
+    test("keeps real cache writes and explicit zero writes from usage", () => {
+      const realWrite = SessionNs.getUsage({
+        model: model(),
+        usage: usage({
+          inputTokens: 100,
+          outputTokens: 0,
+          totalTokens: 100,
+          cacheReadInputTokens: 32,
+          cacheWriteInputTokens: 10,
+        }),
+        metadata: { deepseek: { promptCacheHitTokens: 32, promptCacheMissTokens: 68 } },
+      })
+      expect(realWrite.tokens.cache).toEqual({ read: 32, write: 10, miss: 58 })
+
+      const explicitZero = SessionNs.getUsage({
+        model: model(),
+        usage: usage({
+          inputTokens: 100,
+          outputTokens: 0,
+          totalTokens: 100,
+          cacheReadInputTokens: 32,
+          cacheWriteInputTokens: 0,
+        }),
+        metadata: { deepseek: { promptCacheHitTokens: 32, promptCacheMissTokens: 68 } },
+      })
+      expect(explicitZero.tokens.cache).toEqual({ read: 32, write: 0, miss: 68 })
+    })
+  })
+
   test("subtracts cached tokens for anthropic provider", () => {
     const model = createModel({ context: 100_000, output: 32_000 })
     // AI SDK v6 normalizes inputTokens to include cached tokens for all providers
