@@ -642,7 +642,7 @@ export const dict = {
   "context.flightRecorder.prefix.changed": "已变",
   "context.flightRecorder.prefix.unknown": "未知",
   "context.flightRecorder.prefix.note": "只记录请求之间观察到的前缀变化，不推断缓存原因。",
-  "context.flightRecorder.firstEventNote": "这是首事件，不是首字延迟。",
+  "context.flightRecorder.firstEventNote": "从调用尝试开始到首个适配后的流事件，可以是步骤开始。",
   "context.flightRecorder.ledgerCacheNote": "账本缓存为历史归一口径；记录为 0 可能来自归零，不代表服务端显式报告 0。",
   "context.flightRecorder.outcome.booked": "已记账",
   "context.flightRecorder.outcome.estimated": "估算",

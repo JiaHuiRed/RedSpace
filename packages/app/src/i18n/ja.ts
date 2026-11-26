@@ -597,7 +597,7 @@ export const dict = {
   "context.flightRecorder.prefix.unknown": "不明",
   "context.flightRecorder.prefix.note":
     "リクエスト間で観測したプレフィックス変化のみで、キャッシュの原因は推測しません。",
-  "context.flightRecorder.firstEventNote": "最初のイベントであり、初トークンではありません。",
+  "context.flightRecorder.firstEventNote": "呼び出し開始から変換後の最初のストリームイベントまで（ステップ開始を含む）。",
   "context.flightRecorder.ledgerCacheNote":
     "台帳のキャッシュは履歴の正規化値で、0 は正規化による場合があり、プロバイダーの明示報告ではありません。",
   "context.flightRecorder.outcome.booked": "計上済み",

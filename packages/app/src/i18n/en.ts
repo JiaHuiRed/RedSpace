@@ -656,7 +656,7 @@ export const dict = {
   "context.flightRecorder.prefix.unknown": "unknown",
   "context.flightRecorder.prefix.note":
     "States are observed prefix changes between requests; this does not infer a cache cause.",
-  "context.flightRecorder.firstEventNote": "First event, not first token.",
+  "context.flightRecorder.firstEventNote": "Time to the first adapted stream event, which can be a step start.",
   "context.flightRecorder.ledgerCacheNote":
     "Ledger cache is a historical normalization; a recorded 0 may come from normalization and is not an explicit provider report.",
   "context.flightRecorder.outcome.booked": "booked",

@@ -5,7 +5,7 @@ import type { RequestData } from "./flight-recording"
 
 // 261126 Red 本地 Flight Recorder：每次真实模型请求/尝试一行，只存有界指纹分类与白名单数值。
 // id 是 RequestEvidence 已分配的单次请求关联号；随消息/会话级联删除；每会话保留最近 128 行
-// 由 flight-recording.ts 在写入事务里裁剪。正文、header、账号与错误文本都不进表。
+// 由 flight-request-writer.ts 在批量写入事务里裁剪。正文、header、账号与错误文本都不进表。
 export const FlightRequestTable = sqliteTable(
   "flight_request",
   {

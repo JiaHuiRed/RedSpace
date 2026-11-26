@@ -10,6 +10,7 @@ import { ModelID, ProviderID } from "@/provider/schema"
 import { OAUTH_DUMMY_KEY } from "@/auth"
 import { Database } from "@/storage/db"
 import { FlightRequestTable } from "@/session/flight-request.sql"
+import * as Writer from "@/session/flight-request-writer"
 import { FlightRecording } from "@/session/flight-recording"
 import { RequestEvidence } from "@/session/request-evidence"
 import { ConfigRequestEvidence } from "@/config/request-evidence"
@@ -72,14 +73,22 @@ function seed(sessionID: string, messageID: string) {
   )
 }
 
-const rows = (sessionID: string) =>
-  Database.use((db) =>
+const rows = (sessionID: string) => {
+  let queued = Writer.stats().pending
+  while (queued > 0) {
+    Writer.flush()
+    const remaining = Writer.stats().pending
+    expect(remaining).toBeLessThan(queued)
+    queued = remaining
+  }
+  return Database.use((db) =>
     db
       .select()
       .from(FlightRequestTable)
       .where(eq(FlightRequestTable.session_id, SessionID.make(sessionID)))
       .all(),
   )
+}
 
 const flightFor = (sessionID: string, messageID: string, runtime: "ai-sdk" | "native" = "ai-sdk", anthropic = false) =>
   FlightRecording.create({
@@ -152,21 +161,23 @@ async function feed(observer: ReturnType<typeof RequestEvidence.create>, stream:
   }
 }
 
-test("local tool work after the provider finish is not model latency", () => {
+test("attempt latency uses a monotonic clock and ends at the provider finish before tool work", () => {
   const sessionID = "ses_flight_duration"
   const messageID = "msg_flight_duration"
   seed(sessionID, messageID)
   const flight = flightFor(sessionID, messageID)
-  const now = spyOn(Date, "now").mockReturnValue(100)
+  const now = spyOn(performance, "now").mockReturnValue(100)
   try {
-    flight.started("attempt", 100)
+    flight.started("attempt", 5000)
     now.mockReturnValue(110)
     flight.event(LLMEvent.textStart({ id: "text" }), undefined)
     now.mockReturnValue(140)
     flight.providerUsage({ requestID: "attempt", cachedTokens: "missing", fields: {} })
     now.mockReturnValue(2040)
     flight.settle(Exit.succeed(undefined))
-    expect(rows(sessionID)[0]?.data).toMatchObject({ outcome: "completed", firstEventMs: 10, durationMs: 40 })
+    expect(rows(sessionID)[0]).toMatchObject({
+      time_created: 5000, data: { outcome: "completed", firstEventMs: 10, durationMs: 40 },
+    })
   } finally {
     now.mockRestore()
   }
@@ -632,6 +643,9 @@ test("keeps the newest 128 rows per session and never resurrects pruned rows", (
   const sessionID = "ses_flight_prune"
   const messageID = "msg_flight_prune"
   seed(sessionID, messageID)
+  const older = flightFor(sessionID, messageID)
+  older.started("req_flight_0000", 1000)
+  expect(rows(sessionID)[0]?.id).toBe("req_flight_0000")
   const flight = flightFor(sessionID, messageID)
   const observation = (requestID: string): Captured => ({
     status: "captured",
@@ -646,19 +660,93 @@ test("keeps the newest 128 rows per session and never resurrects pruned rows", (
     wire: { sha256: "wire", length: 1, change: "changed" },
     afterCompression: [],
   })
-  for (let index = 0; index < FlightRecording.KEEP_PER_SESSION + 12; index++) {
+  for (let index = 1; index < FlightRecording.KEEP_PER_SESSION + 12; index++) {
     const requestID = `req_flight_${String(index).padStart(4, "0")}`
     flight.started(requestID, 1000 + index)
     flight.capture(observation(requestID))
   }
-  // 迟到结算已裁剪掉的首行：UPDATE 0 行，不能把旧行写回来。
   flight.settle(Exit.succeed(undefined))
+  expect(rows(sessionID).map((row) => row.id)).not.toContain("req_flight_0000")
+  older.providerUsage({ requestID: "req_flight_0000", cachedTokens: "missing", fields: {} })
+  older.settle(Exit.succeed(undefined))
 
   const persisted = rows(sessionID)
   expect(persisted).toHaveLength(FlightRecording.KEEP_PER_SESSION)
   expect(persisted.map((row) => row.id)).not.toContain("req_flight_0000")
   expect(persisted.map((row) => row.id)).toContain("req_flight_0012")
   expect(persisted.map((row) => row.id)).toContain("req_flight_0139")
+})
+
+test("coalesces short attempts and skips a deleted parent without losing its batch neighbours", () => {
+  const sessionID = "ses_flight_batch"
+  const messageID = "msg_flight_batch"
+  const deleted = "msg_flight_batch_deleted"
+  seed(sessionID, messageID)
+  seed(sessionID, deleted)
+  const db = Database.Client().$client
+  const survivor = flightFor(sessionID, messageID)
+  const lost = flightFor(sessionID, deleted)
+  const before = Writer.stats()
+  lost.started("req_deleted", 10)
+  survivor.started("req_survivor", 20)
+  survivor.providerUsage({ requestID: "req_survivor", cachedTokens: "missing", fields: {} })
+  survivor.settle(Exit.succeed(undefined))
+  expect(Writer.stats().pending - before.pending).toBe(2)
+  expect(db.query("SELECT count(*) AS n FROM flight_request WHERE session_id = ?").get(sessionID)).toEqual({ n: 0 })
+  db.run("DELETE FROM message WHERE id = ?", [deleted])
+  lost.settle(Exit.succeed(undefined))
+  expect(rows(sessionID)).toMatchObject([{ id: "req_survivor", data: { outcome: "completed" } }])
+  expect(Writer.stats().batches - before.batches).toBe(1)
+})
+
+test("settles already written attempts in a batch using the usage from each request", () => {
+  const sessionID = "ses_flight_late_batch"
+  const messageID = "msg_flight_late_batch"
+  seed(sessionID, messageID)
+  const a = flightFor(sessionID, messageID)
+  const b = flightFor(sessionID, messageID)
+  a.started("req_late_a", 1)
+  b.started("req_late_b", 2)
+  expect(rows(sessionID).map(({ data }) => data.outcome)).toEqual(["unknown", "unknown"])
+  a.providerUsage({ requestID: "req_late_a", cachedTokens: "reported-zero", fields: {
+    input_tokens: 100, "input_tokens_details.cached_tokens": 0,
+  } })
+  b.providerUsage({ requestID: "req_late_b", cachedTokens: "reported", fields: {
+    input_tokens: 100, "input_tokens_details.cached_tokens": 85,
+  } })
+  a.settle(Exit.succeed(undefined))
+  b.settle(Exit.succeed(undefined))
+  const before = Writer.stats().batches
+  expect(rows(sessionID)).toMatchObject([
+    { id: "req_late_a", data: { outcome: "completed", cacheRead: 0 } },
+    { id: "req_late_b", data: { outcome: "completed", cacheRead: 85 } },
+  ])
+  expect(Writer.stats().batches - before).toBe(1)
+})
+
+test("bounds queued writes and reports SQLite write failure without carrying it into the next attempt", () => {
+  const sessionID = "ses_flight_write_failure"
+  const messageID = "msg_flight_write_failure"
+  seed(sessionID, messageID)
+  const db = Database.Client().$client
+  const flight = flightFor(sessionID, messageID)
+  const before = Writer.stats().dropped
+  db.run("PRAGMA query_only = ON")
+  try {
+    for (let index = 0; index < Writer.MAX_PENDING + 1; index++) {
+      flight.started(`req_readonly_${index}`, index)
+      flight.settle(Exit.succeed(undefined))
+    }
+    expect(Writer.stats()).toMatchObject({ pending: Writer.MAX_PENDING, dropped: before + 1 })
+    expect(rows(sessionID)).toEqual([])
+    expect(Writer.stats().dropped - before).toBe(Writer.MAX_PENDING + 1)
+    expect(db.query("PRAGMA busy_timeout").get()).toEqual({ timeout: 5000 })
+  } finally {
+    db.run("PRAGMA query_only = OFF")
+  }
+  flight.started("req_recovered", 999)
+  flight.settle(Exit.succeed(undefined))
+  expect(rows(sessionID)).toMatchObject([{ id: "req_recovered" }])
 })
 
 // 261126 Red 同一进程两个会话/消息的关联号与桶互不串。

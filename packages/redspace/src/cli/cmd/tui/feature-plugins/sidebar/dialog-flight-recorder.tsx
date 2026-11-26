@@ -537,7 +537,7 @@ function FlightRecorderDetail(props: {
           </Show>
           <Show when={row().firstEventMs !== undefined}>
             <text fg={theme.textMuted}>
-              首事件 <span style={{ fg: theme.text }}>{formatRecordedDuration(row().firstEventMs)}</span>
+              首事件 <span style={{ fg: theme.text }}>{formatRecordedDuration(row().firstEventMs)}</span>（适配流）
             </text>
           </Show>
           <Show when={!row().diagnostics?.capture && row().prefix}>
