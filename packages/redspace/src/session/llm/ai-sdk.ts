@@ -4,6 +4,7 @@ import { Effect, Schema } from "effect"
 import { type streamText } from "ai"
 import { errorMessage } from "@/util/error"
 import { ThinkTagScanner } from "./think-split"
+import { RequestEvidence } from "../request-evidence"
 // 261020 Red 参数解析失败的 tool call 不执行：llm.ts 的 repair 钩子把它改投这个哨兵工具名，
 // 让 AI SDK 停在 NoSuchToolError，而不是拿残参数去真跑工具。原生消息只回
 // 「unavailable tool 'invalid'」并把**整张可用工具表**塞回上下文——原工具名和真正原因全丢，
@@ -148,12 +149,16 @@ export function toLLMEvents(
         if (event.rawFinishReason === "max_output_tokens" || event.rawFinishReason === "content_filter")
           state.terminalIncomplete = event.rawFinishReason
         state.sawStepFinish = true
+        // 261126 Red FR-06：只认 middleware 在本次实际 doStream 响应上绑定的 headers 对象；
+        // SDK 克隆对象、缺 headers 或身份不贯通时保持 undefined，不按当前/顺序猜测。
+        const requestID = RequestEvidence.correlatedResponseRequestID(event.response?.headers)
         return [
           LLMEvent.stepFinish({
             index: state.step++,
             reason: finishReason(event.finishReason),
             usage: usage(event.usage),
             providerMetadata: providerMetadata(event.providerMetadata),
+            ...(requestID === undefined ? {} : { requestID }),
           }),
         ]
       })

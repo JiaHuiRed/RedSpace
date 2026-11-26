@@ -1,4 +1,4 @@
-import { Cause, Context, Effect, Layer, Random } from "effect"
+import { Cause, Context, Effect, Layer, Option, Random } from "effect"
 import {
   FetchHttpClient,
   Headers,
@@ -30,6 +30,14 @@ export interface Interface {
 }
 
 export class Service extends Context.Service<Service, Interface>()("@redcode/LLM/RequestExecutor") {}
+
+// 261126 Red Per-request transport override, scoped to RequestExecutor only. The
+// native runtime provides its own client so the response of each attempt can be
+// correlated with a local request id. Other effect code (tools, account, …)
+// keeps using the process HttpClient.
+export class HttpClientOverride extends Context.Service<HttpClientOverride, HttpClient.HttpClient>()(
+  "@redcode/LLM/HttpClientOverride",
+) {}
 
 const BODY_LIMIT = 16_384
 const MAX_RETRIES = 2
@@ -369,7 +377,11 @@ export const layer: Layer.Layer<Service, never, HttpClient.HttpClient> = Layer.e
     const executeOnce = (request: HttpClientRequest.HttpClientRequest) =>
       Effect.gen(function* () {
         const redactedNames = yield* Headers.CurrentRedactedNames
-        return yield* http
+        // 261126 Red A stream may provide a transport override (the native runtime
+        // does, to correlate each attempt). It is scoped to this executor so tool
+        // or account HTTP calls keep their process client.
+        const client = Option.getOrUndefined(yield* Effect.serviceOption(HttpClientOverride)) ?? http
+        return yield* client
           .execute(request)
           .pipe(Effect.mapError(toHttpError(redactedNames)), Effect.flatMap(statusError(request, redactedNames)))
       })

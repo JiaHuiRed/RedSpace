@@ -298,6 +298,11 @@ export const StepStartPart = Schema.Struct({
 }).annotate({ identifier: "StepStartPart" })
 export type StepStartPart = Types.DeepMutable<Schema.Schema.Type<typeof StepStartPart>>
 
+// 261126 Red 账单步骤的请求关联号只有一个生产者：RequestEvidence.withRequest 用
+// crypto.randomUUID() 生成的 36 字符 UUID。持久化侧仍给显式上限（UUID 变体/前缀留余量），
+// 超出视为契约破坏而不是静默截断。
+const REQUEST_ID_MAX_LENGTH = 64
+
 export const StepFinishPart = Schema.Struct({
   ...partBase,
   type: Schema.Literal("step-finish"),
@@ -310,6 +315,10 @@ export const StepFinishPart = Schema.Struct({
   // 260930 Red 记账时刻的币种定格（与 cost 同时写入，语义同 260816 的取价定格）：
   //  session 行按它把费用分进 cost_cny / cost_usd 桶。老消息无此字段，回填写 UNKNOWN→USD 并留日志。
   currency: Schema.optional(Schema.Literals(["USD", "CNY"])),
+  // 261126 Red 本次账单步骤对应的本地请求关联号（flight_request.id），与 cost/tokens 同一次
+  //  写入。只由执行链明确传递的 ID 填入；估算、旧消息或无法对应的记录没有此字段。
+  //  请求行被容量淘汰后账单上的关联号仍保留，但不参与成本计算。
+  requestID: Schema.optional(Schema.String.check(Schema.isMaxLength(REQUEST_ID_MAX_LENGTH))),
   tokens: Schema.Struct({
     total: Schema.optional(Schema.Finite),
     // 260819 cc: 本次请求的提示词总量 = 这一刻的真实上下文大小。与 total 的区别要紧：

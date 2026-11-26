@@ -4,11 +4,11 @@ import { ProviderTransform } from "@/provider/transform"
 import { errorMessage } from "@/util/error"
 import { isRecord } from "@/util/record"
 import { asSchema, type ModelMessage, type Tool } from "ai"
-import { Effect } from "effect"
+import { Context, Effect, Option } from "effect"
 import * as Stream from "effect/Stream"
-import { FetchHttpClient } from "effect/http"
+import { FetchHttpClient, Headers, HttpClient, HttpClientError, HttpClientResponse } from "effect/http"
 import { tool as nativeTool, ToolFailure, type JsonSchema, type LLMEvent } from "@redcode-ai/llm"
-import type { LLMClientShape } from "@redcode-ai/llm/route"
+import { correlateRequest, HttpClientOverride, type LLMClientShape } from "@redcode-ai/llm/route"
 import { LLMNative } from "./native-request"
 import { RequestEvidence } from "../request-evidence"
 import { ConfigRequestEvidence } from "@/config/request-evidence"
@@ -98,22 +98,60 @@ export function stream(input: StreamInput): StreamResult {
     tools: nativeTools(input.tools, input),
   })
 
-  const observedFetch: typeof globalThis.fetch = new Proxy(actualFetch, {
-    apply(target, thisArg, args) {
-      const init = args[1] as Parameters<typeof globalThis.fetch>[1]
-      // 261004 Red 只读 body 做 诊断观察；Request 流、headers 与 fetch 语义原样透传。
-      const body = init?.body
+  const http = nativeHttp(input, actualFetch)
+
+  return {
+    ...current,
+    // 261126 Red 只覆盖 RequestExecutor 的传输客户端；工具、账号等其它 Effect HTTP
+    // 仍然使用进程级 HttpClient，不能把 provider fetch 语义带出去。
+    stream: stream.pipe(Stream.provideService(HttpClientOverride, http)),
+  }
+}
+
+// 261126 Red native 出站走自己的 HttpClient：FetchHttpClient 会在 web Response 外再包一层，
+// 响应对象上读不回本地关联号。这里在 fromWeb 之前拿到本次尝试的关联号，挂到请求对象的
+// 内存符号属性上（绝不进入 body/header/query）。fetch 参数语义与 FetchHttpClient 保持一致：
+// 读取 fiber context 里的 FetchHttpClient.RequestInit，headers 合并时请求头优先，其余选项
+// 原样透传；body/signal/duplex 与 FetchHttpClient 相同，错误同样映射成 TransportError。
+function nativeHttp(input: StreamInput, fetch: typeof globalThis.fetch): HttpClient.HttpClient {
+  return HttpClient.make((request, url, signal, fiber) => {
+    const options = Option.getOrUndefined(Context.getOption(fiber.context, FetchHttpClient.RequestInit)) ?? {}
+    const headers = options.headers
+      ? Headers.merge(Headers.fromInput(options.headers), request.headers)
+      : request.headers
+    return Effect.gen(function* () {
+      const body = request.body
+      const payload =
+        body._tag === "Raw" || body._tag === "Uint8Array"
+          ? body.body
+          : body._tag === "FormData"
+            ? body.formData
+            : body._tag === "Stream"
+              ? yield* Stream.toReadableStreamEffect(body.stream)
+              : undefined
+      // 261004 Red 只读 body 做诊断观察；headers、body 与 fetch 语义原样透传。
       const observed =
-        typeof body === "string"
-          ? body
-          : body instanceof Uint8Array
-            ? body.byteLength <= (input.requestEvidence?.limits.maxBodyBytes ?? ConfigRequestEvidence.HARD_MAX_BODY_BYTES)
-              ? new TextDecoder().decode(body)
-              : body
+        typeof payload === "string"
+          ? payload
+          : payload instanceof Uint8Array
+            ? payload.byteLength <=
+              (input.requestEvidence?.limits.maxBodyBytes ?? ConfigRequestEvidence.HARD_MAX_BODY_BYTES)
+              ? new TextDecoder().decode(payload)
+              : payload
             : undefined
-      const dispatch = async () => {
+      const attempt = async (requestID: string | undefined) => {
         try {
-          const result = await Reflect.apply(target, thisArg, args) as Response
+          const response = await fetch(url, {
+            ...options,
+            method: request.method,
+            headers,
+            body: payload,
+            duplex: body._tag === "Stream" ? "half" : undefined,
+            signal,
+          } as RequestInit)
+          // 261126 Red 成功响应才登记关联：同一请求对象上的后一次尝试覆盖前一次，
+          // transport 只读最终返回的那次响应，因此 503 淘汰的尝试不会抢走账单。
+          if (requestID !== undefined) correlateRequest(request, requestID)
           if (observed !== undefined) {
             try {
               input.observeRequest?.(observed)
@@ -121,7 +159,7 @@ export function stream(input: StreamInput): StreamResult {
               // 261004 Red Diagnostic failures must never prevent the configured provider fetch from running.
             }
           }
-          return result
+          return response
         } catch (error) {
           // 261126 Red 出站失败按同一关联号留下失败证据；取消（AbortError）交给流退出结算。
           const aborted =
@@ -131,14 +169,19 @@ export function stream(input: StreamInput): StreamResult {
           throw error
         }
       }
-      return input.requestEvidence ? RequestEvidence.withRequest(input.requestEvidence, dispatch) : dispatch()
-    },
+      const response = yield* Effect.tryPromise({
+        try: () =>
+          input.requestEvidence
+            ? RequestEvidence.withRequest(input.requestEvidence, (requestID) => attempt(requestID))
+            : attempt(undefined),
+        catch: (cause) =>
+          new HttpClientError.HttpClientError({
+            reason: new HttpClientError.TransportError({ request, cause }),
+          }),
+      })
+      return HttpClientResponse.fromWeb(request, response)
+    })
   })
-
-  return {
-    ...current,
-    stream: stream.pipe(Stream.provideService(FetchHttpClient.Fetch, observedFetch)),
-  }
 }
 
 function providerFetch(input: Pick<StreamInput, "provider" | "auth">): typeof globalThis.fetch | undefined {

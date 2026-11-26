@@ -12,10 +12,11 @@ import { applyCachePolicy } from "../cache-policy"
 import * as ProviderShared from "../protocols/shared"
 import * as ToolRuntime from "../tool-runtime"
 import type { Tools } from "../tool"
-import type { LLMError, LLMEvent, PreparedRequestOf, ProtocolID, ProviderOptions } from "../schema"
+import type { LLMError, PreparedRequestOf, ProtocolID, ProviderOptions } from "../schema"
 import {
   GenerationOptions,
   HttpOptions,
+  LLMEvent,
   LLMRequest,
   LLMResponse,
   Model,
@@ -27,6 +28,7 @@ import {
   mergeHttpOptions,
   mergeProviderOptions,
 } from "../schema"
+import { correlatedRequestID } from "./correlation"
 
 export interface RouteBody<Body> {
   /** Schema for the validated provider-native body sent as the JSON request. */
@@ -273,23 +275,42 @@ function makeFromTransport<Body, Prepared, Frame, Event, State>(
           encodeBody,
           headers: routeInput.headers,
         }),
-      streamPrepared: (prepared: Prepared, request: LLMRequest, runtime: TransportRuntime) => {
-        const route = `${request.model.provider}/${request.model.route.id}`
-        const events = routeInput.transport
-          .frames(prepared, request, runtime)
-          .pipe(
-            Stream.mapEffect(decodeEvent(route)),
-            protocol.stream.terminal ? Stream.takeUntil(protocol.stream.terminal) : (stream) => stream,
+      streamPrepared: (prepared: Prepared, request: LLMRequest, runtime: TransportRuntime) =>
+        // 261126 Red One correlation scope per subscription: the same Stream can
+        // be subscribed more than once, and each subscription acquires its own
+        // response (and its own replicated request). A closure outside this
+        // suspend would let a second subscription overwrite the first one's id.
+        Stream.suspend(() => {
+          const route = `${request.model.provider}/${request.model.route.id}`
+          let requestID: string | undefined
+          const events = routeInput.transport
+            .frames(prepared, request, {
+              ...runtime,
+              onResponse: (response) => {
+                requestID = correlatedRequestID(response)
+              },
+            })
+            .pipe(
+              Stream.mapEffect(decodeEvent(route)),
+              protocol.stream.terminal ? Stream.takeUntil(protocol.stream.terminal) : (stream) => stream,
+            )
+          return events.pipe(
+            Stream.mapAccumEffect(
+              () => protocol.stream.initial(request),
+              protocol.stream.step,
+              protocol.stream.onHalt ? { onHalt: protocol.stream.onHalt } : undefined,
+            ),
+            // 261126 Red Provider frames carry no local ids; attach the attempt id
+            // only to the step-finish this response actually produced. Synthesized
+            // estimates are created downstream and stay unlinked.
+            Stream.map((event) =>
+              event.type === "step-finish" && requestID !== undefined
+                ? LLMEvent.stepFinish({ ...event, requestID })
+                : event,
+            ),
+            Stream.catchCause((cause) => Stream.fail(streamError(route, `Failed to read ${route} stream`, cause))),
           )
-        return events.pipe(
-          Stream.mapAccumEffect(
-            () => protocol.stream.initial(request),
-            protocol.stream.step,
-            protocol.stream.onHalt ? { onHalt: protocol.stream.onHalt } : undefined,
-          ),
-          Stream.catchCause((cause) => Stream.fail(streamError(route, `Failed to read ${route} stream`, cause))),
-        )
-      },
+        }),
     } satisfies Route<Body, Prepared>
     return route
   }

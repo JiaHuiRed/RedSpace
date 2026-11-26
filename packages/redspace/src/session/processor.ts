@@ -1114,6 +1114,9 @@ export const layer = Layer.effect(
               type: "step-finish",
               tokens: usage.tokens,
               cost: usage.cost,
+              // 261126 Red 执行链明确传递的请求关联号与 cost/tokens 同一次写入；账单是
+              // 权威记录，flight_request 行之后被容量淘汰也不会影响这里的历史关联。
+              ...(value.requestID === undefined ? {} : { requestID: value.requestID }),
               // 261113 Red 估算用量（自动中止拿不到供应商 usage 时的 4 字节/token 估算）；
               // 供应商实报的 step-finish 不带此标记。
               ...(estimated ? { estimated: true } : {}),

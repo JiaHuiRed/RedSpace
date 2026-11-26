@@ -1,4 +1,5 @@
 import type { Effect, Stream } from "effect"
+import type { HttpClientResponse } from "effect/http"
 import type { Endpoint } from "../endpoint"
 import type { Auth } from "../auth"
 import type { Interface as RequestExecutorInterface } from "../executor"
@@ -8,6 +9,10 @@ import type { LLMError, LLMRequest } from "../../schema"
 export interface TransportRuntime {
   readonly http: RequestExecutorInterface
   readonly webSocket?: WebSocketExecutorInterface
+  // 261126 Red Called once per acquired HTTP response, before any frame is
+  // decoded. Used to read the local request correlation; it must not alter the
+  // response or the stream.
+  readonly onResponse?: (response: HttpClientResponse.HttpClientResponse) => void
 }
 
 export interface Transport<Body, Prepared, Frame> {

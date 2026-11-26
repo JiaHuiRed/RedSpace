@@ -19,6 +19,11 @@ export interface JsonRequestParts<Body = unknown> {
 export interface HttpPrepared<Frame> {
   readonly request: HttpClientRequest.HttpClientRequest
   readonly framing: FramingDef<Frame>
+  // 261126 Red Each stream subscription executes its own request and must not
+  // share a request instance with another subscription: the local correlation
+  // id rides on that instance. Rebuilding from the same url/body/signed headers
+  // keeps the wire request byte-identical.
+  readonly replicate: () => HttpClientRequest.HttpClientRequest
 }
 
 const applyQuery = (url: string, query: Record<string, string> | undefined) => {
@@ -78,27 +83,30 @@ export const httpJson = <Body, Frame>(input: HttpJsonInput<Body, Frame>): HttpJs
       Effect.map((parts) => ({
         request: ProviderShared.jsonPost({ url: parts.url, body: parts.bodyText, headers: parts.headers }),
         framing: input.framing,
+        replicate: () => ProviderShared.jsonPost({ url: parts.url, body: parts.bodyText, headers: parts.headers }),
       })),
     ),
   frames: (prepared, request, runtime) =>
     Stream.unwrap(
-      runtime.http
-        .execute(prepared.request)
-        .pipe(
-          Effect.map((response) =>
-            prepared.framing.frame(
-              response.stream.pipe(
-                Stream.mapError((error) =>
-                  ProviderShared.eventError(
-                    `${request.model.provider}/${request.model.route.id}`,
-                    `Failed to read ${request.model.provider}/${request.model.route.id} stream`,
-                    ProviderShared.errorText(error),
-                  ),
+      // 261126 Red Build the request inside the per-subscription effect: a
+      // second subscription gets its own request instance, so its correlation
+      // tag cannot overwrite the first one's.
+      Effect.suspend(() => runtime.http.execute(prepared.replicate())).pipe(
+        Effect.map((response) => {
+          runtime.onResponse?.(response)
+          return prepared.framing.frame(
+            response.stream.pipe(
+              Stream.mapError((error) =>
+                ProviderShared.eventError(
+                  `${request.model.provider}/${request.model.route.id}`,
+                  `Failed to read ${request.model.provider}/${request.model.route.id} stream`,
+                  ProviderShared.errorText(error),
                 ),
               ),
             ),
-          ),
-        ),
+          )
+        }),
+      ),
     ),
 })
 

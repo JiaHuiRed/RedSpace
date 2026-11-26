@@ -189,6 +189,10 @@ export const StepFinish = Schema.Struct({
   reason: FinishReason,
   usage: Schema.optional(Usage),
   providerMetadata: Schema.optional(ProviderMetadata),
+  // 261126 Red Local correlation id for the HTTP attempt that produced this
+  // step. It is attached by the transport owner and never encoded into the
+  // provider request, headers, or provider metadata.
+  requestID: Schema.optional(Schema.String),
 }).annotate({ identifier: "LLM.Event.StepFinish" })
 export type StepFinish = Schema.Schema.Type<typeof StepFinish>
 

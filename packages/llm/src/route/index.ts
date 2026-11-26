@@ -10,6 +10,7 @@ export type {
   Service as LLMClientService,
 } from "./client"
 export * from "./executor"
+export { RequestCorrelation, correlateRequest, correlatedRequestID } from "./correlation"
 export { Auth } from "./auth"
 export { AuthOptions } from "./auth-options"
 export { Endpoint } from "./endpoint"

@@ -20,6 +20,19 @@ const transportScope = new AsyncLocalStorage<{
 }>()
 // 261007 Red 进程内匿名关联：不保存账号、端点或缓存亲和键原文，也不跨重启追踪身份。
 const identitySalt = crypto.randomBytes(32)
+// 261126 Red FR-06 AI SDK 默认路径的尝试关联：middleware 在每次实际 doStream 响应上把
+// headers 换成同内容独立对象并按对象身份绑定本次 requestID；适配层只在 finish-step 拿到的
+// headers 仍是这个对象时挂关联号。SDK 克隆对象、缺 headers 或其它身份不贯通时保持未关联，
+// 不按 current/FIFO/时间猜。
+let responseCorrelation = new WeakMap<object, string>()
+
+export function bindResponseHeaders(headers: object, requestID: string): void {
+  responseCorrelation.set(headers, requestID)
+}
+
+export function correlatedResponseRequestID(headers: unknown): string | undefined {
+  return headers !== null && typeof headers === "object" ? responseCorrelation.get(headers) : undefined
+}
 
 export type Runtime = "ai-sdk" | "native"
 
@@ -899,12 +912,13 @@ export function create(
 }
 
 // 261007 Red 只传播诊断关联号，不加 HTTP header，也不修改 SDK 参数或实际 body。
-export function withRequest<T>(observer: ScopedObserver, work: () => T): T {
+// 261126 Red 出站方需要拿到同一个关联号做本地传递（native 的响应关联），但仍不进入请求本身。
+export function withRequest<T>(observer: ScopedObserver, work: (requestID: string) => T): T {
   const requestID = crypto.randomUUID()
   const startedAt = Date.now()
   // 261126 Red Flight Recorder 在真实出站前拿到同一关联号与起始时刻；钩子失败不得中断请求。
   notify(() => observer.started?.(requestID, startedAt))
-  return transportScope.run({ observer, requestID }, work)
+  return transportScope.run({ observer, requestID }, () => work(requestID))
 }
 
 // 261126 Red native 出站拒绝使用同一关联号通知观察器；SDK 中间件在自己的 reject 分支调用
@@ -939,6 +953,17 @@ export function observeTransport(input: TransportInput): TransportObservation | 
 type StreamPart = { readonly type: string }
 type FinishPart = { readonly type: "finish"; readonly usage?: unknown }
 
+// 261126 Red FR-06：只复制普通 record 形态的 headers；Headers 实例 spread 后会丢内容，
+// 宁可不关联也不改变响应字段值。拷贝与请求体、provider headers 无关，只活在内存里。
+function correlateResponseHeaders<T>(result: T, requestID: string | undefined): T {
+  if (requestID === undefined) return result
+  const response = (result as { response?: { headers?: unknown } }).response
+  const original = response?.headers
+  if (!isRecord(original) || original instanceof Headers) return result
+  const headers = { ...original }
+  bindResponseHeaders(headers, requestID)
+  return { ...(result as object), response: { ...response, headers } } as T
+}
 export function middleware(observer: ScopedObserver) {
   return {
     specificationVersion: "v3" as const,
@@ -966,6 +991,10 @@ export function middleware(observer: ScopedObserver) {
         } catch {
           // 261004 Red Evidence logging is best-effort and must not fail the provider stream.
         }
+
+        // 261126 Red FR-06：copy 在返回给 SDK 前完成，finish-step.response.headers 才能拿到
+        // 同一个对象身份；无 headers 时 result 原样返回（undefined 绝不改成 {}）。
+        result = correlateResponseHeaders(result, requestID)
         // 261012 Red 原始 vendor usage 在 AI SDK 归一化（cached_tokens ?? 0）之前旁路观察：
         // 旁路 transform 逐 part 原样透传——不缓冲、不改 parts、不动 token 语义，
         // 错误/取消/背压经 pipeThrough 原样传播。
@@ -994,6 +1023,7 @@ export function middleware(observer: ScopedObserver) {
 export function reset() {
   buckets.clear()
   evictor.clear()
+  responseCorrelation = new WeakMap()
 }
 
 export function size() {
