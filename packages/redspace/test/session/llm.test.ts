@@ -255,6 +255,35 @@ describe("session.llm.ai-sdk adapter", () => {
   // oxlint-disable-next-line typescript-eslint/no-unsafe-type-assertion -- tests defensive adapter branches outside AI SDK's current typed surface
   const uncheckedAdapterEvent = (input: unknown) => input as AISDKAdapterEvent
 
+  // 261126 Red FR-02 真实 DeepSeek 响应形状：usage 顶层同时带 hit/miss
+  // （openai-compatible 只认 prompt_tokens_details.cached_tokens，靠 raw 兜底）；
+  // promptMetadata.deepseek 是 @ai-sdk/deepseek 的同名字段。
+  const deepSeekFinishStep = (usage: Record<string, unknown>, providerMetadata?: Record<string, unknown>) =>
+    uncheckedAdapterEvent({
+      type: "finish-step",
+      performance: {
+        responseTimeMs: 0,
+        effectiveOutputTokensPerSecond: 0,
+        outputTokensPerSecond: 0,
+        inputTokensPerSecond: 0,
+        effectiveTotalTokensPerSecond: 0,
+        stepTimeMs: 0,
+        toolExecutionMs: {},
+        timeToFirstOutputMs: 0,
+      },
+      response: { id: "deepseek-finish", timestamp: new Date(0), modelId: "deepseek-chat" },
+      finishReason: "stop",
+      rawFinishReason: "stop",
+      usage,
+      ...(providerMetadata ? { providerMetadata } : {}),
+    })
+
+  const stepFinishUsage = (events: ReadonlyArray<{ type: string; usage?: unknown }>) => {
+    const stepFinish = events.find((event) => event.type === "step-finish")
+    if (stepFinish?.type !== "step-finish") throw new Error("expected step-finish")
+    return stepFinish.usage as { cacheReadInputTokens?: number; cacheWriteInputTokens?: number }
+  }
+
   test("maps AI SDK stream chunks without losing session-visible fields", async () => {
     const metadata = { openai: { itemID: "item-1" } }
     const events = await adapt([
@@ -710,6 +739,104 @@ describe("session.llm.ai-sdk adapter", () => {
     })
     expect(result.tokens.cache.write).toBe(300)
     expect(result.tokens.cache.read).toBe(200)
+  })
+
+  // FR-02: DeepSeek 的 prompt_cache_miss_tokens 是「未命中缓存的普通输入」，不是 cache write。
+  // 只有 inputTokenDetails.cacheWriteTokens 才是真实写入。把 miss 记成 write 会让 input 归零、
+  // write 虚增；input 与 write 价格不同时直接算错钱。
+  test("keeps DeepSeek prompt_cache_miss_tokens as uncached input and bills it at input price", async () => {
+    const events = await adapt([
+      deepSeekFinishStep(
+        {
+          inputTokens: 100,
+          outputTokens: 20,
+          totalTokens: 120,
+          inputTokenDetails: { noCacheTokens: 68, cacheReadTokens: 32, cacheWriteTokens: undefined },
+          outputTokenDetails: { textTokens: 20, reasoningTokens: undefined },
+          raw: {
+            prompt_tokens: 100,
+            completion_tokens: 20,
+            total_tokens: 120,
+            prompt_cache_hit_tokens: 32,
+            prompt_cache_miss_tokens: 68,
+          },
+        },
+        { deepseek: { promptCacheHitTokens: 32, promptCacheMissTokens: 68 } },
+      ),
+    ])
+
+    const stepFinish = events[0]
+    if (stepFinish.type !== "step-finish") throw new Error("expected step-finish")
+    expect(stepFinish.usage?.cacheReadInputTokens).toBe(32)
+    expect(stepFinish.usage?.cacheWriteInputTokens).toBeUndefined()
+
+    const result = SessionNs.getUsage({
+      model: {
+        id: "deepseek-chat",
+        providerID: "deepseek",
+        name: "DeepSeek",
+        limit: { context: 100_000, output: 32_000 },
+        cost: { input: 3, output: 15, cache: { read: 0.3, write: 9 } },
+        capabilities: {},
+        api: { npm: "@ai-sdk/openai-compatible" },
+        options: {},
+      } as never,
+      usage: stepFinish.usage!,
+      metadata: stepFinish.providerMetadata,
+    })
+    expect(result.tokens.input).toBe(68)
+    expect(result.tokens.cache).toEqual({ read: 32, write: 0, miss: 68 })
+    expect(result.cost).toBeCloseTo((68 * 3 + 32 * 0.3 + 20 * 15) / 1_000_000, 9)
+  })
+
+  test("keeps a real cache write instead of replacing it with DeepSeek miss tokens", async () => {
+    const events = await adapt([
+      deepSeekFinishStep({
+        inputTokens: 100,
+        outputTokens: 0,
+        totalTokens: 100,
+        inputTokenDetails: { noCacheTokens: 58, cacheReadTokens: 32, cacheWriteTokens: 10 },
+        outputTokenDetails: { textTokens: 0, reasoningTokens: undefined },
+        raw: { prompt_tokens: 100, prompt_cache_hit_tokens: 32, prompt_cache_miss_tokens: 68 },
+      }),
+    ])
+    expect(stepFinishUsage(events).cacheWriteInputTokens).toBe(10)
+  })
+
+  test("keeps explicit zero cache writes and missing miss counts out of cache write", async () => {
+    const explicitZero = await adapt([
+      deepSeekFinishStep({
+        inputTokens: 100,
+        outputTokens: 0,
+        totalTokens: 100,
+        inputTokenDetails: { noCacheTokens: 100, cacheReadTokens: 0, cacheWriteTokens: 0 },
+        outputTokenDetails: { textTokens: 0, reasoningTokens: undefined },
+        raw: { prompt_tokens: 100, prompt_cache_hit_tokens: 32, prompt_cache_miss_tokens: 68 },
+      }),
+    ])
+    expect(stepFinishUsage(explicitZero).cacheWriteInputTokens).toBe(0)
+
+    const missing = await adapt([
+      deepSeekFinishStep({
+        inputTokens: 100,
+        outputTokens: 0,
+        totalTokens: 100,
+        inputTokenDetails: { noCacheTokens: 68, cacheReadTokens: 32, cacheWriteTokens: undefined },
+        raw: { prompt_tokens: 100, prompt_cache_hit_tokens: 32 },
+      }),
+    ])
+    expect(stepFinishUsage(missing).cacheWriteInputTokens).toBeUndefined()
+
+    const zeroMiss = await adapt([
+      deepSeekFinishStep({
+        inputTokens: 100,
+        outputTokens: 0,
+        totalTokens: 100,
+        inputTokenDetails: { noCacheTokens: 0, cacheReadTokens: 100, cacheWriteTokens: undefined },
+        raw: { prompt_tokens: 100, prompt_cache_hit_tokens: 100, prompt_cache_miss_tokens: 0 },
+      }),
+    ])
+    expect(stepFinishUsage(zeroMiss).cacheWriteInputTokens).toBeUndefined()
   })
 })
 

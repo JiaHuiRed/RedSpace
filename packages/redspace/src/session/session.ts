@@ -454,10 +454,12 @@ export const getUsage = (input: {
   const cacheReadInputTokens = safe(
     Number(input.usage.cacheReadInputTokens ?? input.metadata?.["deepseek"]?.["promptCacheHitTokens"] ?? 0),
   )
+  // 261126 Red FR-02: DeepSeek's promptCacheMissTokens is uncached input already included in
+  // usage.inputTokens, not a cache write. Never route it here; only forward accounting changes,
+  // historical step-finish rows keep their old split (no ledger backfill).
   const cacheWriteInputTokens = safe(
     Number(
       input.usage.cacheWriteInputTokens ??
-        input.metadata?.["deepseek"]?.["promptCacheMissTokens"] ??
         input.metadata?.["anthropic"]?.["cacheCreationInputTokens"] ??
         // google-vertex-anthropic returns metadata under "vertex" key
         // (AnthropicMessagesLanguageModel custom provider key from 'vertex.anthropic.messages')
@@ -474,8 +476,8 @@ export const getUsage = (input: {
   // per-request prompt), which makes adjustedInputTokens collapse to 0 and misses
   // all input billing. Cap cacheRead to the remaining input after cache write,
   // so the sum of both never exceeds inputTokens.
-  // 260705 Red: use inputTokens - cacheWriteInputTokens as cap so that when
-  // prompt_cache_miss_tokens is correctly populated from raw, the cap is accurate.
+  // 261126 Red FR-02: cap cache read to the input left after real cache writes; DeepSeek
+  // miss tokens stay in adjustedInputTokens (normal uncached input), not in cache.write.
   const adjustedCacheCap = Math.max(0, inputTokens - cacheWriteInputTokens)
   const cappedCacheRead = Math.min(cacheReadInputTokens, adjustedCacheCap)
 

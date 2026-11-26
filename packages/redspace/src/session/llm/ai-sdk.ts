@@ -81,25 +81,23 @@ function usage(value: unknown) {
     outputTokenDetails?: { reasoningTokens?: number }
     raw?: Record<string, unknown>
   }
-  // DeepSeek returns prompt_cache_hit_tokens and prompt_cache_miss_tokens at usage top level,
-  // but @ai-sdk/openai-compatible only reads prompt_tokens_details.cached_tokens.
+  // DeepSeek returns prompt_cache_hit_tokens at usage top level, but
+  // @ai-sdk/openai-compatible only reads prompt_tokens_details.cached_tokens.
   // The AI SDK preserves the original response as raw, so we check it as fallback.
-  // 260705 Red: also extract prompt_cache_miss_tokens for correct cache write billing.
+  // 261126 Red FR-02: prompt_cache_miss_tokens is ordinary uncached input (prompt_tokens
+  // already includes it), not a cache write. Only a real cacheWriteTokens is a write.
   const deepSeekCacheRead = item.raw?.prompt_cache_hit_tokens as number | undefined
-  const deepSeekCacheWrite = item.raw?.prompt_cache_miss_tokens as number | undefined
   // 260714 Red: raw prompt_cache_hit_tokens can be cumulative KV-cache size, not per-request.
   // Only use it as lowest-priority fallback if it's reasonable (≤ inputTokens for one request).
   const maxCacheRead = item.inputTokens ?? Infinity
   const safeDeepSeekCacheRead = deepSeekCacheRead && deepSeekCacheRead <= maxCacheRead ? deepSeekCacheRead : undefined
-  const safeDeepSeekCacheWrite =
-    deepSeekCacheWrite && deepSeekCacheWrite <= maxCacheRead ? deepSeekCacheWrite : undefined
   const entries = Object.entries({
     inputTokens: item.inputTokens,
     outputTokens: item.outputTokens,
     totalTokens: item.totalTokens,
     reasoningTokens: item.outputTokenDetails?.reasoningTokens ?? item.reasoningTokens,
     cacheReadInputTokens: item.inputTokenDetails?.cacheReadTokens ?? item.cachedInputTokens ?? safeDeepSeekCacheRead,
-    cacheWriteInputTokens: safeDeepSeekCacheWrite ?? item.inputTokenDetails?.cacheWriteTokens,
+    cacheWriteInputTokens: item.inputTokenDetails?.cacheWriteTokens,
   }).filter((entry) => entry[1] !== undefined)
   return entries.length === 0 ? undefined : Object.fromEntries(entries)
 }
