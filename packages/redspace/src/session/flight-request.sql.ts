@@ -25,6 +25,9 @@ export const FlightRequestTable = sqliteTable(
   },
   (table) => [
     index("flight_request_session_time_created_id_idx").on(table.session_id, table.time_created, table.id),
+    // 261126 Red FR-04 全局扫描要按 (time_created,id) 顺序取有界窗口。没有这个索引时
+    // 优化器从 session 驱动并按会话索引逐段读，最后还要 TEMP B-TREE 排序整个项目。
+    index("flight_request_time_created_id_idx").on(table.time_created, table.id),
     // 261126 Red 删除单条消息时 SQLite 靠外键级联反查子行：没有这个索引会 SCAN 整张
     // flight_request；message_id 索引把 EXPLAIN 变成 COVERING INDEX。
     index("flight_request_message_id_idx").on(table.message_id),

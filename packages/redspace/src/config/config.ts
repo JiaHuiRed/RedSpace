@@ -26,6 +26,7 @@ import { NonNegativeInt, PositiveInt, type DeepMutable } from "@redcode-ai/core/
 import { ConfigAgent } from "./agent"
 import { ConfigAttachment } from "./attachment"
 import { ConfigCommand } from "./command"
+import { ConfigFlightRecorder } from "./flight-recorder"
 import { ConfigFormatter } from "./formatter"
 import { ConfigLayout } from "./layout"
 import { ConfigLSP } from "./lsp"
@@ -416,6 +417,13 @@ export const Info = Schema.Struct({
     }),
   ).annotate({
     description: "Bounds and retention for lightweight session change markers",
+  }),
+  // 261126 Red FR-05 执行历史的容量策略。默认每会话 128 条、全局最多 100,000 条；
+  // 超出全局上限只永久淘汰最早的 flight_request 行，账单步骤与消息不受影响。
+  // 保留期限默认不启用，只有显式配置才按时间删除旧记录。
+  flight_recorder: Schema.optional(ConfigFlightRecorder.Info).annotate({
+    description:
+      "Capacity limits for the flight-recorder request history. Per-session retention defaults to 128 rows and the global cap defaults to 100000; beyond the cap the oldest requests are removed in batches. Steps, messages and sessions are never deleted. Age retention is disabled unless configured.",
   }),
   // 260910 Red 原 `reasoning_language`（"auto" | "zh" | "en"）已删。它自 260731 起就没有消费者——
   // 唯一读它的「每步注入 <reasoning-language> 块」已撤除（原因见 session/prompt.ts:1408-1422），
