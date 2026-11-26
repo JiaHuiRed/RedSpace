@@ -1086,7 +1086,7 @@ export type FlightRecorderGlobalSummary = {
     requests: FlightRecorderRequestSummary
   }>
   workspaces: Array<{
-    workspaceID: string
+    workspaceID?: string
     steps: FlightRecorderStepSummary
     requests: FlightRecorderRequestSummary
   }>
@@ -1184,7 +1184,7 @@ export type FlightRecorderStepSummary = {
 }
 
 export type FlightRecorderCostBucket = {
-  currency: string
+  currency?: string
   booked: number
   estimated: number
   samples: number

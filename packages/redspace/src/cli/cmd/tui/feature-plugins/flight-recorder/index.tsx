@@ -609,12 +609,12 @@ export function DialogFlightRecorderGlobal(props: {
           title: workspaceID ?? "（无工作区）",
           value: `group:workspace:${workspaceID ?? "__none"}`,
           description:
-            workspaceID === null
+            workspaceID === undefined
               ? "无工作区记录不支持筛选"
               : `账单 ${entry.steps.samples} · 请求 ${entry.requests.samples}`,
-          gutter: workspaceID === null ? undefined : groupGutter(entry),
-          readOnly: workspaceID === null,
-          ...(workspaceID === null ? {} : { onSelect: () => applyWorkspace(workspaceID) }),
+          gutter: workspaceID === undefined ? undefined : groupGutter(entry),
+          readOnly: workspaceID === undefined,
+          ...(workspaceID === undefined ? {} : { onSelect: () => applyWorkspace(workspaceID) }),
         })
       })
       ;[...data.daily].reverse().forEach((entry) =>
@@ -739,7 +739,8 @@ export function DialogFlightRecorderGlobal(props: {
       },
       ...workspaceCatalog().flatMap((entry) => {
         const workspaceID = entry.workspaceID
-        if (workspaceID === null) return []
+        // 261126 Red 无工作区用字段缺失表达；不可选的空分组直接跳过。
+        if (workspaceID === undefined) return []
         return [
           {
             category: "选择工作区",

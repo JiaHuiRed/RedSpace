@@ -182,7 +182,7 @@ const richSummary = globalSummary({
   models: [{ providerID: "openai", modelID: "gpt-test", steps: richSteps, requests: richRequests }],
   workspaces: [
     { workspaceID: "ws_alpha", steps: richSteps, requests: richRequests },
-    { workspaceID: null, steps: stepSummary(), requests: requestSummary() },
+    { steps: stepSummary(), requests: requestSummary() },
   ],
   daily: [
     { day: "2026-11-25", steps: stepSummary(), requests: requestSummary() },
@@ -793,7 +793,7 @@ test("global time bounds, cost buckets and coverage keep missing values missing"
     formatGlobalCost([{ currency: "USD", booked: 0.25, estimated: 0.1, samples: 2, missing: 0 }]),
   ).toBe("US$0.25 已记账 · US$0.10 估算")
   expect(
-    formatGlobalCost([{ currency: null, booked: 0, estimated: 0, samples: 0, missing: 2 }]),
+    formatGlobalCost([{ booked: 0, estimated: 0, samples: 0, missing: 2 }]),
   ).toContain("缺报 2")
   expect(formatGlobalCost([])).toContain("缺报不等于 0")
 

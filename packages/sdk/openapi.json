@@ -17806,7 +17806,7 @@
                   "$ref": "#/components/schemas/FlightRecorderRequestSummary"
                 }
               },
-              "required": ["workspaceID", "steps", "requests"],
+              "required": ["steps", "requests"],
               "additionalProperties": false
             }
           },
@@ -18175,7 +18175,7 @@
             "maximum": 9007199254740991
           }
         },
-        "required": ["currency", "booked", "estimated", "samples", "missing"],
+        "required": ["booked", "estimated", "samples", "missing"],
         "additionalProperties": false
       },
       "FlightRecorderPage": {

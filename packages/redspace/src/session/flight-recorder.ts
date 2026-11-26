@@ -91,8 +91,8 @@ export const UsageStats = Schema.Struct({
 export type UsageStats = typeof UsageStats.Type
 
 export const CostBucket = Schema.Struct({
-  /** null = 行上没有币种；不按其他币种折算。 */
-  currency: Schema.NullOr(Schema.String),
+  /** 缺失 = 行上没有币种；不按其他币种折算。 */
+  currency: Schema.optional(Schema.String),
   booked: Schema.Finite,
   /** steps 账本里 estimated 标记单独列出，不混入 booked。 */
   estimated: Schema.Finite,
@@ -161,7 +161,9 @@ export const GlobalSummary = Schema.Struct({
   ),
   workspaces: Schema.Array(
     Schema.Struct({
-      workspaceID: Schema.NullOr(Schema.String),
+      // 261126 Red 缺失 = 该行没有工作区。不用 null：OpenAPI 生成会把 NullOr 拍平成
+      // 非空 string，生成类型与实际值不符；optional 在生成物里是真正的可选字段。
+      workspaceID: Schema.optional(Schema.String),
       steps: StepSummary,
       requests: RequestSummary,
     }),
@@ -871,7 +873,8 @@ const finishUsage = (total: UsageTotals): UsageStats => ({
 })
 
 type CostTotals = {
-  currency: string | null
+  // 261126 Red 缺失 = 无币种；不用 null，避免生成类型与实际值不一致。
+  currency?: string
   booked: number
   estimated: number
   samples: number
@@ -905,8 +908,14 @@ function addStep(total: StepTotals, row: StepRow) {
   addUsage(total.usage, row)
   if (row.estimated) total.estimated += 1
   else total.booked += 1
-  const unit = row.currency ?? null
-  const bucket = bucketOf(total.cost, unit, () => ({ currency: unit, booked: 0, estimated: 0, samples: 0, missing: 0 }))
+  const unit = row.currency ?? undefined
+  const bucket = bucketOf(total.cost, unit ?? null, () => ({
+    ...(unit === undefined ? {} : { currency: unit }),
+    booked: 0,
+    estimated: 0,
+    samples: 0,
+    missing: 0,
+  }))
   if (row.cost === undefined) {
     bucket.missing += 1
     return
@@ -1093,7 +1102,7 @@ export function overview(scope: GlobalScope, filters: GlobalFilters = {}, before
 
   const workspaces = [...new Set([...stepWorkspaces.keys(), ...requestWorkspaces.keys()])]
     .map((key) => ({
-      workspaceID: key,
+      ...(key === null ? {} : { workspaceID: key }),
       steps: finishSteps(stepWorkspaces.get(key)),
       requests: finishRequests(requestWorkspaces.get(key)),
     }))

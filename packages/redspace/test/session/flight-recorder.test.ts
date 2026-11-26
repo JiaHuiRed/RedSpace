@@ -393,7 +393,9 @@ it.instance("global summary keeps both ledgers separate, counts owners once, and
       samples: 1,
       missing: 0,
     })
-    expect(all.steps.cost.find((bucket) => bucket.currency === null)).toMatchObject({
+    // 261126 Red 无币种桶用「字段缺失」表达，不用 null：生成的 OpenAPI 类型里
+    // NullOr 会被拍平成非空 string，optional 才与运行时一致。
+    expect(all.steps.cost.find((bucket) => bucket.currency === undefined)).toMatchObject({
       booked: 0,
       estimated: 0,
       samples: 0,
@@ -422,7 +424,7 @@ it.instance("global summary keeps both ledgers separate, counts owners once, and
     const mainModel = all.models.find((group) => group.providerID === "p-main" && group.modelID === "m-one")!
     expect(mainModel.steps.samples).toBe(3)
     expect(mainModel.requests.samples).toBe(2)
-    const local = all.workspaces.find((group) => group.workspaceID === null)!
+    const local = all.workspaces.find((group) => group.workspaceID === undefined)!
     expect(local.steps.samples).toBe(4)
     expect(local.requests.samples).toBe(3)
     const workspaceGroup = all.workspaces.find((group) => group.workspaceID === "wrk_flight_global")!
