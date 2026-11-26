@@ -52,6 +52,10 @@ const result = await Bun.build({
   external: [
     "@lydell/node-pty*",
     "@parcel/watcher*",
+    // 261126 Red sidecar 是 Electron 的 Node 进程，不认 bun: 协议。标记 external
+    //   才能让 tool/shell/background 的动态 import("bun:ffi") 保持惰性，不被内联成
+    //   顶层静态 import —— 那会让 GUI sidecar 启动即报 "Received protocol 'bun:'"。
+    "bun:ffi",
     "better-sqlite3",
     "drizzle-orm/node-sqlite",
     "drizzle-orm/bun-sqlite",

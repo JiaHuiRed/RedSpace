@@ -1,7 +1,5 @@
-import { dlopen, ptr } from "bun:ffi"
 import { closeSync, openSync, renameSync, writeFileSync } from "node:fs"
 import os from "node:os"
-import { lazy } from "../../util/lazy"
 import { windowsCommand } from "../../util/windows-command"
 
 // 261126 Red Windows 后台作业的控制台边界：node:child_process 的 detached 在 Bun
@@ -48,7 +46,11 @@ function environment(env: NodeJS.ProcessEnv) {
   )
 }
 
-function native() {
+async function native() {
+  // 261126 Red bun:ffi 必须惰性加载：GUI sidecar 是 Node bundle，静态 import 会被
+  //   Bun.build 提升到 node.js 顶层，Electron 的 ESM loader 不认 bun: 协议，
+  //   sidecar 启动即死。动态 import + build-node 的 external 保证只在 Bun 运行时求值。
+  const { dlopen, ptr } = await import("bun:ffi")
   const kernel32 = dlopen("kernel32.dll", {
     CreateProcessW: { args: ["ptr", "ptr", "ptr", "ptr", "i32", "u32", "ptr", "ptr", "ptr", "ptr"], returns: "i32" },
     DeleteProcThreadAttributeList: { args: ["ptr"], returns: "void" },
@@ -77,16 +79,17 @@ function native() {
     waitForSingleObject: kernel32.symbols.WaitForSingleObject,
     closeHandle: kernel32.symbols.CloseHandle,
     uvGetOsfhandle: current.symbols.uv_get_osfhandle,
+    ptr,
   }
 }
 
 // 261126 Red bindings 只解析一次：每次后台命令重新 dlopen 会重复分配 FFI trampoline。
-type API = ReturnType<typeof native>
+type API = Awaited<ReturnType<typeof native>>
 type Handle = NonNullable<ReturnType<API["uvGetOsfhandle"]>>
-const bindings = lazy(native)
+let bindings: Promise<API> | undefined
 
-export function spawnWindowsBackground(options: Options) {
-  const api = bindings()
+export async function spawnWindowsBackground(options: Options) {
+  const api = await (bindings ??= native())
   const env = Object.fromEntries(
     Object.entries(options.env).filter((entry): entry is [string, string] => typeof entry[1] === "string"),
   )
@@ -145,7 +148,7 @@ export function spawnWindowsBackground(options: Options) {
       startup.writeUInt32LE(startup.length, 0)
       startup.writeUInt32LE(STARTF_USESTDHANDLES, 60)
       handles.forEach((handle, index) => startup.writeBigUInt64LE(BigInt(handle), 80 + index * 8))
-      startup.writeBigUInt64LE(BigInt(ptr(attribute)), 104)
+      startup.writeBigUInt64LE(BigInt(api.ptr(attribute)), 104)
       const information = Buffer.alloc(24)
       const created = api.createProcessW(
         wide(invocation.executable),

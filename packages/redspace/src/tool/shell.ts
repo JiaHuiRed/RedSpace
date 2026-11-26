@@ -999,11 +999,13 @@ export const ShellTool = Tool.define(
             // CREATE_NO_WINDOW（见 ./shell/background），Unix 保持原 detached spawn。
             // 决策记录：docs/notes/implemented/bug-fix/2026-11-26-windows-background-console.md
             const pid = yield* Effect.gen(function* () {
-              if (process.platform === "win32") {
+              // 261126 Red CreateProcessW 走 bun:ffi，只有 Bun（TUI/CLI）能加载；GUI sidecar
+              //   是 Node bundle，必须退回下面的 detached spawn，否则 dlopen 不可用。
+              if (process.platform === "win32" && typeof Bun !== "undefined") {
                 const background = yield* Effect.promise(() => import("./shell/background"))
-                return yield* Effect.sync(() => {
-                  try {
-                    return background.spawnWindowsBackground({
+                return yield* Effect.promise(() =>
+                  background
+                    .spawnWindowsBackground({
                       file: argv.file,
                       args: argv.args,
                       cwd: input.cwd,
@@ -1012,12 +1014,12 @@ export const ShellTool = Tool.define(
                       statusPath,
                       onError: (error) => log.warn("background.status.failed", { error }),
                     })
-                  } catch (error) {
-                    throw new Error(
-                      `Failed to start background command with ${input.shell}: ${error instanceof Error ? error.message : String(error)}`,
-                    )
-                  }
-                })
+                    .catch((error) => {
+                      throw new Error(
+                        `Failed to start background command with ${input.shell}: ${error instanceof Error ? error.message : String(error)}`,
+                      )
+                    }),
+                )
               }
               const child = yield* Effect.sync(() => {
                 // 261124 Red Git Bash on Windows drops output when it inherits an O_APPEND handle.

@@ -44,7 +44,9 @@ const legacy = () => {
 }
 
 if (mode === "orphan") {
-  spawnWindowsBackground({
+  // 261126 Red spawnWindowsBackground 惰性加载 bun:ffi，必须先等进程真正起好再 exit —
+  //   否则「宿主退出后作业存活」测的是宿主退出前作业没起。
+  await spawnWindowsBackground({
     file: shell,
     args: ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", orphan],
     cwd: process.cwd(),
@@ -58,7 +60,7 @@ if (mode === "orphan") {
 
 if (mode === "legacy") legacy()
 else
-  spawnWindowsBackground({
+  await spawnWindowsBackground({
     file: shell,
     args,
     cwd: process.cwd(),

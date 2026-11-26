@@ -10,6 +10,8 @@
 
 ## [Unreleased]
 
+- **GUI sidecar 启动**：修复 Windows 后台命令改动（`880158a9`）引入的回归——`tool/shell/background.ts` 的顶层 `import { dlopen } from "bun:ffi"` 被 `build-node.ts` 内联成 `node.js` 顶部的静态 import，Electron 的 Node ESM loader 不认 `bun:` 协议，sidecar 每次启动即以 `Received protocol 'bun:'` 退出，重试 3 次后 GUI 显示“自动唤醒已放弃”。`bun:ffi` 改为惰性 `import()` 并在 server bundle 里标 external；CreateProcessW 控制台隔离路径收窄到 Bun（TUI/CLI），GUI 的 Node sidecar 退回 `node:child_process` 的 detached spawn。验证：核心包 typecheck、shell 后台隔离 3 项、Node 直接加载 `dist/node/node.js` 与 `out/main/node.js` 均通过；未在真实 GUI 安装包内点过后台命令。
+
 - **执行历史（飞行记录仪）**：新增跨会话入口（GUI 首页与命令面板、TUI palette），双账本分开展示步骤与请求，可筛时间、provider、model、工作区与会话。作用域是当前实例的项目（工作区受限时含该工作区），不跨服务器，界面如实标注。服务端只从 `flight_scope` 授权索引取当前作用域的行，其他项目的行不进入分页游标、覆盖计数或扫描量；每页 1000 行、摘要每账本 5000 行的预算用满时返回 `next` 与 `truncated`，必须跟随游标才能判断历史，空页不等于不存在。步骤账显示与请求关联的 `requestID`：native 路径沿用实际响应的出站 ID（重试只关联成功尝试，同一流并发消费不串号），AI SDK 路径只认 middleware 在本次响应上绑定的 headers 对象身份，SDK 克隆对象或缺 headers 时保持未关联；已关联但请求详情不在已加载集合时只能显示「未在已加载请求中」，不能断言已淘汰。请求账本新增全局容量上限，默认每会话 128 条、全局 100000 条、期限默认不启用；启动时先成功读取全局配置才允许清理，失败不退回默认值，同一清理轮内先完成会话与期限删除再计算全局边界，只删请求行，账单、消息与会话不受影响。DeepSeek 的 `prompt_cache_miss_tokens` 不再记作缓存写入，miss 留在普通未缓存输入。模型可见四问：不改变模型请求，关联号不进入 body/header/query，固定前缀新增 0 字节、0 token，KV cache 条件不变，新配置只作用于本地记录表。验证：核心包关联 21 项、全局查询与作用域 17 项、容量与删除安全 8 项、TUI 37 项、GUI 单测 34 项与 Chromium e2e 4 项、query schema drift 14 项、HTTP 路由覆盖 197 项，两包 typecheck 与 OpenAPI 漂移检查通过；未做真实终端与 100 万行生产库的端到端验收。
 
 ### [0.20.6] - 2026-11-25

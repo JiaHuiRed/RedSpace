@@ -14,6 +14,8 @@ Windows 的 `background: true` 在创建 shell 时使用 `CREATE_NO_WINDOW`，�
 
 `STARTUPINFOEX` 只放行本作业的两个句柄：标准输入和日志文件。标准输出、标准错误使用同一个日志句柄；三个标准槽位要填满，但允许列表不能把同一句柄放两次（编译夹具曾因重复条目得到 Win32 错误 87）。独立 PTY 覆盖旧路径能串屏、新路径不能，以及宿主先退出后作业仍能完成；单文件编译夹具验证了两路日志和非零退出码 `7`。
 
+这条路径依赖 `bun:ffi`，只适用于 Bun（TUI/CLI）。GUI sidecar 是 Node bundle（`build-node.ts`），没有 `bun` 全局，也没有可被串写的宿主控制台：Windows 后台命令在那里退回 `node:child_process` 的 detached spawn（Node 没有 Bun 1.3.14 的 fd 丢失问题）。`bun:ffi` 必须在 server bundle 里标 external 并保持惰性 `import()`——顶层静态 import 会被内联到 `node.js` 顶部，Electron 的 ESM loader 不认 `bun:` 协议，sidecar 启动即死（261126 实证，见 CHANGELOG `[Unreleased]`）。
+
 ## 取舍
 
 - **只用 `windowsHide` 或过滤 `ERROR:`**：前者不能阻止已关联控制台的程序直接写屏，后者既管不到这个输出设备，还会吞掉真正的错误。
