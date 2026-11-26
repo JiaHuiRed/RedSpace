@@ -639,7 +639,10 @@ test("flags compression only when a comparable same-bucket marker advanced", () 
 })
 
 // 261126 Red 截断：每会话只保留最近 128 行；时间由 started 固定，验证删的是旧行。
-test("keeps the newest 128 rows per session and never resurrects pruned rows", () => {
+test("keeps the newest 128 rows per session and never resurrects pruned rows", async () => {
+  // 261126 Red 容量策略在成功读取全局配置前不裁剪；等启动配置初始化后再验证每会话上限。
+  for (let index = 0; index < 750 && !Writer.stats().cleanup.ready; index++) await Bun.sleep(20)
+  expect(Writer.stats().cleanup.ready).toBe(true)
   const sessionID = "ses_flight_prune"
   const messageID = "msg_flight_prune"
   seed(sessionID, messageID)
