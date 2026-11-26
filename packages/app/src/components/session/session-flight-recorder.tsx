@@ -1,12 +1,15 @@
 import { createEffect, createMemo, createSignal, For, on, onCleanup, Show, untrack, type JSX } from "solid-js"
 import { createStore } from "solid-js/store"
 import { CapsuleRow } from "@redcode-ai/ui/capsule"
+import { useDialog } from "@redcode-ai/ui/context/dialog"
 import { Icon } from "@redcode-ai/ui/icon"
 import { Meter } from "@redcode-ai/ui/meter"
 import type { FlightRecorderDiagnostics, FlightRecorderPage, FlightRecorderRow } from "@redcode-ai/sdk/v2/client"
 import { useLanguage } from "@/context/language"
+import { useLayout } from "@/context/layout"
 import { useSDK } from "@/context/sdk"
 import { useSessionLayout } from "@/context/session-layout"
+import { pathKey } from "@/utils/path-key"
 
 // 261126 Red Flight Recorder V1：Context 面板里按需展开的执行历史。
 // 默认折叠，面板不挂载就不发请求；切会话由 sessionID effect 清空并重取，避免串账。
@@ -26,6 +29,8 @@ export type FlightRecorderLoad = (input: FlightRecorderLoadInput) => Promise<Fli
 export type FlightRecorderTranslate = (key: string, params?: Record<string, string | number | boolean>) => string
 
 export const FLIGHT_RECORDER_PAGE_SIZE = 20
+// 客户端一次最多累积展示多少行（分页加载上限），不是服务端保留策略。服务端容量可配置，
+// 因此界面不得把这个数字当作“当前每会话保留多少条”；retention 只认服务端明确报告的值。
 export const FLIGHT_RECORDER_MAX_ROWS = 128
 
 type FlightRecorderState = {
@@ -223,16 +228,18 @@ function createFlightRecorderState(props: {
     }
   }
 
-  const loadMore = async () => {
+  // "error" 必须与"没有更多"区分：失败时 next 仍在，调用方不能用它自动重试，否则网络
+  // 故障会变成高频请求风暴。人工重试才再次进入。
+  const loadMore = async (): Promise<"ok" | "stopped" | "error"> => {
     const sessionID = props.sessionID()
     const before = state.next
-    if (!sessionID || !before || state.loading || state.loadingMore || state.capped) return
+    if (!sessionID || !before || state.loading || state.loadingMore || state.capped) return "stopped"
     const token = epoch
     const source = state.source
     setState("loadingMore", true)
     try {
       const page = await props.loadPage({ sessionID, source, before, limit: pageSize() })
-      if (disposed || token !== epoch) return
+      if (disposed || token !== epoch) return "stopped"
       const seen = new Set(state.rows.map((row) => row.id))
       const fresh = page.items.filter((row) => !seen.has(row.id))
       const combined = [...state.rows, ...fresh]
@@ -246,10 +253,31 @@ function createFlightRecorderState(props: {
         capped: truncated,
         error: undefined,
       })
+      return "ok"
     } catch (error) {
-      if (disposed || token !== epoch) return
+      if (disposed || token !== epoch) return "stopped"
       setState({ loadingMore: false, error: errorMessage(error) })
+      return "error"
     }
+  }
+
+  type RevealRequest = { status: "found"; row: FlightRecorderRow } | { status: "missing" } | { status: "error"; message: string }
+
+  // 261126 Red 步骤账的可选 requestID 只能链接到能按需加载到的请求详情：切到 requests
+  // 来源，在客户端上限内向后翻页查找。找不到只说明“未在已加载请求中”，不推断已淘汰。
+  const revealRequest = async (requestID: string): Promise<RevealRequest> => {
+    if (state.source !== "requests" || (state.error && state.rows.length === 0)) {
+      await load("requests")
+      if (state.error) return { status: "error", message: state.error }
+    }
+    let found = state.rows.find((row) => row.id === requestID)
+    while (!found && state.next && !state.capped && state.rows.length < maxRows()) {
+      const result = await loadMore()
+      if (result === "error") return { status: "error", message: state.error ?? requestID }
+      if (result === "stopped") break
+      found = state.rows.find((row) => row.id === requestID)
+    }
+    return found ? { status: "found", row: found } : { status: "missing" }
   }
 
   const refresh = () => void load(untrack(() => state.source))
@@ -277,7 +305,7 @@ function createFlightRecorderState(props: {
     ),
   )
 
-  return { state, setSource, loadMore, refresh, retry }
+  return { state, setSource, loadMore, refresh, retry, revealRequest }
 }
 
 const OUTCOME_COLOR: Partial<Record<FlightRecorderRow["outcome"], string>> = {
@@ -296,7 +324,7 @@ const PREFIX_COLOR: Record<string, string> = {
   rewrite: "var(--syntax-critical)",
 }
 
-function DetailField(props: { label: string; value: JSX.Element; color?: string }) {
+export function DetailField(props: { label: string; value: JSX.Element; color?: string }) {
   return (
     <div class="flex items-baseline justify-between gap-3 text-11-regular">
       <span class="text-text-weaker shrink-0">{props.label}</span>
@@ -315,12 +343,14 @@ function PrefixChip(props: { label: string; state: string; t: FlightRecorderTran
   )
 }
 
-function FlightRecorderDetail(props: {
+export function FlightRecorderDetail(props: {
   row: FlightRecorderRow
   previous?: FlightRecorderRow
   source: FlightRecorderSource
   t: FlightRecorderTranslate
   format: FlightRecorderFormat
+  /** 有确切 requestID 且宿主能按需加载请求列表时才显示跳转；不猜测可用性。 */
+  onOpenRequest?: (requestID: string) => void
 }) {
   const t = props.t
   const format = props.format
@@ -362,7 +392,27 @@ function FlightRecorderDetail(props: {
       <Show when={props.source === "steps"}>
         <div class="text-11-regular text-text-weaker">{t("context.flightRecorder.ledgerCacheNote")}</div>
       </Show>
-      <DetailField label={t("context.flightRecorder.field.cost")} value={format.cost(row.cost, row.currency, t("context.flightRecorder.currencyUnknown"))} />
+      <Show when={props.source === "steps"}>
+        <DetailField
+          label={t("context.flightRecorder.field.request")}
+          value={row.requestID ?? t("context.flightRecorder.field.unassociated")}
+        />
+        <Show when={row.requestID && props.onOpenRequest}>
+          <button
+            type="button"
+            data-testid="flight-recorder-open-request"
+            class="self-start rounded-md bg-surface-weak px-2 py-1 text-11-regular text-text-strong"
+            onClick={() => props.onOpenRequest?.(row.requestID!)}
+          >
+            {t("context.flightRecorder.field.request.open")}
+          </button>
+        </Show>
+        <DetailField
+          label={t("context.flightRecorder.field.cost")}
+          value={format.cost(row.cost, row.currency, t("context.flightRecorder.currencyUnknown"))}
+        />
+        <div class="text-11-regular text-text-weaker">{t("context.flightRecorder.costNote")}</div>
+      </Show>
       <DetailField label={t("context.flightRecorder.field.duration")} value={format.duration(row.durationMs)} />
       <DetailField label={t("context.flightRecorder.field.firstEvent")} value={format.duration(row.firstEventMs)} />
       <div class="text-11-regular text-text-weaker">{t("context.flightRecorder.firstEventNote")}</div>
@@ -505,6 +555,7 @@ function FlightRecorderRowItem(props: {
   format: FlightRecorderFormat
   open: boolean
   onToggle: () => void
+  onOpenRequest?: (requestID: string) => void
 }) {
   const ratio = () => flightRecorderCacheRatio(props.row)
   const outcome = () =>
@@ -575,6 +626,7 @@ function FlightRecorderRowItem(props: {
           source={props.source}
           t={props.t}
           format={props.format}
+          onOpenRequest={props.onOpenRequest}
         />
       </Show>
     </div>
@@ -595,6 +647,11 @@ export function FlightRecorderPanel(props: {
   const lowest = createMemo(() => flightRecorderLowest(state.state.rows))
   const costs = createMemo(() => flightRecorderCosts(state.state.rows))
   const [selected, setSelected] = createSignal<string>()
+  const [requestLink, setRequestLink] = createSignal<{
+    id: string
+    status: "missing" | "error"
+    message?: string
+  }>()
   let root: HTMLDivElement | undefined
 
   const ratioLabel = () =>
@@ -621,10 +678,30 @@ export function FlightRecorderPanel(props: {
     if (next) revealDetail(next)
   }
 
+  // 找到就切到 requests 来源并展开该请求；找不到只在面板上说明“未在已加载请求中”，
+  // 不声称它一定被淘汰。查找范围受客户端加载上限约束。
+  const openLinkedRequest = async (requestID: string) => {
+    const result = await state.revealRequest(requestID)
+    if (result.status === "found") {
+      setRequestLink(undefined)
+      setSelected(result.row.id)
+      revealDetail(result.row.id)
+      return
+    }
+    setRequestLink({
+      id: requestID,
+      status: result.status,
+      ...(result.status === "error" ? { message: result.message } : {}),
+    })
+  }
+
   createEffect(
     on(
       () => [state.state.source, props.sessionID() ?? ""].join(":"),
-      () => setSelected(undefined),
+      () => {
+        setSelected(undefined)
+        setRequestLink(undefined)
+      },
       { defer: true },
     ),
   )
@@ -667,7 +744,7 @@ export function FlightRecorderPanel(props: {
         </button>
       </div>
 
-      <div class="text-11-regular text-text-weaker">
+      <div data-testid="flight-recorder-note" class="text-11-regular text-text-weaker">
         {state.state.source === "steps"
           ? props.t("context.flightRecorder.stepsNote")
           : props.t("context.flightRecorder.requestsNote")}
@@ -778,6 +855,36 @@ export function FlightRecorderPanel(props: {
           <div class="text-11-regular text-text-weaker">{ratioNote()}</div>
         </div>
 
+        <Show when={requestLink()}>
+          {(link) => (
+            <Show
+              when={link().status === "error"}
+              fallback={
+                <div data-testid="flight-recorder-request-missing" class="text-11-regular text-text-weaker">
+                  {props.t("context.flightRecorder.field.request.missing", { request: link().id })}
+                </div>
+              }
+            >
+              <div
+                data-testid="flight-recorder-request-error"
+                class="flex flex-col gap-1 rounded-md border border-border-base px-2 py-1.5"
+              >
+                <div class="text-11-regular" style={{ color: "var(--syntax-critical)" }}>
+                  {props.t("context.flightRecorder.field.request.error", { error: link().message ?? "" })}
+                </div>
+                <button
+                  type="button"
+                  data-testid="flight-recorder-request-retry"
+                  class="self-start rounded-md bg-surface-base px-2 py-1 text-11-regular text-text-strong"
+                  onClick={() => void openLinkedRequest(link().id)}
+                >
+                  {props.t("context.flightRecorder.field.request.retry")}
+                </button>
+              </div>
+            </Show>
+          )}
+        </Show>
+
         <div class="flex flex-col gap-1">
           <For each={state.state.rows}>
             {(row) => {
@@ -796,10 +903,18 @@ export function FlightRecorderPanel(props: {
                   format={format()}
                   open={selected() === row.id}
                   onToggle={() => toggleRow(row.id)}
+                  onOpenRequest={(requestID) => void openLinkedRequest(requestID)}
                 />
               )
             }}
           </For>
+        </div>
+
+        <div class="text-11-regular text-text-weaker" data-testid="flight-recorder-scope">
+          {props.t("context.flightRecorder.scope", {
+            count: state.state.rows.length.toString(),
+            oldest: format().time(state.state.rows[state.state.rows.length - 1]?.time),
+          })}
         </div>
 
         <Show when={state.state.capped}>
@@ -821,7 +936,11 @@ export function FlightRecorderPanel(props: {
           </button>
         </Show>
         <Show when={!state.state.capped && !state.state.next}>
-          <div class="text-11-regular text-text-weaker">{props.t("context.flightRecorder.end")}</div>
+          <div class="text-11-regular text-text-weaker" data-testid="flight-recorder-end">
+            {state.state.source === "steps"
+              ? props.t("context.flightRecorder.end.steps")
+              : props.t("context.flightRecorder.end.requests")}
+          </div>
         </Show>
       </Show>
     </div>
@@ -835,6 +954,8 @@ export type FlightRecorderSectionProps = {
   locale: () => string
   pageSize?: number
   maxRows?: number
+  /** FR-04 独立全局入口；未提供时不渲染，会话入口保持原样。 */
+  onOpenGlobal?: () => void
 }
 
 /** Context 面板中的入口。默认折叠；展开才挂载 FlightRecorderPanel，因此未开无请求。 */
@@ -864,6 +985,16 @@ export function FlightRecorderSection(props: FlightRecorderSectionProps) {
           </span>
         </div>
       </CapsuleRow>
+      <Show when={props.onOpenGlobal}>
+        <button
+          type="button"
+          data-testid="flight-recorder-global-open"
+          class="w-full rounded-md px-2 py-1 text-left text-11-regular text-text-weak"
+          onClick={() => props.onOpenGlobal?.()}
+        >
+          {props.t("flightRecorder.global.open")}
+        </button>
+      </Show>
       <Show when={expanded()}>
         <div id="session-context-flight-recorder" class="px-2 pb-2 pt-1">
           <FlightRecorderPanel {...props} />
@@ -876,11 +1007,29 @@ export function FlightRecorderSection(props: FlightRecorderSectionProps) {
 /** 生产装配：SDK 契约 sdk.client.session.flightRecorder 由生成器提供，这里只做接线。 */
 export function SessionFlightRecorderSection() {
   const sdk = useSDK()
+  const layout = useLayout()
+  const dialog = useDialog()
   const language = useLanguage()
   const { params } = useSessionLayout()
+  // FR-04：全局入口按当前实例目录找到所属项目根，查询作用域就是「当前服务器 + 当前项目」，
+  // 不会因为点在子工作区里就假装成跨项目/跨服务器。
+  const openGlobal = () => {
+    const directory = sdk.directory
+    const project = layout.projects
+      .list()
+      .find(
+        (item) =>
+          pathKey(item.worktree) === pathKey(directory) ||
+          item.sandboxes?.some((sandbox) => pathKey(sandbox) === pathKey(directory)),
+      )
+    void import("@/components/dialog-flight-recorder").then((module) => {
+      dialog.show(() => <module.DialogFlightRecorder directory={project?.worktree ?? directory} />)
+    })
+  }
   return (
     <FlightRecorderSection
       sessionID={() => params.id}
+      onOpenGlobal={openGlobal}
       loadPage={async ({ sessionID, source, before, limit }) => {
         const response = await sdk.client.session.flightRecorder(
           { sessionID, source, before, limit },

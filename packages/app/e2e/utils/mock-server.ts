@@ -16,6 +16,8 @@ const emptyList = new Set([
   "/soul",
   // 261123 Red 文件树预取走 file.list，兜底 {} 让 (x.data ?? []).map 崩成错误 toast。
   "/file",
+  // 261126 Red FR-04 工作区名称只是可选装饰；兜底 {} 会让 Array.isArray 守卫退回 ID。
+  "/experimental/workspace",
 ])
 const emptyObject = new Set(["/global/config", "/config", "/provider/auth", "/mcp", "/session/status"])
 
@@ -28,6 +30,95 @@ export interface MockServerConfig {
   // 261126 Red Flight Recorder 新路由：返回与真实契约一致的 { items, next }。
   // 不配置时给空页，避免兜底 {} 被当成有数据的面板。
   flightRecorder?: (sessionID: string, source: string, before?: string) => { items: unknown[]; next?: string }
+  // 261126 Red FR-04 全局聚合/分页。回调拿完整 query 才能验证时间、provider、model、
+  // session、workspace 与游标真的送到了服务端。
+  flightRecorderSummary?: (query: URLSearchParams) => unknown
+  flightRecorderRows?: (query: URLSearchParams) => unknown
+}
+
+const emptyGlobalSummary = {
+  steps: {
+    samples: 0,
+    sessions: { main: 0, sub: 0 },
+    usage: {
+      samples: 0,
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      cacheMiss: 0,
+      cache: { input: 0, read: 0, samples: 0, excluded: { invalid: 0, incomplete: 0 } },
+    },
+    outcomes: { booked: 0, estimated: 0 },
+    cost: [],
+  },
+  requests: {
+    samples: 0,
+    sessions: { main: 0, sub: 0 },
+    usage: {
+      samples: 0,
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      cacheMiss: 0,
+      cache: { input: 0, read: 0, samples: 0, excluded: { invalid: 0, incomplete: 0 } },
+    },
+    outcomes: { completed: 0, failed: 0, cancelled: 0, unknown: 0 },
+    latency: { samples: 0, durationMs: {}, firstEventMs: {} },
+  },
+  ownership: {
+    steps: {
+      main: {
+        samples: 0,
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        cacheMiss: 0,
+        cache: { input: 0, read: 0, samples: 0, excluded: { invalid: 0, incomplete: 0 } },
+      },
+      sub: {
+        samples: 0,
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        cacheMiss: 0,
+        cache: { input: 0, read: 0, samples: 0, excluded: { invalid: 0, incomplete: 0 } },
+      },
+    },
+    requests: {
+      main: {
+        samples: 0,
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        cacheMiss: 0,
+        cache: { input: 0, read: 0, samples: 0, excluded: { invalid: 0, incomplete: 0 } },
+      },
+      sub: {
+        samples: 0,
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        cacheMiss: 0,
+        cache: { input: 0, read: 0, samples: 0, excluded: { invalid: 0, incomplete: 0 } },
+      },
+    },
+  },
+  models: [],
+  workspaces: [],
+  daily: [],
+  coverage: {
+    steps: { scanned: 0, truncated: false },
+    requests: { scanned: 0, truncated: false },
+  },
+  truncated: false,
+  breakdownsTruncated: false,
+  limits: { scan: 5000, pageScan: 1000, groups: 50, trendDays: 60 },
 }
 
 export async function mockRedCodeServer(page: Page, config: MockServerConfig) {
@@ -114,6 +205,25 @@ export async function mockRedCodeServer(page: Page, config: MockServerConfig) {
         tools: { count: 0, tokens: 0, confidence: "low", top: [] },
         messages: { count: 0, tokens: 0, confidence: "low", byRole: [] },
       } satisfies SessionContextInspectResponse)
+    }
+
+    if (path === "/session/flight-recorder/summary") {
+      return json(route, config.flightRecorderSummary?.(url.searchParams) ?? emptyGlobalSummary)
+    }
+
+    if (path === "/session/flight-recorder/rows") {
+      // FR-04 回归需要模拟分页请求失败：回调抛错时回 500，让真实 client 走错误分支，
+      // 而不是把异常留在 route handler 里变成挂起请求。
+      try {
+        return json(route, config.flightRecorderRows?.(url.searchParams) ?? { items: [], scanned: 0, truncated: false })
+      } catch (error) {
+        return route.fulfill({
+          status: 500,
+          contentType: "application/json",
+          headers: { "access-control-allow-origin": "*" },
+          body: JSON.stringify({ error: error instanceof Error ? error.message : String(error) }),
+        })
+      }
     }
 
     const flightRecorderMatch = path.match(/^\/session\/([^/]+)\/flight-recorder$/)

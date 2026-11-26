@@ -8,6 +8,7 @@ import { ContextMenu } from "@redcode-ai/ui/context-menu"
 import { Avatar as AvatarV2 } from "@redcode-ai/ui/v2/components/avatar-v2.jsx"
 import { ButtonV2 } from "@redcode-ai/ui/v2/components/button-v2.jsx"
 import { Icon as IconV2 } from "@redcode-ai/ui/v2/components/icon.jsx"
+import { HomeFlightRecorderEntry } from "./home-flight-recorder-entry"
 import { IconButtonV2 } from "@redcode-ai/ui/v2/components/icon-button-v2.jsx"
 import { useGlobalSDK } from "@/context/global-sdk"
 import { isCodeSession } from "@/utils/product-mode"
@@ -298,6 +299,15 @@ export default function Home(props: { initialDirectory?: string }) {
     })
   }
 
+  // FR-04 全局入口：首页左栏直接打开当前项目的执行历史，不依赖正开着的会话。
+  function openFlightRecorder() {
+    const directory = selectedProject()?.worktree
+    if (!directory) return
+    void import("@/components/dialog-flight-recorder").then((x) => {
+      dialog.show(() => <x.DialogFlightRecorder directory={directory} />)
+    })
+  }
+
   // 261106 Red 移除项目加二次确认：右键菜单一点直接 project.remove 不可恢复。
   function removeProject(project: LocalProject) {
     const doRemove = async () => {
@@ -398,6 +408,7 @@ export default function Home(props: { initialDirectory?: string }) {
         selectProject={selectProject}
         chooseProject={() => void chooseProject()}
         openSettings={openSettings}
+        openFlightRecorder={openFlightRecorder}
         removeProject={(project) => void removeProject(project)}
         language={language}
         statsSessions={statsSessions()}
@@ -604,6 +615,7 @@ function HomeProjectColumn(props: {
   selectProject: (directory: string) => void
   chooseProject: () => void
   openSettings: () => void
+  openFlightRecorder: () => void
   removeProject: (project: LocalProject) => void
   language: ReturnType<typeof useLanguage>
   statsSessions: Session[]
@@ -786,6 +798,14 @@ function HomeProjectColumn(props: {
           而主区会话卡以下本来就是一大片空白。这里只剩设置按钮。 */}
       <div class="mt-auto shrink-0">
         <div class="mt-2 flex min-w-0 flex-col gap-1">
+          <Show when={props.projects.length > 0}>
+            <HomeFlightRecorderEntry
+              label={props.language.t("flightRecorder.global.open")}
+              disabledReason={props.language.t("flightRecorder.global.selectProject")}
+              disabled={!props.selected}
+              onOpen={props.openFlightRecorder}
+            />
+          </Show>
           <button
             type="button"
             class={`${HOME_PROJECT_NAV_ROW} text-v2-text-text-faint [&>[data-slot=icon-svg]]:text-v2-icon-icon-muted`}

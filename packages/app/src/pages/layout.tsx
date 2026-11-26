@@ -651,6 +651,13 @@ export default function Layout(props: ParentProps) {
         keybind: "mod+comma",
         onSelect: () => openSettings(),
       },
+      {
+        id: "flightRecorder.open",
+        title: language.t("command.flightRecorder.open"),
+        category: language.t("command.category.view"),
+        disabled: !flightRecorderDirectory(),
+        onSelect: () => openFlightRecorder(),
+      },
       ...(platform.platform === "desktop" && platform.exportDebugLogs
         ? [
             {
@@ -834,6 +841,26 @@ export default function Layout(props: ParentProps) {
     void import("@/components/dialog-settings").then((x) => {
       if (dialogDead || dialogRun !== run) return
       dialog.show(() => <x.DialogSettings />)
+    })
+  }
+
+  // FR-04：从任意页面按当前项目打开全局执行历史；没有项目时命令禁用。
+  function flightRecorderDirectory() {
+    return (
+      currentProject()?.worktree ??
+      (currentDir() ? projectRoot(currentDir()) : undefined) ??
+      server.projects.last() ??
+      layout.projects.list()[0]?.worktree
+    )
+  }
+
+  function openFlightRecorder() {
+    const directory = flightRecorderDirectory()
+    if (!directory) return
+    const run = ++dialogRun
+    void import("@/components/dialog-flight-recorder").then((x) => {
+      if (dialogDead || dialogRun !== run) return
+      dialog.show(() => <x.DialogFlightRecorder directory={directory} />)
     })
   }
 

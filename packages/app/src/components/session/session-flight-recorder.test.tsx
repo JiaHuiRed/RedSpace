@@ -13,11 +13,22 @@ import {
 // 错误/空态重试与分页。全部走注入的 loadPage，不碰 live DB/API。
 
 const templates: Record<string, string> = {
-  "context.flightRecorder.cap": "cap {{count}}",
+  "context.flightRecorder.cap": "client-limit {{count}} not loaded",
   "context.flightRecorder.coverage": "coverage {{covered}}/{{total}}",
   "context.flightRecorder.costCoverage": "cost {{covered}}/{{total}}",
   "context.flightRecorder.lowPoint": "lowest {{percent}} · {{time}}",
   "context.flightRecorder.diagnostics.firstDifference": "entry {{index}}",
+  "context.flightRecorder.scope": "loaded {{count}} oldest {{oldest}}",
+  "context.flightRecorder.requestsNote": "server retention configurable eviction unknown",
+  "context.flightRecorder.end.steps": "no earlier steps",
+  "context.flightRecorder.end.requests": "queryable end eviction unknown",
+  "context.flightRecorder.field.request": "linked request",
+  "context.flightRecorder.field.request.open": "open linked request",
+  "context.flightRecorder.field.request.missing": "request {{request}} not in loaded rows; eviction unknown",
+  "context.flightRecorder.field.request.error": "request search failed {{error}}",
+  "context.flightRecorder.field.request.retry": "retry request search",
+  "context.flightRecorder.field.unassociated": "unassociated",
+  "context.flightRecorder.costNote": "cost is the step total only",
 }
 
 const t: FlightRecorderTranslate = (key, params) =>
@@ -78,7 +89,12 @@ function click(container: ParentNode, selector: string) {
 
 function mount(
   loadPage: FlightRecorderLoad,
-  options: { sessionID?: () => string | undefined; pageSize?: number; maxRows?: number } = {},
+  options: {
+    sessionID?: () => string | undefined
+    pageSize?: number
+    maxRows?: number
+    onOpenGlobal?: () => void
+  } = {},
 ) {
   const [session, setSession] = createSignal(options.sessionID?.() ?? "session-1")
   const container = document.createElement("div")
@@ -92,6 +108,7 @@ function mount(
         locale={() => "en-US"}
         pageSize={options.pageSize}
         maxRows={options.maxRows}
+        onOpenGlobal={options.onOpenGlobal}
       />
     ),
     container,
@@ -152,7 +169,100 @@ test("switching source replaces steps with actual requests and keeps the scope e
     expect(fake.calls[1]?.source).toBe("requests")
     expect(mounted.container.querySelector('[data-row-id="step-1"]')).toBeNull()
     expect(mounted.container.querySelector('[data-row-id="request-1"]')).not.toBeNull()
-    expect(mounted.container.textContent).toContain("context.flightRecorder.requestsNote")
+    expect(mounted.container.querySelector('[data-testid="flight-recorder-note"]')?.textContent).toContain(
+      "server retention configurable",
+    )
+    // 服务端容量可配置：会话接口不返回策略时不能声称 128 是当前生效上限。
+    expect(mounted.container.querySelector('[data-testid="flight-recorder-note"]')?.textContent).not.toContain("128")
+  } finally {
+    mounted.dispose()
+  }
+})
+
+test("step requestID links to a loaded request and never guesses eviction", async () => {
+  const linked = { ...row({ id: "step-linked" }), requestID: "req_target" }
+  const unlinked = row({ id: "step-unlinked" })
+  const missing = { ...row({ id: "step-missing" }), requestID: "req_missing" }
+  const target = row({ id: "req_target", outcome: "failed" })
+  const fake = responder((input) => ({
+    items: input.source === "steps" ? [linked, unlinked, missing] : [target],
+  }))
+  const mounted = mount(fake.load)
+  try {
+    await open(mounted.container)
+    click(mounted.container, '[data-row-id="step-linked"] button')
+    await flush()
+    const linkedDetail = mounted.container.querySelector('[data-testid="flight-recorder-detail"]')!
+    expect(linkedDetail.textContent).toContain("req_target")
+    expect(linkedDetail.textContent).toContain("linked request")
+    expect(linkedDetail.textContent).toContain("cost is the step total only")
+
+    click(mounted.container, '[data-testid="flight-recorder-open-request"]')
+    await flush()
+    await flush()
+    // 关联请求就在按需加载的请求列表里：切到 requests 并展开它，费用说明不再属于它。
+    expect(mounted.container.querySelector('[data-row-id="req_target"]')).not.toBeNull()
+    const requestDetail = mounted.container.querySelector('[data-testid="flight-recorder-detail"]')!
+    expect(requestDetail.getAttribute("data-detail-id")).toBe("req_target")
+    expect(requestDetail.textContent).not.toContain("cost is the step total only")
+    expect(requestDetail.textContent).not.toContain("linked request")
+
+    click(mounted.container, '[data-testid="flight-recorder-source-steps"]')
+    await flush()
+    click(mounted.container, '[data-row-id="step-unlinked"] button')
+    await flush()
+    const unlinkedDetail = mounted.container.querySelector('[data-testid="flight-recorder-detail"]')!
+    expect(unlinkedDetail.textContent).toContain("unassociated")
+    expect(mounted.container.querySelector('[data-testid="flight-recorder-open-request"]')).toBeNull()
+
+    // 请求不在已加载列表：明确“未找到、淘汰未知”，不把它说成一定已淘汰。
+    click(mounted.container, '[data-row-id="step-missing"] button')
+    await flush()
+    click(mounted.container, '[data-testid="flight-recorder-open-request"]')
+    await flush()
+    await flush()
+    const note = mounted.container.querySelector('[data-testid="flight-recorder-request-missing"]')
+    expect(note?.textContent).toContain("req_missing")
+    expect(note?.textContent).toContain("eviction unknown")
+  } finally {
+    mounted.dispose()
+  }
+})
+
+test("request-link search stops on a load error and can retry", async () => {
+  const linked = { ...row({ id: "step-link" }), requestID: "req_retry" }
+  const target = row({ id: "req_retry", outcome: "failed" })
+  let more = 0
+  const fake = responder((input) => {
+    if (input.source === "steps") return { items: [linked] }
+    if (!input.before) return { items: [row({ id: "req_other" })], next: "cursor-1" }
+    more++
+    if (more === 1) throw new Error("network down")
+    return { items: [target] }
+  })
+  const mounted = mount(fake.load)
+  try {
+    await open(mounted.container)
+    click(mounted.container, '[data-row-id="step-link"] button')
+    await flush()
+    click(mounted.container, '[data-testid="flight-recorder-open-request"]')
+    await flush()
+    await flush()
+    // 分页失败后不能保留 next 自动重试；只允许一次失败请求，然后停下来等人工重试。
+    expect(more).toBe(1)
+    const failure = mounted.container.querySelector('[data-testid="flight-recorder-request-error"]')
+    expect(failure?.textContent).toContain("network down")
+    expect(
+      mounted.container.querySelector('[data-testid="flight-recorder-detail"]')?.getAttribute("data-detail-id"),
+    ).not.toBe("req_retry")
+
+    click(mounted.container, '[data-testid="flight-recorder-request-retry"]')
+    await flush()
+    await flush()
+    expect(more).toBe(2)
+    expect(
+      mounted.container.querySelector('[data-testid="flight-recorder-detail"]')?.getAttribute("data-detail-id"),
+    ).toBe("req_retry")
   } finally {
     mounted.dispose()
   }
@@ -389,8 +499,70 @@ test("paging uses the next cursor, de-duplicates rows and stops at the retention
     )
     expect(ids).toEqual(["r1", "r2", "r3"])
     expect(mounted.container.querySelector('[data-testid="flight-recorder-load-more"]')).toBeNull()
-    expect(mounted.container.querySelector('[data-testid="flight-recorder-cap"]')?.textContent).toContain("3")
+    expect(mounted.container.querySelector('[data-testid="flight-recorder-cap"]')?.textContent).toContain(
+      "client-limit 3 not loaded",
+    )
+    expect(mounted.container.querySelector('[data-testid="flight-recorder-end"]')).toBeNull()
     expect(fake.calls.length).toBe(2)
+  } finally {
+    mounted.dispose()
+  }
+})
+
+test("exactly the request retention limit without a cursor keeps the range bounded and eviction unknown", async () => {
+  const rows = Array.from({ length: 128 }, (_, index) =>
+    row({ id: `retained-${index}`, time: 1_700_000_000_000 - index * 1_000 }),
+  )
+  const fake = responder(() => ({ items: rows }))
+  const mounted = mount(fake.load)
+  try {
+    await open(mounted.container)
+    click(mounted.container, '[data-testid="flight-recorder-source-requests"]')
+    await flush()
+    expect(mounted.container.querySelectorAll('[data-testid="flight-recorder-row"]').length).toBe(128)
+    expect(mounted.container.querySelector('[data-testid="flight-recorder-cap"]')).toBeNull()
+    expect(mounted.container.querySelector('[data-testid="flight-recorder-load-more"]')).toBeNull()
+
+    const fmt = new Intl.DateTimeFormat("en-US", {
+      month: "numeric",
+      day: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    })
+    const scope = mounted.container.querySelector('[data-testid="flight-recorder-scope"]')?.textContent
+    expect(scope).toContain("loaded 128")
+    expect(scope).toContain(fmt.format(new Date(rows[rows.length - 1]!.time)))
+
+    expect(mounted.container.querySelector('[data-testid="flight-recorder-note"]')?.textContent).toContain(
+      "server retention configurable eviction unknown",
+    )
+    // 恰好 128 且没有 next：不称“全部历史”，也不声称已淘汰，只说明范围末端且淘汰未知。
+    expect(mounted.container.querySelector('[data-testid="flight-recorder-end"]')?.textContent).toBe(
+      "queryable end eviction unknown",
+    )
+  } finally {
+    mounted.dispose()
+  }
+})
+
+test("client-side truncation at the same limit is reported as unloaded, not evicted", async () => {
+  const rows = Array.from({ length: 128 }, (_, index) => row({ id: `capped-${index}` }))
+  const fake = responder(() => ({ items: rows, next: "cursor-more" }))
+  const mounted = mount(fake.load)
+  try {
+    await open(mounted.container)
+    click(mounted.container, '[data-testid="flight-recorder-source-requests"]')
+    await flush()
+    expect(mounted.container.querySelectorAll('[data-testid="flight-recorder-row"]').length).toBe(128)
+    expect(mounted.container.querySelector('[data-testid="flight-recorder-end"]')).toBeNull()
+    expect(mounted.container.querySelector('[data-testid="flight-recorder-load-more"]')).toBeNull()
+
+    const cap = mounted.container.querySelector('[data-testid="flight-recorder-cap"]')?.textContent
+    expect(cap).toContain("client-limit 128 not loaded")
+    expect(mounted.container.querySelector('[data-testid="flight-recorder-note"]')?.textContent).toContain(
+      "server retention configurable eviction unknown",
+    )
   } finally {
     mounted.dispose()
   }
