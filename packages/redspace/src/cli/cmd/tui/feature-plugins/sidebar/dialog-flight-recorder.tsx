@@ -10,8 +10,9 @@ import { createEffect, createMemo, createSignal, For, on, onMount, Show } from "
 
 // 261126 Red Flight Recorder V1：侧栏 Context 里按需打开的执行历史。
 // 数据源有两个，口径不同不能混：steps 是旧账单步骤（缓存为归一化账单口径，
-// 不是供应商原始证据），requests 是新的请求尝试记录（每会话服务端最多保留 128 条）。
-// 打开前一律不发请求；分页只在用户显式触发时累积，并在客户端设行数上限。
+// 不是供应商原始证据），requests 是新的请求尝试记录（服务端保留策略由服务端决定，
+// 客户端不硬编码保留条数）。打开前一律不发请求；分页只在用户显式触发时累积，
+// 并在客户端设显示行数上限。
 export type FlightRecorderSource = "steps" | "requests"
 
 export type FlightRecorderLoad = (input: {
@@ -22,11 +23,11 @@ export type FlightRecorderLoad = (input: {
 }) => Promise<{ data?: FlightRecorderPage }>
 
 export const FLIGHT_RECORDER_PAGE_SIZE = 30
-// 两个来源的加载上限分开：旧账单步骤没有服务端保留窗口，请求尝试只保留 128 条。
-// 到上限时必须明确说“更早的没加载/没保留”，不能把当前列表画成整个会话。
+// 客户端一次对话里最多累积显示多少行——这是 UI 边界，不是服务端保留策略。
+// 服务端实际保留多少请求由服务端容量策略决定；页面没有提供策略时不要声称具体生效值。
 export const FLIGHT_RECORDER_MAX_ROWS: Record<FlightRecorderSource, number> = {
   steps: 150,
-  requests: 128,
+  requests: 150,
 }
 
 const OUTCOME_LABEL: Record<FlightRecorderRow["outcome"], string> = {
@@ -50,11 +51,22 @@ const moneyCny = new Intl.NumberFormat("zh-CN", { style: "currency", currency: "
 const moneyUsd = new Intl.NumberFormat("zh-CN", { style: "currency", currency: "USD" })
 
 export function flightRecorderSourceLabel(source: FlightRecorderSource): string {
-  return source === "steps" ? "账单步骤（旧历史）" : "请求尝试（新记录 · 最多 128 条）"
+  return source === "steps" ? "账单步骤（旧历史）" : "请求尝试（新记录）"
+}
+
+// 到达上限只能报告“更早的没加载”。服务端保留策略不在会话分页响应里，
+// 因此不推断“保留上限已达/已淘汰”；容量策略以服务端提供的全局策略为准。
+export type FlightRecorderCap = "client"
+
+export function flightRecorderCap(totalRows: number, maxRows: number, next: string | undefined): FlightRecorderCap | undefined {
+  // totalRows 是去重后、切片前的数量：哪怕没有 next，被客户端上限切掉的行也必须算未加载。
+  if (totalRows > maxRows) return "client"
+  if (next && totalRows >= maxRows) return "client"
+  return undefined
 }
 
 export function flightRecorderCapLabel(source: FlightRecorderSource): string {
-  return source === "steps" ? "更早记录未加载" : "更早请求未保留"
+  return source === "steps" ? "更早记录未加载" : "更早请求未加载"
 }
 
 export function outcomeLabel(outcome: FlightRecorderRow["outcome"]): string {
@@ -101,6 +113,15 @@ export function cacheHitPercent(row: Pick<FlightRecorderRow, "input" | "cacheRea
   return Math.round((row.cacheRead / row.input) * 1000) / 10
 }
 
+// 261126 Red FR-06：步骤账的可选 requestID 由服务端投影后原样显示。缺失即未关联，
+// 不按时间/模型/位置猜；服务端尚未投影时也只是未关联，不伪造对应关系。
+// SDK 尚未重新生成，客户端类型里还没有 requestID；服务端 Schema 已把它投影为可选字段，
+// 这里按结构读取，缺失/空串一律显示未关联，不做猜测性关联。
+export function recordedRequestID(row: FlightRecorderRow): string | undefined {
+  const value = (row as FlightRecorderRow & { requestID?: unknown }).requestID
+  return typeof value === "string" && value.length > 0 ? value : undefined
+}
+
 // 旧账的比率叫「账面命中率」，只有新请求记录才配叫「实报命中率」。
 export function cacheHitLabel(row: Pick<FlightRecorderRow, "outcome">): string {
   return row.outcome === "booked" ? "账面命中率" : "实报命中率"
@@ -124,12 +145,13 @@ export function prefixParts(prefix: NonNullable<FlightRecorderRow["prefix"]>): s
 }
 
 // 分页合并：按 id 去重、按时间最新的在前、总行数按来源上限封顶。
-// 调用方只在用户触发时追加。
+// 调用方只在用户触发时追加。total 是切片前的去重总数——调用方据此判断
+// 本轮是否有行被客户端上限截掉，不能只看 rows.length 与 next。
 export function mergeFlightRecorderRows(
   current: readonly FlightRecorderRow[],
   incoming: readonly FlightRecorderRow[],
   maxRows: number,
-): FlightRecorderRow[] {
+): { rows: FlightRecorderRow[]; total: number } {
   const seen = new Set(current.map((row) => row.id))
   const merged = [...current]
   for (const row of incoming) {
@@ -138,7 +160,7 @@ export function mergeFlightRecorderRows(
     merged.push(row)
   }
   merged.sort((a, b) => b.time - a.time || b.id.localeCompare(a.id))
-  return merged.slice(0, maxRows)
+  return { rows: merged.slice(0, maxRows), total: merged.length }
 }
 
 export function SidebarFlightRecorder(props: { api: TuiPluginApi; sessionID: string; load: FlightRecorderLoad }) {
@@ -181,7 +203,7 @@ export function DialogFlightRecorder(props: {
   const [source, setSource] = createSignal<FlightRecorderSource>("steps")
   const [rows, setRows] = createSignal<FlightRecorderRow[]>([])
   const [next, setNext] = createSignal<string | undefined>()
-  const [capped, setCapped] = createSignal(false)
+  const [capped, setCapped] = createSignal<FlightRecorderCap | undefined>()
   const [loading, setLoading] = createSignal<"initial" | "more" | undefined>()
   const [error, setError] = createSignal<string | undefined>()
   const [selected, setSelected] = createSignal<FlightRecorderRow | undefined>()
@@ -193,7 +215,7 @@ export function DialogFlightRecorder(props: {
   let generation = 0
   const key = (sessionID = props.sessionID, value = source()) => `${sessionID}:${value}`
   // 非持久缓存：只活在这个对话框组件里，关闭即释放；不写 KV、不跨会话复用。
-  const cache = new Map<string, { rows: FlightRecorderRow[]; next?: string; capped: boolean }>()
+  const cache = new Map<string, { rows: FlightRecorderRow[]; next?: string; capped?: FlightRecorderCap }>()
 
   async function loadFirst() {
     const current = ++generation
@@ -206,10 +228,8 @@ export function DialogFlightRecorder(props: {
       if (!result.data) throw new Error("空响应")
       const limit = maxRows()
       const merged = mergeFlightRecorderRows([], result.data.items, limit)
-      // 只有真的还有下一页（或 requests 的 128 保留窗口已满）才算 capped；
-      // steps 恰好落在上限且没有 next 时，服务端已证明这是完整列表。
-      const capped = merged.length >= limit && (!!result.data.next || source() === "requests")
-      const page = { rows: merged, next: capped ? undefined : result.data.next, capped }
+      const capped = flightRecorderCap(merged.total, limit, result.data.next)
+      const page = { rows: merged.rows, next: capped ? undefined : result.data.next, capped }
       cache.set(currentKey, page)
       setRows(page.rows)
       setNext(page.next)
@@ -218,7 +238,7 @@ export function DialogFlightRecorder(props: {
       if (current !== generation) return
       setRows([])
       setNext(undefined)
-      setCapped(false)
+      setCapped(undefined)
       setError(errorMessage(cause))
     } finally {
       if (current === generation) setLoading(undefined)
@@ -244,11 +264,10 @@ export function DialogFlightRecorder(props: {
       const seen = new Set(rows().map((item) => item.id))
       const hasFresh = result.data.items.some((item) => !seen.has(item.id))
       const merged = mergeFlightRecorderRows(rows(), result.data.items, limit)
-      // 达到上限后仍保留 cursor 信息没有意义：不再翻页，但 capped 必须让界面
-      // 明确说明“更早的没加载”，不能画成整个会话。
-      const capped = merged.length >= limit && (!!result.data.next || source() === "requests")
+      // 达到上限后 cursor 不再保留；total 是切片前的去重数：没有 next 但本轮有行被切掉时同样算未加载。
+      const capped = flightRecorderCap(merged.total, limit, result.data.next)
       const page = {
-        rows: merged,
+        rows: merged.rows,
         // 服务端重复返回同一页时（fresh 为空）也要停住 cursor，避免同一页反复请求。
         next: capped || !hasFresh || !result.data.next || result.data.next === before ? undefined : result.data.next,
         capped,
@@ -266,6 +285,12 @@ export function DialogFlightRecorder(props: {
     }
   }
 
+  // Ctrl+R 主动刷新当前来源：重拉第一页。loadFirst 推进 generation，
+  // 在途的 initial/more 响应晚到都会被丢弃，不会覆盖刷新结果。
+  function refresh() {
+    void loadFirst()
+  }
+
   function switchSource() {
     const target: FlightRecorderSource = source() === "steps" ? "requests" : "steps"
     generation++
@@ -273,7 +298,7 @@ export function DialogFlightRecorder(props: {
     setSelected(undefined)
     setError(undefined)
     setLoading(undefined)
-    setCapped(false)
+    setCapped(undefined)
     const cached = cache.get(key(props.sessionID, target))
     if (cached) {
       setRows(cached.rows)
@@ -304,7 +329,7 @@ export function DialogFlightRecorder(props: {
         cache.clear()
         setRows([])
         setNext(undefined)
-        setCapped(false)
+        setCapped(undefined)
         setError(undefined)
         setLoading(undefined)
         setSelected(undefined)
@@ -372,16 +397,48 @@ export function DialogFlightRecorder(props: {
   const footerHints = createMemo(() => {
     const hints: { title: string; label: string }[] = []
     if (loading() === "more") hints.push({ title: "加载中", label: "…" })
-    else if (capped()) {
-      // 到上限必须明确还有更早的没进来，避免看起来像整个会话都已列出。
-      hints.push({
-        title: "已到上限",
-        label: flightRecorderCapLabel(source()),
-      })
-    } else if (rows().length > 0 && !next()) hints.push({ title: "已到", label: "最早" })
+    else {
+      const cap = capped()
+      // 到上限必须说明更早的没进来，避免画成整个会话；会话分页响应没有服务端保留策略，
+      // 所以只能报告“未加载”，不能声称“未保留”或“保留上限已达”。
+      if (cap)
+        hints.push({
+          title: "已到上限",
+          label: flightRecorderCapLabel(source()),
+        })
+      else if (rows().length > 0 && !next()) {
+        hints.push({ title: "已到", label: source() === "requests" ? "返回范围最早" : "最早" })
+        // 请求账的容量策略不在会话分页响应里；没有服务端策略时明确说未知，不冒充当前生效值。
+        if (source() === "requests") hints.push({ title: "保留策略", label: "未提供（默认/未知）" })
+      }
+    }
     hints.push({ title: "查看", label: "Enter" })
     return hints
   })
+
+  // 261126 Red FR-06：关联请求只在当前已缓存的请求记录里做精确 ID 匹配。没加载到就
+  // 只说明“未加载/不能据此判断淘汰”，不扫描分页、不按时间或位置猜对应关系。
+  function associatedRequest(row: FlightRecorderRow) {
+    const requestID = recordedRequestID(row)
+    if (requestID === undefined) return undefined
+    const requests = cache.get(key(props.sessionID, "requests"))
+    const target = requests?.rows.find((item) => item.id === requestID)
+    if (target === undefined)
+      return { id: requestID, note: "关联请求不在当前已加载的请求记录中；不能据此判断已淘汰" }
+    return {
+      id: requestID,
+      open: () => {
+        generation++
+        setSource("requests")
+        setError(undefined)
+        setLoading(undefined)
+        setCapped(requests?.capped)
+        setRows(requests?.rows ?? [])
+        setNext(requests?.next)
+        setSelected(target)
+      },
+    }
+  }
 
   return (
     <Show
@@ -398,25 +455,35 @@ export function DialogFlightRecorder(props: {
             {
               command: "sidebar.flight_recorder.source",
               title: "切换来源",
+              withoutSelection: true,
               onTrigger: () => switchSource(),
             },
             {
               command: "sidebar.flight_recorder.more",
               title: "加载更早",
-              disabled: !next() || loading() !== undefined || capped(),
+              disabled: !next() || loading() !== undefined || capped() !== undefined,
+              withoutSelection: true,
               onTrigger: () => void loadMore(),
+            },
+            {
+              command: "sidebar.flight_recorder.refresh",
+              title: "刷新",
+              // 刷新随时可用：loadFirst 推进 generation，在途请求会被丢弃。
+              withoutSelection: true,
+              onTrigger: () => refresh(),
             },
             {
               command: "sidebar.flight_recorder.retry",
               title: "重试",
               disabled: !error(),
+              withoutSelection: true,
               onTrigger: () => retry(),
             },
           ]}
           bindings={[
             { key: "ctrl+s", cmd: "sidebar.flight_recorder.source", desc: "切换来源", group: "Dialog" },
             { key: "ctrl+l", cmd: "sidebar.flight_recorder.more", desc: "加载更早", group: "Dialog" },
-            { key: "ctrl+r", cmd: "sidebar.flight_recorder.retry", desc: "重试", group: "Dialog" },
+            { key: "ctrl+r", cmd: "sidebar.flight_recorder.refresh", desc: "刷新", group: "Dialog" },
           ]}
         />
       }
@@ -431,6 +498,7 @@ export function DialogFlightRecorder(props: {
               : undefined
           })()}
           source={source()}
+          request={source() === "steps" ? associatedRequest(row()) : undefined}
           onBack={() => {
             setSelected(undefined)
           }}
@@ -440,10 +508,15 @@ export function DialogFlightRecorder(props: {
   )
 }
 
-function FlightRecorderDetail(props: {
+export function FlightRecorderDetail(props: {
   row: FlightRecorderRow
   previous?: FlightRecorderRow
   source: FlightRecorderSource
+  // 261126 Red FR-04：全局记录带会话归属；只有调用方给了 open 才提供跳转。
+  session?: { id: string; workspaceID?: string; sub: boolean; open?: () => void }
+  // 261126 Red FR-06：只有关联请求已在当前已加载的请求记录里找到时才提供跳转；
+  // 找不到时用 note 说明“未加载/无法确认”，不推断已淘汰。
+  request?: { id: string; open?: () => void; note?: string }
   onBack: () => void
 }) {
   const { theme } = useTheme()
@@ -461,6 +534,8 @@ function FlightRecorderDetail(props: {
       { label: "缓存写入", value: row().cacheWrite },
     ].filter((item) => item.value !== undefined),
   )
+  const openSession = props.session?.open
+  const openRequest = props.request?.open
   useBindings(() => ({
     commands: [
       {
@@ -469,12 +544,37 @@ function FlightRecorderDetail(props: {
         category: "Context",
         run: props.onBack,
       },
+      ...(openRequest
+        ? [
+            {
+              name: "sidebar.flight_recorder.open_request",
+              title: "View associated request",
+              category: "Context",
+              run: openRequest,
+            },
+          ]
+        : []),
+      ...(openSession
+        ? [
+            {
+              name: "sidebar.flight_recorder.open_session",
+              title: "Open session",
+              category: "Context",
+              run: openSession,
+            },
+          ]
+        : []),
     ],
     bindings: [
       { key: "left", cmd: "sidebar.flight_recorder.back", desc: "返回列表", group: "Dialog" },
       { key: "backspace", cmd: "sidebar.flight_recorder.back", desc: "返回列表", group: "Dialog" },
       { key: "pageup", cmd: () => page(-1), desc: "向上滚动详情", group: "Dialog" },
       { key: "pagedown", cmd: () => page(1), desc: "向下滚动详情", group: "Dialog" },
+      ...(openRequest
+        ? [{ key: "enter", cmd: "sidebar.flight_recorder.open_request", desc: "查看关联请求", group: "Dialog" }]
+        : openSession
+          ? [{ key: "enter", cmd: "sidebar.flight_recorder.open_session", desc: "打开会话", group: "Dialog" }]
+          : []),
     ],
   }))
 
@@ -501,12 +601,26 @@ function FlightRecorderDetail(props: {
             结果 {outcomeLabel(row().outcome)}
             <Show when={row().summary}> · 摘要消息</Show>
           </text>
-          <Show when={row().outcome === "estimated"}>
-            <text fg={theme.warning}>数值口径 估算（非实报）</text>
+         <Show when={props.session}>
+           {(session) => (
+             <text fg={theme.textMuted}>
+               会话 <span style={{ fg: theme.text }}>{session().id}</span>
+               {session().sub ? "（子代理）" : "（主会话）"}
+               <Show when={session().workspaceID}> · 工作区 {session().workspaceID}</Show>
+             </text>
+           )}
+         </Show>
+          <Show when={props.source === "steps"}>
+            <text fg={theme.textMuted}>
+              请求关联 <span style={{ fg: theme.text }}>{recordedRequestID(row()) ?? "未关联"}</span>
+            </text>
+            <Show when={props.request?.note}>
+              <text fg={theme.textMuted}>{props.request?.note}</text>
+            </Show>
           </Show>
-          <Show when={props.source === "steps" || row().outcome === "booked"}>
-            <text fg={theme.textMuted}>缓存口径 账单归一化（记账 0 可能来自缺报归零，不代表供应商显式 0）</text>
-          </Show>
+         <Show when={row().outcome === "estimated"}>
+           <text fg={theme.warning}>数值口径 估算（非实报）</text>
+         </Show>
           <text fg={theme.textMuted}>
             输入（含缓存） <span style={{ fg: theme.text }}>{formatRecordedNumber(row().input)}</span>
           </text>
@@ -527,9 +641,15 @@ function FlightRecorderDetail(props: {
               </text>
             </Show>
           </Show>
+          <Show when={props.source === "steps" && row().outcome === "booked"}>
+            <text fg={theme.textMuted}>记账 0 可能来自缺报归零（旧账归一化，不代表供应商显式报告）</text>
+          </Show>
           <text fg={theme.textMuted}>
             费用 <span style={{ fg: theme.text }}>{formatRecordedCost(row().cost, row().currency)}</span>
           </text>
+         <Show when={props.source === "steps" && row().cost !== undefined}>
+           <text fg={theme.textMuted}>费用口径 步骤总费用；不拆分到单次请求，关联以服务端投影为准</text>
+         </Show>
           <Show when={row().durationMs !== undefined}>
             <text fg={theme.textMuted}>
               耗时 <span style={{ fg: theme.text }}>{formatRecordedDuration(row().durationMs)}</span>
@@ -554,9 +674,11 @@ function FlightRecorderDetail(props: {
       </scrollbox>
       <text fg={theme.textMuted}>
         ← / Backspace 返回列表
+        <Show when={openRequest}> · Enter 查看关联请求</Show>
+        <Show when={openSession}> · Enter 打开会话</Show>
         <Show when={row().diagnostics}> · PgUp / PgDn 滚动</Show>
       </text>
-    </box>
+   </box>
   )
 }
 

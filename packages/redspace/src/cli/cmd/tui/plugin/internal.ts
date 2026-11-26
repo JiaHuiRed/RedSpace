@@ -12,6 +12,7 @@ import Notifications from "../feature-plugins/system/notifications"
 import WhichKey from "../feature-plugins/system/which-key"
 import DiffViewer from "../feature-plugins/system/diff-viewer"
 import SessionSwitcher from "../feature-plugins/session/index"
+import FlightRecorder from "../feature-plugins/flight-recorder/index"
 import type { TuiPlugin, TuiPluginModule } from "@redcode-ai/plugin/tui"
 import type { RuntimeFlags } from "@/effect/runtime-flags"
 
@@ -36,6 +37,7 @@ export function internalTuiPlugins(flags: Pick<RuntimeFlags.Info, "diffViewer">)
     PluginManager,
     WhichKey,
     SessionSwitcher,
+    FlightRecorder,
     ...(flags.diffViewer ? [DiffViewer] : []),
   ]
 }

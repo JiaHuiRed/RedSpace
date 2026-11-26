@@ -38,6 +38,8 @@ export interface DialogSelectProps<T> {
     title: string
     side?: "left" | "right"
     disabled?: boolean
+    // 动作不依赖当前选中项（刷新/分页等）：过滤无匹配时仍可执行，不能静默吞键。
+    withoutSelection?: boolean
     onTrigger: (option: DialogSelectOption<T>) => void
   }[]
   footerHints?: {
@@ -337,8 +339,8 @@ export function DialogSelect<T>(props: DialogSelectProps<T>) {
           run() {
             setStore("input", "keyboard")
             const option = selected()
-            if (!option) return
-            item.onTrigger(option)
+            if (!option && !item.withoutSelection) return
+            item.onTrigger(option as DialogSelectOption<T>)
           },
         })),
       ],
