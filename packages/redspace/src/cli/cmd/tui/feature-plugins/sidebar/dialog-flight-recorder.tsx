@@ -143,7 +143,12 @@ export function mergeFlightRecorderRows(
 export function SidebarFlightRecorder(props: { api: TuiPluginApi; sessionID: string; load: FlightRecorderLoad }) {
   const theme = () => props.api.theme.current
   const open = () => {
-    props.api.ui.dialog.replace(() => <DialogFlightRecorder sessionID={props.sessionID} load={props.load} />)
+    // 261126 Red 以 Show 为弹窗根节点时，切换列表和详情会重新调用弹窗工厂并重拉首页。
+    props.api.ui.dialog.replace(() => (
+      <box>
+        <DialogFlightRecorder sessionID={props.sessionID} load={props.load} />
+      </box>
+    ))
   }
   useBindings(() => ({
     commands: [
@@ -157,8 +162,10 @@ export function SidebarFlightRecorder(props: { api: TuiPluginApi; sessionID: str
     bindings: props.api.tuiConfig.keybinds.gather("sidebar", ["sidebar.flight_recorder.open"]),
   }))
   return (
-    <box onMouseDown={open}>
-      <text fg={theme()?.textMuted}>▸ Flight Recorder</text>
+    <box onMouseUp={open}>
+      <text fg={theme()?.textMuted} selectable={false}>
+        ▸ Flight Recorder
+      </text>
     </box>
   )
 }

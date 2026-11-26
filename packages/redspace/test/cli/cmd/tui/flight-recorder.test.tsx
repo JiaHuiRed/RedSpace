@@ -98,26 +98,6 @@ function Bridge(props: {
   return props.children(api)
 }
 
-// 只验证入口自己的鼠标处理，不挂 DialogProvider（避免对话框遮罩参与命中测试）。
-function EntryHarness(props: { children: (api: TuiPluginApi) => JSX.Element; onOpen: () => void }) {
-  const renderer = useRenderer()
-  const keymap = createDefaultOpenTuiKeymap(renderer)
-  const config = createTuiResolvedConfig()
-  onCleanup(registerOpencodeKeymap(keymap, renderer, config))
-  const api = {
-    theme: { current: theme },
-    ui: { dialog: { replace: () => props.onOpen() } },
-    tuiConfig: config,
-  } as unknown as TuiPluginApi
-  return (
-    <OpencodeKeymapProvider keymap={keymap}>
-      <TuiConfigProvider config={config}>
-        <ThemeContext.Provider value={{ theme } as never}>{props.children(api)}</ThemeContext.Provider>
-      </TuiConfigProvider>
-    </OpencodeKeymapProvider>
-  )
-}
-
 async function mount(children: (api: TuiPluginApi) => JSX.Element, options: { width?: number; height?: number } = {}) {
   let keymap: ReturnType<typeof createDefaultOpenTuiKeymap> | undefined
   const app = await testRender(
@@ -188,25 +168,47 @@ test("sidebar entry stays lazy and opens the dialog on its keyboard command", as
   }
 })
 
-// 鼠标入口沿用侧栏既有做法：点这一行就打开，不需要键盘。
-test("sidebar entry also opens with a mouse click", async () => {
-  let opened = 0
-  const app = await testRender(
-    () => (
-      <EntryHarness onOpen={() => opened++}>
-        {(api) => <SidebarFlightRecorder api={api} sessionID="ses_test" load={async () => page([])} />}
-      </EntryHarness>
-    ),
-    { width: 40, height: 5, kittyKeyboard: true },
-  )
+test("sidebar click leaves the dialog open after release and the dialog remains interactive", async () => {
+  const calls: Parameters<FlightRecorderLoad>[0][] = []
+  const load: FlightRecorderLoad = async (input) => {
+    calls.push(input)
+    return page([row({ modelID: "mouse-model" })])
+  }
+  const modal = await mount((api) => (
+    <box position="absolute" left={82} top={14} width={18}>
+      <SidebarFlightRecorder api={api} sessionID="ses_test" load={load} />
+    </box>
+  ))
+  const { mockMouse, mockInput, renderer } = modal.app
   try {
-    await app.renderOnce()
-    expect(app.captureCharFrame()).toContain("Flight Recorder")
-    await app.mockMouse.click(3, 0)
-    await app.renderOnce()
-    expect(opened).toBe(1)
+    expect(await modal.paint()).toContain("Flight Recorder")
+    expect(calls).toHaveLength(0)
+
+    await mockMouse.pressDown(88, 14)
+    await modal.paint()
+    const callsBeforeRelease = calls.length
+    await mockMouse.release(88, 14)
+    const list = await modal.paint()
+    expect(list).toContain("mouse-model")
+    expect(callsBeforeRelease).toBe(0)
+    expect(calls).toHaveLength(1)
+
+    const rowY = list.split("\n").findIndex((line) => line.includes("mouse-model"))
+    await mockMouse.click(40, rowY)
+    await modal.until(() => modal.app.captureCharFrame().includes("执行记录详情"))
+    expect(calls).toHaveLength(1)
+    mockInput.pressArrow("left")
+    await modal.until(() => modal.app.captureCharFrame().includes("执行历史"))
+    mockInput.pressEscape()
+    await modal.until(() => !modal.app.captureCharFrame().includes("执行历史"))
+
+    await mockMouse.click(88, 14)
+    expect(await modal.paint()).toContain("mouse-model")
+    expect(calls).toHaveLength(2)
+    await mockMouse.click(3, 14)
+    await modal.until(() => !modal.app.captureCharFrame().includes("执行历史"))
   } finally {
-    app.renderer.destroy()
+    renderer.destroy()
   }
 })
 
