@@ -33,7 +33,7 @@ export const quotaPercent = (percent: number, locale: string) =>
 
 // 260831 Red 额度进度条颜色分档：接近用完才告急，不然整页都是红色
 export const quotaColor = (percent: number) =>
-  percent >= 90 ? "var(--syntax-critical)" : percent >= 60 ? "var(--syntax-warning)" : "var(--syntax-info)"
+  percent >= 90 ? "var(--syntax-critical)" : percent >= 70 ? "var(--syntax-warning)" : "var(--syntax-info)"
 
 export const quotaDuration = (minutes: number) =>
   minutes >= 1440 && minutes % 1440 === 0

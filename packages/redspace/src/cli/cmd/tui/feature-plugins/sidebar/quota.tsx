@@ -23,7 +23,7 @@ function View(props: { api: TuiPluginApi }) {
 
   const color = (pct: number) => {
     if (pct >= 90) return theme().error
-    if (pct >= 60) return theme().warning
+    if (pct >= 70) return theme().warning
     return theme().info
   }
 
