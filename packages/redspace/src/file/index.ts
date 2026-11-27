@@ -4,14 +4,14 @@ import { InstanceState } from "@/effect/instance-state"
 
 import { AppFileSystem } from "@redcode-ai/core/filesystem"
 import { Git } from "@/git"
-import { Effect, Layer, Context, Schema, Scope, Cause } from "effect"
+import { Effect, Layer, Context, Schema, Scope, Cause, Duration } from "effect"
 import * as Stream from "effect/Stream"
 import { formatPatch, structuredPatch } from "diff"
 import fuzzysort from "fuzzysort"
 import ignore from "ignore"
 import path from "path"
 import { Global } from "@redcode-ai/core/global"
-import { containsPath } from "../project/instance-context"
+import { containsPath, type InstanceContext } from "../project/instance-context"
 import * as Log from "@redcode-ai/core/util/log"
 import { Protected } from "./protected"
 import { Ripgrep } from "./ripgrep"
@@ -328,10 +328,6 @@ const sortHiddenLast = (items: string[], prefer: boolean) => {
   return [...visible, ...hiddenItems]
 }
 
-interface State {
-  cache: Entry
-}
-
 export interface Interface {
   readonly init: () => Effect.Effect<void>
   readonly status: () => Effect.Effect<Info[]>
@@ -355,21 +351,10 @@ export const layer = Layer.effect(
     const appFs = yield* AppFileSystem.Service
     const rg = yield* Ripgrep.Service
     const git = yield* Git.Service
-    const scope = yield* Scope.Scope
-
-    const state = yield* InstanceState.make<State>(
-      Effect.fn("File.state")(() =>
-        Effect.succeed({
-          cache: { files: [], dirs: [] } as Entry,
-        }),
-      ),
-    )
-
-    const scan = Effect.fn("File.scan")(function* () {
-      const ctx = yield* InstanceState.context
-      if (ctx.directory === path.parse(ctx.directory).root) return
-      const isGlobalHome = ctx.directory === Global.Path.home && ctx.project.id === "global"
+    const scan = Effect.fn("File.scan")(function* (ctx: InstanceContext) {
       const next: Entry = { files: [], dirs: [] }
+      if (ctx.directory === path.parse(ctx.directory).root) return next
+      const isGlobalHome = ctx.directory === Global.Path.home && ctx.project.id === "global"
 
       if (isGlobalHome) {
         const dirs = new Set<string>()
@@ -415,37 +400,36 @@ export const layer = Layer.effect(
         }
       }
 
-      const s = yield* InstanceState.get(state)
-      s.cache = next
+      return next
     })
 
-    // 260728 Karina 这个"用完立刻重建"不是写漏了，是刻意的，别再当成坏掉的缓存去优化：
-    // Effect.cached 在这里只承担并发去重（同时到达的 search() 共享同一趟扫描），
-    // 扫完立刻重建则保证下一次 search() 重新扫盘。search() 必须反映调用时刻的磁盘状态 ——
-    // 刚被创建的文件要能立刻 @ 到，test/file/index.test.ts 的
-    // "search refreshes after init when files change" 钉的就是这条。
-    // 代价是每次 search() 一趟完整 rg --files；连打时的放大交给 autocomplete 侧的去抖来收。
-    // 261125 Red 扫描失败此前被静默吞掉，CI 上只能看到空结果；留一条 warn 供定位。
-    const scanOrEmpty = scan().pipe(
-      Effect.catchCause((cause) =>
-        Effect.sync(() => {
-          log.warn("scan failed", { cause: Cause.pretty(cause).slice(0, 2000) })
-        }),
-      ),
+    // 261127 Red 只有同一目录的在途扫描可以共用；零 TTL 让下一次搜索看到刚写入的文件。
+    const state = yield* InstanceState.make(
+      Effect.fn("File.state")(function* (ctx: InstanceContext) {
+        let last: Entry = { files: [], dirs: [] }
+        const refresh = yield* Effect.cachedWithTTL(
+          scan(ctx).pipe(
+            Effect.map((entry) => (last = entry)),
+            Effect.catchCause((cause) =>
+              Effect.sync(() => {
+                log.warn("scan failed", { cause: Cause.pretty(cause).slice(0, 2000) })
+                return last
+              }),
+            ),
+          ),
+          Duration.zero,
+        )
+        return { refresh, scope: yield* Scope.Scope }
+      }),
     )
-    let cachedScan = yield* Effect.cached(scanOrEmpty)
-
-    const ensure = Effect.fn("File.ensure")(function* () {
-      yield* cachedScan
-      cachedScan = yield* Effect.cached(scanOrEmpty)
-    })
 
     const gitText = Effect.fnUntraced(function* (args: string[]) {
       return (yield* git.run(args, { cwd: (yield* InstanceState.context).directory })).text()
     })
 
     const init = Effect.fn("File.init")(function* () {
-      yield* ensure().pipe(Effect.forkIn(scope))
+      const { refresh, scope } = yield* InstanceState.get(state)
+      yield* refresh.pipe(Effect.forkIn(scope))
     })
 
     const status = Effect.fn("File.status")(function* () {
@@ -718,8 +702,8 @@ export const layer = Layer.effect(
       dirs?: boolean
       type?: "file" | "directory"
     }) {
-      yield* ensure()
-      const { cache } = yield* InstanceState.get(state)
+      const { refresh } = yield* InstanceState.get(state)
+      const cache = yield* refresh
 
       const query = input.query.trim()
       const limit = input.limit ?? 100

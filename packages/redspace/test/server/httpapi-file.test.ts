@@ -73,4 +73,22 @@ describe("file HttpApi", () => {
     expect(symbols.status).toBe(200)
     expect(await symbols.json()).toEqual([])
   })
+
+  test("concurrent file searches refresh each workspace independently", async () => {
+    await using left = await tmpdir({ git: true })
+    await using right = await tmpdir({ git: true })
+    const find = async (directory: string) => {
+      const response = await request(FilePaths.findFile, directory, { query: "fresh", type: "file" })
+      expect(response.status).toBe(200)
+      return response.json()
+    }
+
+    expect(await find(left.path)).toEqual([])
+    expect(await find(right.path)).toEqual([])
+    await Promise.all([
+      Bun.write(path.join(left.path, "fresh-left.txt"), "left"),
+      Bun.write(path.join(right.path, "fresh-right.txt"), "right"),
+    ])
+    expect(await Promise.all([find(left.path), find(right.path)])).toEqual([["fresh-left.txt"], ["fresh-right.txt"]])
+  })
 })
