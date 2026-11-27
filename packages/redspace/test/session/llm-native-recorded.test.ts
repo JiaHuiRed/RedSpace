@@ -4,8 +4,8 @@ import { ModelsDev } from "@redcode-ai/core/models-dev"
 import { HttpRecorder, Redactor } from "@redcode-ai/http-recorder"
 import { describe, expect, test } from "bun:test"
 import { tool, type ModelMessage, type JSONValue } from "ai"
-import { Effect, Layer, Option, Schema, Stream } from "effect"
-import { FetchHttpClient } from "effect/http"
+import { Context, Effect, Layer, Option, Schema, Stream } from "effect"
+import { HttpClient } from "effect/http"
 import path from "node:path"
 import z from "zod"
 import { Auth } from "@/auth"
@@ -15,7 +15,7 @@ import { Provider } from "@/provider/provider"
 import { ModelID, ProviderID } from "@/provider/schema"
 import { Filesystem } from "@/util/filesystem"
 import { LLMEvent, LLMResponse } from "@redcode-ai/llm"
-import { LLMClient, RequestExecutor, WebSocketExecutor } from "@redcode-ai/llm/route"
+import { HttpClientOverride, LLMClient, RequestExecutor, WebSocketExecutor } from "@redcode-ai/llm/route"
 import { Env } from "@/env"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import type { Agent } from "../../src/agent/agent"
@@ -63,6 +63,7 @@ const cloneModel = (model: ModelsDev.Provider["models"][string]) => {
 }
 
 const envValue = (...names: string[]) => names.map((name) => process.env[name]).find(Boolean)
+const recordingValue = (...names: string[]) => (shouldRecord ? envValue(...names) : undefined)
 const decodeAuth = Schema.decodeUnknownOption(Auth.Info)
 const recordOpenAIOAuth = (() => {
   let loaded = false
@@ -127,7 +128,7 @@ const RECORDED_SCENARIOS = [
         api: "https://api.openai.com/v1",
         model,
         options: {
-          apiKey: envValue("REDCODE_RECORD_OPENAI_API_KEY", "OPENAI_API_KEY") ?? "fixture-openai-key",
+          apiKey: recordingValue("REDCODE_RECORD_OPENAI_API_KEY", "OPENAI_API_KEY") ?? "fixture-openai-key",
           baseURL: "https://api.openai.com/v1",
         },
       }),
@@ -170,11 +171,11 @@ const RECORDED_SCENARIOS = [
         name: "RedCode Zen",
         env: ["REDCODE_CONSOLE_TOKEN"],
         npm: "@ai-sdk/openai-compatible",
-        api: zenURL(process.env.REDCODE_RECORD_ZEN_CONNECTION ?? "fixture"),
+        api: zenURL(recordingValue("REDCODE_RECORD_ZEN_CONNECTION") ?? "fixture"),
         model,
         options: {
-          apiKey: process.env.REDCODE_RECORD_CONSOLE_TOKEN ?? "fixture-console-token",
-          headers: { "x-org-id": process.env.REDCODE_RECORD_ZEN_ORG_ID ?? "fixture-org" },
+          apiKey: recordingValue("REDCODE_RECORD_CONSOLE_TOKEN") ?? "fixture-console-token",
+          headers: { "x-org-id": recordingValue("REDCODE_RECORD_ZEN_ORG_ID") ?? "fixture-org" },
         },
       }),
   },
@@ -196,7 +197,7 @@ const RECORDED_SCENARIOS = [
         api: "https://api.anthropic.com/v1",
         model,
         options: {
-          apiKey: envValue("REDCODE_RECORD_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY") ?? "fixture-anthropic-key",
+          apiKey: recordingValue("REDCODE_RECORD_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY") ?? "fixture-anthropic-key",
           baseURL: "https://api.anthropic.com/v1",
         },
       }),
@@ -277,22 +278,43 @@ function recordedNativeLLMLayer(scenario: RecordedScenario) {
     Layer.provide(ModelsDev.defaultLayer),
     Layer.provide(RuntimeFlags.defaultLayer),
   )
-  // Only the HTTP client is recorded; RequestExecutor and the redcode LLM stack remain real.
-  const recordedClient = LLMClient.layer.pipe(
-    Layer.provide(Layer.mergeAll(RequestExecutor.layer, WebSocketExecutor.layer)),
-    Layer.provide(
-      HttpRecorder.recordingLayer(scenario.cassette, {
-        mode: shouldRecord ? "record" : "replay",
-        metadata: {
-          provider: scenario.providerID,
-          protocol: scenario.protocol,
-          route: scenario.protocol,
-          tags: scenario.tags,
-        },
-        redactor: recordingRedactor,
-      }).pipe(Layer.provide(FetchHttpClient.layer)),
-    ),
+  // 261127 Red The native runtime supplies a per-request transport (including OAuth).
+  // Record around that transport, not around the executor's unused default client.
+  const upstream = HttpClient.make((request, _url, _signal, fiber) =>
+    shouldRecord
+      ? Context.getUnsafe(fiber.context, HttpClient.HttpClient).execute(request)
+      : Effect.die("Unexpected network access during cassette replay"),
   )
+  const cassette = HttpRecorder.recordingLayer(scenario.cassette, {
+    mode: shouldRecord ? "record" : "replay",
+    metadata: {
+      provider: scenario.providerID,
+      protocol: scenario.protocol,
+      route: scenario.protocol,
+      tags: scenario.tags,
+    },
+    redactor: recordingRedactor,
+  }).pipe(Layer.provide(Layer.succeed(HttpClient.HttpClient, upstream)))
+  const recordedExecutor = Layer.effect(
+    RequestExecutor.Service,
+    Effect.gen(function* () {
+      const executor = yield* RequestExecutor.Service
+      const recorder = yield* HttpClient.HttpClient
+      return RequestExecutor.Service.of({
+        execute: (request) =>
+          Effect.gen(function* () {
+            const native = Option.getOrThrow(yield* Effect.serviceOption(HttpClientOverride))
+            return yield* executor
+              .execute(request)
+              .pipe(
+                Effect.provideService(HttpClientOverride, recorder),
+                Effect.provideService(HttpClient.HttpClient, native),
+              )
+          }),
+      })
+    }),
+  ).pipe(Layer.provide(Layer.provideMerge(RequestExecutor.layer, cassette)))
+  const recordedClient = LLMClient.layer.pipe(Layer.provide(Layer.mergeAll(recordedExecutor, WebSocketExecutor.layer)))
 
   return Layer.mergeAll(
     provider,
