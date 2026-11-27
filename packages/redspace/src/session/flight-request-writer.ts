@@ -370,7 +370,6 @@ let bootStarted = false
 function boot() {
   if (bootStarted) return
   bootStarted = true
-  void initializePolicy(false)
   watchDatabase()
 }
 
@@ -402,14 +401,18 @@ async function initializePolicy(refresh: boolean) {
   configTimer.unref()
 }
 
+// 261127 Red 配置读取跟随数据库打开：本模块在 import 时启动 boot，早于 CLI 的 Log.init
+// （--help 直接短路、plugin worker 不初始化日志），导入即读配置会把 service=config 的
+// INFO 写进 stderr。没有打开的库就没有可清理的行。
 function watchDatabase() {
-  if (Database.Client.loaded()) {
-    owner ??= Database.Client()
-    if (ready) scheduleCleanup(0)
+  if (!Database.Client.loaded()) {
+    bootTimer = setTimeout(watchDatabase, BOOT_RETRY_MS)
+    bootTimer.unref()
     return
   }
-  bootTimer = setTimeout(watchDatabase, BOOT_RETRY_MS)
-  bootTimer.unref()
+  owner ??= Database.Client()
+  if (ready) return scheduleCleanup(0)
+  void initializePolicy(false)
 }
 
 process.nextTick(boot)
