@@ -1,6 +1,7 @@
 import { describe, expect } from "bun:test"
 import { Cause, Effect, Exit, Layer } from "effect"
 import type * as Scope from "effect/Scope"
+import { readFileSync } from "node:fs"
 import os from "os"
 import path from "path"
 import fs from "fs/promises"
@@ -1886,6 +1887,21 @@ if (process.platform === "win32") {
   const consoleFixture = path.join(__dirname, "shell-background.fixture.ts")
   const powershell = Bun.which("pwsh") ?? Bun.which("powershell")
 
+  // 261127 Red 宿主用 Bun 实跑的 #pty（bun-pty），与 TUI 宿主同一条后端；此前这里
+  //   直接加载给 Node 写的 @lydell 原生适配器。CI 上三例在 watchdog 前被
+  //   0xC000013A 打死，夹具侧留宿主阶段 trace，下次红能分清是本机启动段还是
+  //   PTY/控制台层，不靠吞退出码放行。
+  const hostTrace = (trace: string) => {
+    try {
+      return readFileSync(trace, "utf8").trim()
+    } catch (error) {
+      // 只有 ENOENT 能说明宿主没活到第一处 stage；其他读取失败要单独暴露。
+      if ((error as NodeJS.ErrnoException).code === "ENOENT")
+        return "<no host trace: fixture never reached its first stage>"
+      return `<trace unreadable: ${(error as Error).message}>`
+    }
+  }
+
   const runConsoleFixture = (mode: string, marker: string) =>
     Effect.gen(function* () {
       const shell = powershell
@@ -1894,8 +1910,9 @@ if (process.platform === "win32") {
       const log = path.join(tmp, "output.log")
       const status = path.join(tmp, "status.txt")
       const done = path.join(tmp, "done.txt")
-      const pty = yield* Effect.promise(() => import("../../src/pty/pty.node"))
-      const handle = pty.spawn(process.execPath, [consoleFixture, mode, shell, log, status, done, marker], {
+      const trace = path.join(tmp, "trace.txt")
+      const pty = yield* Effect.promise(() => import("#pty"))
+      const handle = pty.spawn(process.execPath, [consoleFixture, mode, shell, log, status, done, marker, trace], {
         cwd: projectRoot,
         cols: 100,
         rows: 30,
@@ -1903,17 +1920,18 @@ if (process.platform === "win32") {
       })
       const chunks: string[] = []
       handle.onData((data) => chunks.push(data))
+      const detail = () => `pty pid ${handle.pid}; host trace: ${hostTrace(trace)}; terminal tail: ${JSON.stringify(chunks.join("").slice(-400))}`
       yield* Effect.promise(
         () =>
           new Promise<void>((resolve, reject) => {
             const timer = setTimeout(() => {
               handle.kill()
-              reject(new Error(`background console fixture timed out: ${mode}`))
+              reject(new Error(`background console fixture timed out: ${mode} (${detail()})`))
             }, 20_000)
             handle.onExit(({ exitCode }) => {
               clearTimeout(timer)
               if (exitCode === 0) resolve()
-              else reject(new Error(`background console fixture ${mode} exited with ${exitCode}`))
+              else reject(new Error(`background console fixture ${mode} exited with ${exitCode} (${detail()})`))
             })
           }),
       )

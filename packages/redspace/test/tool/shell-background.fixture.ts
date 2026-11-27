@@ -17,12 +17,21 @@ if (argv[0] === "child") {
   process.exit(0)
 }
 
-const [mode, shell, logPath, statusPath, donePath, marker] = argv
+const [mode, shell, logPath, statusPath, donePath, marker, tracePath] = argv
+// 261127 Red runner-only 的 0xC000013A 需要判层：宿主每步先落盘，再看 PTY 报告的是
+//   哪一层退出；trace 缺失=没活到 boot，有 boot 无 launched=死在本机启动段。
+const stage = (text: string) => {
+  if (!tracePath) return
+  fs.appendFileSync(tracePath, `${new Date().toISOString()} ${text}\n`)
+}
+stage(`boot mode=${mode} pid=${process.pid} tty=${process.stdout.isTTY}`)
 const quote = (value: string) => `'${value.replaceAll("'", "''")}'`
 const prefix = `& ${quote(process.execPath)} ${quote(process.argv[1])} child`
 const args = ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", `${prefix} ${quote(marker)}`]
-const orphan = `Start-Sleep -Milliseconds 1500; Set-Content -LiteralPath ${quote(donePath)} -Value done`
-
+const donePartial = `${donePath}.tmp`
+// 261127 Red Set-Content 直接写 done 会被轮询读到半截空串（实测 CI/并行下偶发）：
+//   先写同目录临时文件再原子改名，读者只可能 ENOENT 或读到完整内容。
+const orphan = `Start-Sleep -Milliseconds 1500; Set-Content -LiteralPath ${quote(donePartial)} -Value done; [System.IO.File]::Move(${quote(donePartial)}, ${quote(donePath)})`
 const waitForStatus = () =>
   new Promise<void>((resolve) => {
     const timer = setInterval(() => {
@@ -41,12 +50,14 @@ const legacy = () => {
     fs.writeFileSync(partial, `exit ${code ?? 1}\n`)
     fs.renameSync(partial, statusPath)
   })
+  return child
 }
 
 if (mode === "orphan") {
   // 261126 Red spawnWindowsBackground 惰性加载 bun:ffi，必须先等进程真正起好再 exit —
   //   否则「宿主退出后作业存活」测的是宿主退出前作业没起。
-  await spawnWindowsBackground({
+  stage("spawn orphan background shell")
+  const pid = await spawnWindowsBackground({
     file: shell,
     args: ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", orphan],
     cwd: process.cwd(),
@@ -55,12 +66,18 @@ if (mode === "orphan") {
     statusPath,
     onError: (error) => fs.writeSync(2, `fixture error: ${String(error)}\n`),
   })
+  stage(`launched pid=${pid}`)
+  stage("exit 0")
   process.exit(0)
 }
 
-if (mode === "legacy") legacy()
-else
-  await spawnWindowsBackground({
+if (mode === "legacy") {
+  stage("spawn legacy shell")
+  const child = legacy()
+  stage(`launched pid=${child.pid ?? "<none>"}`)
+} else {
+  stage("spawn background shell")
+  const pid = await spawnWindowsBackground({
     file: shell,
     args,
     cwd: process.cwd(),
@@ -69,6 +86,10 @@ else
     statusPath,
     onError: (error) => fs.writeSync(2, `fixture error: ${String(error)}\n`),
   })
+  stage(`launched pid=${pid}`)
+}
 
 await waitForStatus()
+stage(`status ${fs.readFileSync(statusPath, "utf8").trim()}`)
+stage("exit 0")
 process.exit(0)
