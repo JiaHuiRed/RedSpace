@@ -17,6 +17,7 @@ const InputObject = Schema.StructWithRest(
   Schema.Struct({
     read: Schema.optional(Rule),
     edit: Schema.optional(Rule),
+    image: Schema.optional(Rule),
     glob: Schema.optional(Rule),
     grep: Schema.optional(Rule),
     list: Schema.optional(Rule),

@@ -72,6 +72,8 @@ describe("child capability policy", () => {
     expect(capabilityDenied("explore", "grep")).toBeUndefined()
     // 261011 Red bash（shell capability）进 explore 集合后 profile 层放行；命令面白名单在 permission 层
     expect(capabilityDenied("explore", "bash")).toBeUndefined()
+    expect(capabilityDenied("explore", "image")).toContain("not available")
+    expect(capabilityDenied("execute", "image")).toBeUndefined()
     expect(capabilityDenied("explore", "mcp__unknown__click")).toContain("not available")
   })
 

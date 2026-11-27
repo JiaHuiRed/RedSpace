@@ -59,7 +59,7 @@ export function capabilityForTool(tool: string): ChildCapability | undefined {
     tool.startsWith("web-search_")
   )
     return "search"
-  if (["edit", "write", "apply_patch"].includes(tool)) return "write"
+  if (["edit", "write", "apply_patch", "image"].includes(tool)) return "write"
   if (tool === "bash") return "shell"
   if (tool === "task") return "task"
   if (tool === "commit") return "commit"

@@ -1,8 +1,10 @@
 import type { Hooks, PluginInput } from "@redcode-ai/plugin"
+import type { Auth } from "@redcode-ai/sdk/v2"
 import * as Log from "@redcode-ai/core/util/log"
 import { InstallationVersion } from "@redcode-ai/core/installation/version"
 import { OAUTH_DUMMY_KEY } from "../auth"
 import * as ProviderQuota from "../provider/quota"
+import { requestImage } from "../provider/image-wire"
 import os from "os"
 import { setTimeout as sleep } from "node:timers/promises"
 import { createServer } from "http"
@@ -16,6 +18,13 @@ const log = Log.create({ service: "plugin.codex" })
 const CLIENT_ID = "app_EMoamEEZ73f0CkXaXp7hrann"
 const ISSUER = "https://auth.openai.com"
 const CODEX_API_ENDPOINT = "https://chatgpt.com/backend-api/codex/responses"
+// 261127 Red 官方生图目标：与文本端点同源，requestImage 在其后追加 /images/generations。
+// 生图不是 LLM Responses 请求：这里只复用 OAuth 刷新/代理/账号头，不经过 RequestEvidence、
+// 不读写 x-codex-turn-state，也不带当前对话的 turn 头。codexImageBaseURL 仅供本地测试注入。
+const CODEX_IMAGE_BASE_URL = "https://chatgpt.com/backend-api/codex"
+// 261127 Red 官方 CLI 常量与订阅后端实测一致：gpt-image-2。不要写已退役的 gpt-image-1，
+// 它只是公开 API 的旧模型名，不能冒充已验证的订阅默认值。
+const CODEX_IMAGE_DEFAULT_MODEL = "gpt-image-2"
 const OAUTH_PORT = 1455
 const OAUTH_POLLING_SAFETY_MARGIN_MS = 3000
 // 260831 cc ChatGPT 订阅认证下后端接受的型号。**实测得来，不是推的**：
@@ -142,6 +151,8 @@ interface TokenResponse {
 interface CodexAuthPluginOptions {
   issuer?: string
   codexApiEndpoint?: string
+  /** Test-only injection; production always uses the official codex images base URL. */
+  codexImageBaseURL?: string
 }
 
 async function exchangeCodeForTokens(code: string, redirectUri: string, pkce: PkceCodes): Promise<TokenResponse> {
@@ -176,6 +187,89 @@ async function refreshAccessToken(refreshToken: string, issuer = ISSUER): Promis
     throw new Error(`Token refresh failed: ${response.status}`)
   }
   return response.json()
+}
+
+type RefreshedToken = { access: string; accountId: string | undefined }
+
+// 261127 Red 文本与生图共用同一个刷新协调器：并发请求只发一次 refresh；账号头沿用最新结果。
+function createTokenRefresher(input: PluginInput, issuer: string) {
+  let pending: Promise<RefreshedToken> | undefined
+  return async (currentAuth: { refresh: string; accountId?: string }): Promise<RefreshedToken> => {
+    if (!pending) {
+      log.info("refreshing codex access token")
+      pending = refreshAccessToken(currentAuth.refresh, issuer)
+        .then(async (tokens) => {
+          const accountId = extractAccountId(tokens) || currentAuth.accountId
+          await input.client.auth.set({
+            path: { id: "openai" },
+            body: {
+              type: "oauth",
+              refresh: tokens.refresh_token,
+              access: tokens.access_token,
+              expires: Date.now() + (tokens.expires_in ?? 3600) * 1000,
+              ...(accountId && { accountId }),
+            },
+          })
+          return { access: tokens.access_token, accountId }
+        })
+        .finally(() => {
+          pending = undefined
+        })
+    }
+    return pending
+  }
+}
+
+function copyHeadersWithoutAuthorization(input: HeadersInit | undefined) {
+  const headers = new Headers()
+  if (!input) return headers
+  if (input instanceof Headers) {
+    input.forEach((value, key) => {
+      if (key.toLowerCase() !== "authorization") headers.set(key, value)
+    })
+    return headers
+  }
+  if (Array.isArray(input)) {
+    for (const [key, value] of input) {
+      if (value !== undefined && key.toLowerCase() !== "authorization") headers.set(key, String(value))
+    }
+    return headers
+  }
+  for (const [key, value] of Object.entries(input)) {
+    if (value !== undefined && key.toLowerCase() !== "authorization") headers.set(key, String(value))
+  }
+  return headers
+}
+
+// 261127 Red 只做 OAuth 凭据准备（去掉占位 key、按需刷新、写回 Bearer 与账号头）。
+// 文本请求继续在后面做 URL 改写、turn-state 与请求证据；生图调用方只用这里的结果直接发往
+// 官方 images 目标，因此不会把图片正文或 x-redcode-turn 带进文本证据链。
+async function prepareOAuthRequest(
+  getAuth: () => Promise<Auth>,
+  refresh: (auth: { refresh: string; accountId?: string }) => Promise<RefreshedToken>,
+  init: RequestInit | undefined,
+  options: { requireOAuth?: boolean } = {},
+) {
+  const headers = copyHeadersWithoutAuthorization(init?.headers)
+  const currentAuth = await getAuth()
+  if (currentAuth.type !== "oauth") {
+    if (options.requireOAuth)
+      throw new Error(
+        "Codex image generation requires an active OAuth login; re-authenticate with ChatGPT Pro/Plus and retry.",
+      )
+    return { headers, accountId: undefined, oauth: false as const }
+  }
+
+  const authWithAccount = currentAuth as typeof currentAuth & { accountId?: string }
+  if (!currentAuth.access || currentAuth.expires < Date.now()) {
+    const refreshed = await refresh(currentAuth)
+    currentAuth.access = refreshed.access
+    authWithAccount.accountId = refreshed.accountId
+  }
+
+  headers.set("authorization", `Bearer ${currentAuth.access}`)
+  if (authWithAccount.accountId) headers.set("ChatGPT-Account-Id", authWithAccount.accountId)
+  return { headers, accountId: authWithAccount.accountId, oauth: true as const }
 }
 
 // 261106 Red HTML 模板抽至 auth-page.ts 与 xai.ts 共享；error 文本为普通字符串，
@@ -341,6 +435,8 @@ function codexRoutingHint(body: BodyInit | null | undefined): string | undefined
 export async function CodexAuthPlugin(input: PluginInput, options: CodexAuthPluginOptions = {}): Promise<Hooks> {
   const issuer = options.issuer ?? ISSUER
   const codexApiEndpoint = options.codexApiEndpoint ?? CODEX_API_ENDPOINT
+  const codexImageBaseURL = options.codexImageBaseURL ?? CODEX_IMAGE_BASE_URL
+  const refresh = createTokenRefresher(input, issuer)
 
   return {
     provider: {
@@ -372,90 +468,12 @@ export async function CodexAuthPlugin(input: PluginInput, options: CodexAuthPlug
         const auth = await getAuth()
         if (auth.type !== "oauth") return {}
 
-        let refreshPromise:
-          | Promise<{
-              access: string
-              accountId: string | undefined
-            }>
-          | undefined
-
         return {
           apiKey: OAUTH_DUMMY_KEY,
           async fetch(requestInput: RequestInfo | URL, init?: RequestInit) {
-            // Remove dummy API key authorization header
-            if (init?.headers) {
-              if (init.headers instanceof Headers) {
-                init.headers.delete("authorization")
-                init.headers.delete("Authorization")
-              } else if (Array.isArray(init.headers)) {
-                init.headers = init.headers.filter(([key]) => key.toLowerCase() !== "authorization")
-              } else {
-                delete init.headers["authorization"]
-                delete init.headers["Authorization"]
-              }
-            }
-
-            const currentAuth = await getAuth()
-            if (currentAuth.type !== "oauth") return fetchWithProxy(requestInput, init)
-
-            // Cast to include accountId field
-            const authWithAccount = currentAuth as typeof currentAuth & { accountId?: string }
-
-            // Check if token needs refresh
-            if (!currentAuth.access || currentAuth.expires < Date.now()) {
-              if (!refreshPromise) {
-                log.info("refreshing codex access token")
-                refreshPromise = refreshAccessToken(currentAuth.refresh, issuer)
-                  .then(async (tokens) => {
-                    const accountId = extractAccountId(tokens) || authWithAccount.accountId
-                    await input.client.auth.set({
-                      path: { id: "openai" },
-                      body: {
-                        type: "oauth",
-                        refresh: tokens.refresh_token,
-                        access: tokens.access_token,
-                        expires: Date.now() + (tokens.expires_in ?? 3600) * 1000,
-                        ...(accountId && { accountId }),
-                      },
-                    })
-                    return {
-                      access: tokens.access_token,
-                      accountId,
-                    }
-                  })
-                  .finally(() => {
-                    refreshPromise = undefined
-                  })
-              }
-
-              const refreshed = await refreshPromise
-              currentAuth.access = refreshed.access
-              authWithAccount.accountId = refreshed.accountId
-            }
-
-            // Build headers
-            const headers = new Headers()
-            if (init?.headers) {
-              if (init.headers instanceof Headers) {
-                init.headers.forEach((value, key) => headers.set(key, value))
-              } else if (Array.isArray(init.headers)) {
-                for (const [key, value] of init.headers) {
-                  if (value !== undefined) headers.set(key, String(value))
-                }
-              } else {
-                for (const [key, value] of Object.entries(init.headers)) {
-                  if (value !== undefined) headers.set(key, String(value))
-                }
-              }
-            }
-
-            // Set authorization header with access token
-            headers.set("authorization", `Bearer ${currentAuth.access}`)
-
-            // Set ChatGPT-Account-Id header for organization subscriptions
-            if (authWithAccount.accountId) {
-              headers.set("ChatGPT-Account-Id", authWithAccount.accountId)
-            }
+            const prepared = await prepareOAuthRequest(getAuth, refresh, init)
+            if (!prepared.oauth) return fetchWithProxy(requestInput, { ...(init ?? {}), headers: prepared.headers })
+            const headers = prepared.headers
 
             // Rewrite URL to Codex endpoint
             const parsed =
@@ -487,7 +505,7 @@ export async function CodexAuthPlugin(input: PluginInput, options: CodexAuthPlug
             // 261013 Red 附带最终生效的请求头做路由指纹（只哈希白名单 5 项，不含认证头原文）；
             // 同 turn 首响应/跨 turn 语义不变——这里只观察，不回写、不新发 header。
             RequestEvidence.observeTransport({
-              accountID: authWithAccount.accountId,
+              accountID: prepared.accountId,
               endpoint: url.href,
               body: init?.body,
               headers,
@@ -505,7 +523,7 @@ export async function CodexAuthPlugin(input: PluginInput, options: CodexAuthPlug
               turnStates.set(turnKey, turnToken)
             }
             RequestEvidence.observeTransport({
-              accountID: authWithAccount.accountId,
+              accountID: prepared.accountId,
               endpoint: url.href,
               status: response.status,
               responseRequestID: response.headers.get("x-request-id") ?? undefined,
@@ -517,11 +535,31 @@ export async function CodexAuthPlugin(input: PluginInput, options: CodexAuthPlug
             // （x-codex-primary-* / -secondary-* / x-base-model-inference-*），此前原样丢弃。
             // 只读头，绝不碰 response.body —— 那是要交给 AI SDK / 原生运行时消费的 SSE 流。
             // record 内部吞掉所有异常，不会把模型请求带走。见 provider/quota.ts。
-            ProviderQuota.record("openai", authWithAccount.accountId, response.headers)
+            ProviderQuota.record("openai", prepared.accountId, response.headers)
 
             return response
           },
         }
+      },
+      // 261127 Red 第一个真正消费 AuthImageHook 的订阅插件。只发官方 images 目标；
+      // 图片正文不进入文本 RequestEvidence / flight recorder，也不复用 LLM turn 的头。
+      image: {
+        defaultModel: CODEX_IMAGE_DEFAULT_MODEL,
+        async generate(imageInput, getAuth) {
+          return requestImage({
+            baseURL: codexImageBaseURL,
+            protocol: "codex",
+            fetch: async (url, init) => {
+              const prepared = await prepareOAuthRequest(getAuth, refresh, init, { requireOAuth: true })
+              return fetchWithProxy(url, { ...(init ?? {}), headers: prepared.headers })
+            },
+            model: imageInput.model,
+            prompt: imageInput.prompt,
+            size: imageInput.size,
+            source: imageInput.source,
+            signal: imageInput.signal,
+          })
+        },
       },
       methods: [
         {

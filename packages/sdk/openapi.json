@@ -20649,6 +20649,31 @@
             },
             "description": "Custom provider configurations and model overrides"
           },
+          "image_generation": {
+            "type": "object",
+            "properties": {
+              "provider": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "description": "Provider ID to use for image generation"
+              },
+              "model": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 256,
+                "description": "Image model to request from that provider"
+              },
+              "auth": {
+                "type": "string",
+                "enum": ["oauth", "api"],
+                "description": "Credential path: 'oauth' requires an installed plugin that declares image support; 'api' uses provider.<id>.options.baseURL or provider.<id>.api with an API key"
+              }
+            },
+            "required": ["provider", "model", "auth"],
+            "additionalProperties": false,
+            "description": "Explicit image generation backend. When omitted, RedCode auto-selects only if exactly one logged-in OAuth provider declares image support."
+          },
           "mcp": {
             "type": "object",
             "additionalProperties": {
@@ -27714,6 +27739,9 @@
                 "$ref": "#/components/schemas/PermissionRuleConfig"
               },
               "edit": {
+                "$ref": "#/components/schemas/PermissionRuleConfig"
+              },
+              "image": {
                 "$ref": "#/components/schemas/PermissionRuleConfig"
               },
               "glob": {

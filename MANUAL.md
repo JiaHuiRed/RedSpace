@@ -187,6 +187,33 @@ ollama pull qwen2.5-coder:7b
 
 `temperature` 和 `tool_call` 描述服务端实际支持的能力，把它们设为 `true` 不会让模型获得新能力。`limit` 按实际可用窗口填写；用量显示和自动压缩都会参考它。
 
+### 3.4 生图和改图（`image`）
+
+在 Chat 或 Code 里直接说「画一张戴红围巾的橘猫」。再说「把上一张的围巾换成蓝色」时，助手用上一张的文件路径编辑，另存一张，不覆盖原图。默认保存在当前工作区的 `.redcode/temp/`。GUI 从本轮成果打开图片，TUI 显示路径；图片字节不随工具结果进入对话历史。
+
+生图后端和聊天模型独立。只登录了一个支持生图的 OAuth 供应商时，`image` 使用它的默认图像模型。没有可用订阅或有多个候选时，工具会提示你配置，不会自行切到账单另算的 API。要固定供应商或型号，在本机 `redcode.local.jsonc` 里设置，例如：
+
+```jsonc
+{
+  "image_generation": { "provider": "openai", "model": "gpt-image-2", "auth": "oauth" }
+}
+```
+
+换成兼容 Images API 的服务时，填它自己的 provider、模型和凭据。下面的两个环境变量分别是该服务的 API 根地址（例如以 `/v1` 结尾）和密钥：
+
+```jsonc
+{
+  "provider": {
+    "studio": {
+      "options": { "baseURL": "{env:STUDIO_IMAGE_BASE_URL}", "apiKey": "{env:STUDIO_IMAGE_KEY}" }
+    }
+  },
+  "image_generation": { "provider": "studio", "model": "your-image-model", "auth": "api" }
+}
+```
+
+`studio` 不需要配置文本模型。传给工具的 `model` 只能指定**同一后端**的型号，不能改认证方式。订阅需要供应商插件明确支持生图；只有聊天登录不代表有图像接口。改图会把你指定的 PNG、JPEG 或 WebP 发给选定的后端，不会附上整个对话。API 后端需要直接返回图像数据；只返回下载链接的服务不会触发第二次外部访问。
+
 ---
 
 ## 4. MCP 服务器

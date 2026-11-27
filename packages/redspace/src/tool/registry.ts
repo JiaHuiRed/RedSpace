@@ -9,6 +9,8 @@ import { EditTool } from "./edit"
 import { GlobTool } from "./glob"
 import { GrepTool } from "./grep"
 import { ReadTool } from "./read"
+import { ImageTool } from "./image"
+import { Auth } from "@/auth"
 import { TaskTool } from "./task"
 import { TaskStatusTool } from "./task_status"
 import { TodoWriteTool, TodoReadTool } from "./todo"
@@ -162,6 +164,7 @@ export const layer = Layer.effect(
     const task = yield* TaskTool
     const taskStatus = yield* TaskStatusTool
     const read = yield* ReadTool
+    const image = yield* ImageTool.pipe(Effect.provide(Auth.defaultLayer))
     const question = yield* QuestionTool
     const todo = yield* TodoWriteTool
     const todoread = yield* TodoReadTool
@@ -339,6 +342,7 @@ export const layer = Layer.effect(
           invalid: Tool.init(invalid),
           shell: Tool.init(shell),
           read: Tool.init(read),
+          image: Tool.init(image),
           glob: Tool.init(globtool),
           grep: Tool.init(greptool),
           ast_grep: Tool.init(astGreptool),
@@ -480,6 +484,7 @@ export const layer = Layer.effect(
             tool.session_query,
             tool.companion_memory,
             tool.companion_profile,
+            tool.image,
           ],
           task: tool.task,
           read: tool.read,
@@ -591,6 +596,7 @@ export const layer = Layer.effect(
 
       const filtered = candidates.filter((tool) => {
         if (deniedTools.has(tool.id)) return false
+        if (tool.id === ImageTool.id && deniedTools.has(EditTool.id)) return false
 
         // 261018 Red run_code 与 edit 的权限不等价：程序里能直接调 Bun.write / fs 落盘，
         // 不经过 edit 的授权链，而「edit 全 deny」正是只读姿态（plan 与只读自定义角色）

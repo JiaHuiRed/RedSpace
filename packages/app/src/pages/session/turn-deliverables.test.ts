@@ -114,4 +114,46 @@ describe("turn deliverables", () => {
     expect(result.map((file) => file.kind)).toEqual(["document", "page", "image", "file"])
     expect(result.every((file) => file.change === "updated")).toBe(true)
   })
+
+  test("completed image generation and edits are created image deliverables", () => {
+    const result = collect([
+      tool(
+        "gen",
+        "image",
+        { prompt: "draw a cat" },
+        { filepath: "/project/.redcode/temp/image-gen.png", mode: "generate" },
+      ),
+      tool(
+        "edit",
+        "image",
+        { prompt: "add a hat", image: "src/photo.png" },
+        { filepath: "/project/.redcode/temp/image-edit.webp", mode: "edit" },
+      ),
+    ])
+    expect(result.map((file) => [file.path, file.kind, file.change, file.partID])).toEqual([
+      [".redcode/temp/image-gen.png", "image", "created", "gen"],
+      [".redcode/temp/image-edit.webp", "image", "created", "edit"],
+    ])
+  })
+
+  test("image parts only count when completed, in this turn, and inside the workspace", () => {
+    const parts = [
+      tool("pending", "image", { prompt: "draw" }, { filepath: "/project/.redcode/temp/pending.png" }, "running"),
+      tool("failed", "image", { prompt: "draw" }, { filepath: "/project/.redcode/temp/failed.png" }, "error"),
+      tool("metadata", "image", { prompt: "draw" }, {}),
+      tool("external", "image", { prompt: "draw" }, { filepath: "/other/image.png", mode: "generate" }),
+      tool("escape", "image", { prompt: "draw" }, { filepath: "../outside.png", mode: "generate" }),
+      tool("kept", "image", { prompt: "draw" }, { filepath: "/project/.redcode/temp/kept.jpg", mode: "generate" }),
+    ]
+    const result = collectTurnDeliverables({
+      userMessageID: "user_1",
+      directory: "/project",
+      messages: [message("assistant_1"), message("other", "user_2")],
+      parts: (id) =>
+        id === "assistant_1"
+          ? parts
+          : [tool("other", "image", { prompt: "draw" }, { filepath: "/project/.redcode/temp/other.png" })],
+    })
+    expect(result.map((file) => file.path)).toEqual([".redcode/temp/kept.jpg"])
+  })
 })

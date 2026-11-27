@@ -2249,6 +2249,23 @@ export type Config = {
     [key: string]: ProviderConfig
   }
   /**
+   * Explicit image generation backend. When omitted, RedCode auto-selects only if exactly one logged-in OAuth provider declares image support.
+   */
+  image_generation?: {
+    /**
+     * Provider ID to use for image generation
+     */
+    provider: string
+    /**
+     * Image model to request from that provider
+     */
+    model: string
+    /**
+     * Credential path: 'oauth' requires an installed plugin that declares image support; 'api' uses provider.<id>.options.baseURL or provider.<id>.api with an API key
+     */
+    auth: "oauth" | "api"
+  }
+  /**
    * MCP (Model Context Protocol) server configurations
    */
   mcp?: {
@@ -4555,6 +4572,7 @@ export type PermissionConfig =
   | {
       read?: PermissionRuleConfig
       edit?: PermissionRuleConfig
+      image?: PermissionRuleConfig
       glob?: PermissionRuleConfig
       grep?: PermissionRuleConfig
       list?: PermissionRuleConfig

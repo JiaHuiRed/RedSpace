@@ -262,6 +262,7 @@ export const layer = Layer.effect(
             permission: {
               question: "allow",
               plan_exit: "allow",
+              image: "deny",
               external_directory: {
                 [path.join(Global.Path.data, "plans", "*")]: "allow",
               },

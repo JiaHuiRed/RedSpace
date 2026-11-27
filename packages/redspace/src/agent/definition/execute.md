@@ -48,6 +48,7 @@ permission:
   edit: allow
   write: allow
   apply_patch: allow
+  image: allow
   webfetch: allow
   websearch: allow
   # 通配 deny 会连 MCP 工具一起拦（findLast 匹配一切工具名），检索类 MCP 对"先摸清再动手"是刚需

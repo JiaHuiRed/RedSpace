@@ -18,6 +18,8 @@ function createTestJwt(payload: object): string {
   return `${header}.${body}.sig`
 }
 
+const IMAGE_PNG = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d])
+
 describe("plugin.codex", () => {
   describe("parseJwtClaims", () => {
     test("parses valid JWT with claims", () => {
@@ -613,6 +615,169 @@ describe("plugin.codex", () => {
     } finally {
       globalThis.fetch = realFetch
     }
+  })
+  // 261127 Red 生图不是 LLM Responses 请求：官方 images 目标 + OAuth 凭据，
+  // 但不带当前对话的 turn/routing 头（也就不进文本请求证据链）。
+  test("image hook targets the official codex images endpoint with oauth headers and no LLM turn state", async () => {
+    const seen: Array<{
+      path: string
+      authorization: string | null
+      accountId: string | null
+      turn: string | null
+      turnState: string | null
+      route: string | null
+      body: Record<string, unknown>
+    }> = []
+    using server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url)
+        seen.push({
+          path: url.pathname,
+          authorization: request.headers.get("authorization"),
+          accountId: request.headers.get("ChatGPT-Account-Id"),
+          turn: request.headers.get("x-redcode-turn"),
+          turnState: request.headers.get("x-codex-turn-state"),
+          route: request.headers.get("x-codex-routing-hint"),
+          body: (await request.json()) as Record<string, unknown>,
+        })
+        return Response.json({ data: [{ b64_json: Buffer.from(IMAGE_PNG).toString("base64") }] })
+      },
+    })
+    const hooks = await CodexAuthPlugin({} as never, {
+      codexImageBaseURL: new URL("/backend-api/codex", server.url).toString(),
+    })
+    expect(hooks.auth!.image!.defaultModel).toBe("gpt-image-2")
+
+    const result = await hooks.auth!.image!.generate(
+      { model: "gpt-image-2", prompt: "a cat", size: "1024x1024", signal: new AbortController().signal },
+      async () => ({
+        type: "oauth",
+        refresh: "refresh",
+        access: "access-image",
+        expires: Date.now() + 60_000,
+        accountId: "acc-image",
+      }),
+    )
+
+    expect(result.mime).toBe("image/png")
+    expect(new Uint8Array(result.bytes)).toEqual(IMAGE_PNG)
+    expect(seen).toHaveLength(1)
+    expect(seen[0]).toEqual({
+      path: "/backend-api/codex/images/generations",
+      authorization: "Bearer access-image",
+      accountId: "acc-image",
+      turn: null,
+      turnState: null,
+      route: null,
+      body: { model: "gpt-image-2", prompt: "a cat", size: "1024x1024", quality: "auto", background: "auto" },
+    })
+  })
+
+  test("image hook refreshes expired oauth credentials before sending", async () => {
+    let auth: {
+      type: "oauth"
+      refresh: string
+      access: string
+      expires: number
+      accountId?: string
+    } = {
+      type: "oauth",
+      refresh: "refresh-old",
+      access: "",
+      expires: 0,
+      accountId: "acc-old",
+    }
+    const authUpdates: Array<{ body: { refresh: string; access: string; expires: number; accountId?: string } }> = []
+    const imageHeaders: Array<{ authorization: string | null; accountId: string | null }> = []
+    using server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      async fetch(request) {
+        const url = new URL(request.url)
+        if (url.pathname === "/oauth/token") {
+          expect(await request.text()).toContain("refresh_token=refresh-old")
+          return Response.json({
+            id_token: createTestJwt({ chatgpt_account_id: "acc-new" }),
+            access_token: "access-new",
+            refresh_token: "refresh-new",
+            expires_in: 3600,
+          })
+        }
+        if (url.pathname === "/backend-api/codex/images/generations") {
+          imageHeaders.push({
+            authorization: request.headers.get("authorization"),
+            accountId: request.headers.get("ChatGPT-Account-Id"),
+          })
+          return Response.json({ data: [{ b64_json: Buffer.from(IMAGE_PNG).toString("base64") }] })
+        }
+        return new Response("unexpected request", { status: 500 })
+      },
+    })
+    const hooks = await CodexAuthPlugin(
+      {
+        client: {
+          auth: {
+            async set(input: { body: { refresh: string; access: string; expires: number; accountId?: string } }) {
+              authUpdates.push(input)
+              auth = {
+                type: "oauth",
+                refresh: input.body.refresh,
+                access: input.body.access,
+                expires: input.body.expires,
+                ...(input.body.accountId && { accountId: input.body.accountId }),
+              }
+            },
+          },
+        } as never,
+        project: {} as never,
+        directory: "",
+        worktree: "",
+        experimental_workspace: { register() {} },
+        serverUrl: new URL("https://example.com"),
+        $: {} as never,
+      },
+      {
+        issuer: server.url.origin,
+        codexImageBaseURL: new URL("/backend-api/codex", server.url).toString(),
+      },
+    )
+
+    const result = await hooks.auth!.image!.generate(
+      { model: "gpt-image-2", prompt: "a cat", signal: new AbortController().signal },
+      async () => auth,
+    )
+
+    expect(result.mime).toBe("image/png")
+    expect(authUpdates).toHaveLength(1)
+    expect(authUpdates[0]?.body.refresh).toBe("refresh-new")
+    expect(authUpdates[0]?.body.access).toBe("access-new")
+    expect(authUpdates[0]?.body.accountId).toBe("acc-new")
+    expect(imageHeaders).toEqual([{ authorization: "Bearer access-new", accountId: "acc-new" }])
+  })
+
+  test("image hook fails closed without sending when auth is no longer oauth", async () => {
+    let requests = 0
+    using server = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch() {
+        requests += 1
+        return Response.json({})
+      },
+    })
+    const hooks = await CodexAuthPlugin({} as never, {
+      codexImageBaseURL: new URL("/backend-api/codex", server.url).toString(),
+    })
+
+    await expect(
+      hooks.auth!.image!.generate(
+        { model: "gpt-image-2", prompt: "a cat", signal: new AbortController().signal },
+        async () => ({ type: "api", key: "swapped-key" }),
+      ),
+    ).rejects.toThrow(/requires an active OAuth login/)
+    expect(requests).toBe(0)
   })
 })
 

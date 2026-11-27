@@ -8,6 +8,10 @@
 
 ---
 
+### [Unreleased]
+
+- **Chat / Code 内置 `image`**：新会话可以直接生成图片，或用已有图片路径继续编辑，不用切换聊天模型。图片后端可选支持生图的订阅插件或兼容 Images API 的供应商；失败不切换计费方式。原图默认另存到工作区 `.redcode/temp/`，GUI 从本轮成果打开，TUI 显示路径，图片字节不写进工具消息。配置见 `MANUAL.md` §3.4；[执行与交付边界](docs/notes/implemented/feature/2026-11-27-image-tool.md)。
+
 ### [0.20.7] - 2026-11-26
 
 - **Windows 后台命令与 GUI sidecar**：Windows 的 `background: true` 改用 `CREATE_NO_WINDOW` 启动，只把本作业的标准输入与日志句柄传入 `STARTUPINFOEX` 允许列表，孙进程直写 `CONOUT$` 不再刷进 TUI；宿主退出后作业继续运行，status 由已 unref 的轮询原子写入。这条路径依赖 `bun:ffi`，只适用于 Bun（TUI/CLI）；GUI 的 Node sidecar 退回 `node:child_process` 的 detached spawn。`bun:ffi` 改为 `native()` 内的惰性 `import()` 并在 server bundle 标 external——同一改动最初的顶层静态 import 被内联进 `node.js`，Electron 的 Node ESM loader 不认 `bun:` 协议，sidecar 每次启动即以 `Received protocol 'bun:'` 退出，重试 3 次后 GUI 放弃连接本地服务。验证：独立 PTY 覆盖旧路径串屏、新路径隔离与宿主先退出仍完成，11 项后台回归、单文件编译夹具实收两路输出与退出码 7；核心包 typecheck、shell 后台隔离 3 项、Node 直接加载 `dist/node/node.js` 与 `out/main/node.js` 通过；重新打包后 GUI sidecar ready 927ms 并监听本地端口，未在 GUI 内实际点过后台命令。

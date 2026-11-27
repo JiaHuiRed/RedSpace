@@ -259,6 +259,21 @@ export const Info = Schema.Struct({
   provider: Schema.optional(Schema.Record(Schema.String, ConfigProvider.Info)).annotate({
     description: "Custom provider configurations and model overrides",
   }),
+  // 261127 Red 生图后端的显式选择。省略时只允许自动选中「唯一一个已登录、未禁用、
+  // 声明了 image 能力的 OAuth 插件」，绝不自动落到付费 API。
+  image_generation: Schema.optional(
+    Schema.Struct({
+      provider: Schema.NonEmptyString.check(Schema.isMaxLength(256)).annotate({ description: "Provider ID to use for image generation" }),
+      model: Schema.NonEmptyString.check(Schema.isMaxLength(256)).annotate({ description: "Image model to request from that provider" }),
+      auth: Schema.Literals(["oauth", "api"]).annotate({
+        description:
+          "Credential path: 'oauth' requires an installed plugin that declares image support; 'api' uses provider.<id>.options.baseURL or provider.<id>.api with an API key",
+      }),
+    }),
+  ).annotate({
+    description:
+      "Explicit image generation backend. When omitted, RedCode auto-selects only if exactly one logged-in OAuth provider declares image support.",
+  }),
   mcp: Schema.optional(
     Schema.Record(
       Schema.String,

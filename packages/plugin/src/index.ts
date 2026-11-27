@@ -85,9 +85,41 @@ type Rule = {
   value: string
 }
 
+export type ImageGenerationSource = {
+  bytes: Uint8Array
+  mime: string
+  filename: string
+}
+
+export type ImageGenerationInput = {
+  /** Actual wire model. The configured/default model seeds this; a per-call override replaces it. */
+  model: string
+  prompt: string
+  size?: string
+  source?: ImageGenerationSource
+  signal: AbortSignal
+}
+
+export type ImageGenerationResult = {
+  bytes: Uint8Array
+  mime: "image/png" | "image/jpeg" | "image/webp"
+}
+
+/**
+ * Optional image capability declared by an OAuth provider plugin. `generate` must reuse the
+ * provider's own credential transport (refresh/proxy/account headers) and fail closed if auth
+ * changes while a request is in flight. Text-only subscriptions must simply omit this hook.
+ */
+export type AuthImageHook = {
+  /** Model used only when RedCode auto-selects this provider (no image_generation config). */
+  defaultModel: string
+  generate: (input: ImageGenerationInput, auth: () => Promise<Auth>) => Promise<ImageGenerationResult>
+}
+
 export type AuthHook = {
   provider: string
   loader?: (auth: () => Promise<Auth>, provider: Provider) => Promise<Record<string, any>>
+  image?: AuthImageHook
   methods: (
     | {
         type: "oauth"

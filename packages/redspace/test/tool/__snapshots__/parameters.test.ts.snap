@@ -528,3 +528,45 @@ exports[`tool parameters JSON Schema (wire shape) write 1`] = `
   "type": "object",
 }
 `;
+
+exports[`tool parameters JSON Schema (wire shape) image 1`] = `
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+    "image": {
+      "description": "Local source image to edit. Omit to generate.",
+      "maxLength": 4096,
+      "minLength": 1,
+      "type": "string",
+    },
+    "model": {
+      "description": "Optional image model on the configured provider.",
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string",
+    },
+    "output": {
+      "description": "Optional new output file; defaults to .redcode/temp/.",
+      "maxLength": 4096,
+      "minLength": 1,
+      "type": "string",
+    },
+    "prompt": {
+      "description": "What to draw or change.",
+      "maxLength": 8192,
+      "minLength": 1,
+      "type": "string",
+    },
+    "size": {
+      "description": "Optional size accepted by the provider, e.g. 1024x1024.",
+      "maxLength": 32,
+      "minLength": 1,
+      "type": "string",
+    },
+  },
+  "required": [
+    "prompt",
+  ],
+  "type": "object",
+}
+`;

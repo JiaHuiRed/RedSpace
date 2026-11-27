@@ -1262,6 +1262,54 @@ it.live("companion Chat recalls history, selectively saves a memory, and keeps C
   }),
 )
 
+// 261127 Red 图片工具常驻：全新 Code 与绑定伙伴主 Chat 的首轮 wire tools 都带 `image`，
+// 即使没有配置图片供应商、也没有 search_tools 激活。产物路径与无 base64 的断言另测。
+it.instance("first Code request keeps the image tool resident without an image provider", () =>
+  Effect.gen(function* () {
+    const { llm } = yield* useServerConfig(providerCfg)
+    const sessions = yield* Session.Service
+    const prompt = yield* SessionPrompt.Service
+    const session = yield* sessions.create({ title: "image wire code" })
+
+    yield* llm.text("ok")
+    yield* prompt.prompt({ sessionID: session.id, model: ref, parts: [{ type: "text", text: "Reply with OK." }] })
+
+    const names = (wireBody((yield* llm.hits)[0]!).tools ?? []).map((tool) => tool.function?.name)
+    expect(names).toContain("image")
+  }),
+)
+
+it.live("first Chat request keeps the image tool resident without an image provider", () =>
+  Effect.gen(function* () {
+    const directory = yield* tmpdirScoped()
+    const llm = yield* TestLLMServer
+    const source = path.join(directory, "archive")
+    yield* writeText(path.join(source, "workspace", "SOUL.md"), "# Mira\n\nA familiar companion.")
+
+    yield* Effect.gen(function* () {
+      const companions = yield* Companion.Service
+      const imported = yield* companions.importArchive({ source, id: "mira", name: "Mira" })
+      yield* ensureDir(path.join(imported.profile.directory, ".git"))
+      yield* writeConfig(imported.profile.directory, providerCfg(llm.url))
+      yield* Effect.gen(function* () {
+        const sessions = yield* Session.Service
+        const prompt = yield* SessionPrompt.Service
+        const chat = yield* sessions.create({ title: "image wire chat", mode: "chat", companionID: imported.profile.id })
+        yield* Effect.addFinalizer(() => sessions.remove(chat.id).pipe(Effect.orDie))
+
+        yield* llm.text("ok")
+        yield* prompt.prompt({ sessionID: chat.id, model: ref, parts: [{ type: "text", text: "Reply with OK." }] })
+
+        const names = (wireBody((yield* llm.hits)[0]!).tools ?? []).map((tool) => tool.function?.name)
+        expect(names).toContain("image")
+      }).pipe(provideInstance(imported.profile.directory))
+    }).pipe(
+      Effect.provideService(Companion.directory, path.join(directory, "companions")),
+      Effect.provideService(Soul.directory, path.join(directory, "souls")),
+    )
+  }),
+)
+
 it.instance("sends the pinned Soul and scoped engineering memory through each active model route", () =>
   Effect.gen(function* () {
     const models = ["test-model", "gpt-6.1-terra", "deepseek-v4.1-flash", "glm-5.3-flash"]

@@ -2787,6 +2787,11 @@ function ToolPart(props: { last: boolean; part: ToolPart; message: AssistantMess
         <Match when={props.part.tool === "write"}>
           <Write {...toolprops} />
         </Match>
+        <Match when={props.part.tool === "image"}>
+          <InlineTool icon="◇" pending="Creating image…" complete={Boolean(toolprops.output)} part={props.part}>
+            {toolprops.output ?? "Image"}
+          </InlineTool>
+        </Match>
         <Match when={props.part.tool === "edit"}>
           <Edit {...toolprops} />
         </Match>

@@ -13,6 +13,7 @@ import { Parameters as ApplyPatch } from "../../src/tool/apply_patch"
 import { Parameters as Edit } from "../../src/tool/edit"
 import { Parameters as Glob } from "../../src/tool/glob"
 import { Parameters as Grep } from "../../src/tool/grep"
+import { Parameters as Image } from "../../src/tool/image"
 import { Parameters as Invalid } from "../../src/tool/invalid"
 import { Parameters as Lsp } from "../../src/tool/lsp"
 import { Parameters as Plan } from "../../src/tool/plan"
@@ -41,6 +42,7 @@ describe("tool parameters", () => {
     test("edit", () => expect(toJsonSchema(Edit)).toMatchSnapshot())
     test("glob", () => expect(toJsonSchema(Glob)).toMatchSnapshot())
     test("grep", () => expect(toJsonSchema(Grep)).toMatchSnapshot())
+    test("image", () => expect(toJsonSchema(Image)).toMatchSnapshot())
     test("invalid", () => expect(toJsonSchema(Invalid)).toMatchSnapshot())
     test("lsp", () => expect(toJsonSchema(Lsp)).toMatchSnapshot())
     test("plan", () => expect(toJsonSchema(Plan)).toMatchSnapshot())
@@ -85,6 +87,12 @@ describe("tool parameters", () => {
         properties: { value: { minimum: Number.MIN_SAFE_INTEGER, maximum: Number.MAX_SAFE_INTEGER } },
       })
     })
+  })
+
+  test("image accepts explicit source paths but requires a bounded prompt", () => {
+    expect(accepts(Image, { prompt: "Change the scarf", image: "cat.png" })).toBe(true)
+    expect(accepts(Image, { prompt: "" })).toBe(false)
+    expect(accepts(Image, { prompt: "x".repeat(8193) })).toBe(false)
   })
 
   describe("apply_patch", () => {

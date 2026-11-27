@@ -516,6 +516,19 @@ describe("tool.registry", () => {
     }),
   )
 
+  it.instance("offers image without credentials or tool discovery, but not to read-only roles", () =>
+    Effect.gen(function* () {
+      const registry = yield* ToolRegistry.Service
+      const agents = yield* Agent.Service
+      for (const [name, visible] of [["redmind", true], ["auto", true], ["execute", true], ["plan", false], ["explore", false]] as const) {
+        const agent = yield* agents.get(name)
+        if (!agent) throw new Error(`Missing agent ${name}`)
+        const tools = yield* registry.tools({ providerID: ProviderID.redcode, modelID: ModelID.make("test"), agent })
+        expect(tools.some((tool) => tool.id === "image")).toBe(visible)
+      }
+    }),
+  )
+
   scout.instance("shows repo research tools when experimental scout is enabled", () =>
     Effect.gen(function* () {
       const registry = yield* ToolRegistry.Service

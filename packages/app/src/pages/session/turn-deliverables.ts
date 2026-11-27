@@ -79,6 +79,9 @@ export function collectTurnDeliverables(input: {
         const diff = metadata.filediff
         put(diff && typeof diff === "object" && "file" in diff ? diff.file : args.filePath, "updated", part)
       }
+      // Generation and editing both refuse to overwrite and always land a new file, including
+      // the default .redcode/temp/ location. The resolved path is the only output evidence.
+      if (part.tool === "image") put(metadata.filepath, "created", part)
       if (part.tool !== "apply_patch" || !Array.isArray(metadata.files)) continue
       for (const file of metadata.files) {
         if (!file || typeof file !== "object") continue
