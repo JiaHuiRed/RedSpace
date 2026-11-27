@@ -1,6 +1,8 @@
 # RedSpace 用户手册
 
-> RedSpace 由 RedCode 演进而来：Chat 接续伙伴与长期记忆，Code 专注开发；两种模式共享执行核心与 TUI / GUI。下文的 redcode CLI 与 ~/.redcode 路径仍用于兼容旧安装。
+第一次使用，先[启动应用](#1-快速启动)，再[接入模型](#21-添加-ai-模型)。如果已有伙伴档案，见[导入 Chat 个人档案](#65-redspace-chat-个人档案)。
+
+手册中的 `~` 指当前用户的主目录。命令行支持 `redspace` 和兼容名 `redcode`；配置目录仍是 `~/.redcode/`。
 
 ---
 
@@ -23,9 +25,8 @@
 
 ### 前置要求
 
-- [Bun](https://bun.sh) 1.3+
-- Windows 10/11（仅测试此平台，其他平台需自行适配）
-- Git
+- Windows 10/11（其他平台未经测试）
+- Git、Node.js 24 和 [Bun](https://bun.sh) 1.3.14
 
 ### 克隆并运行
 
@@ -33,39 +34,50 @@
 git clone https://github.com/JiaHuiRed/RedCode.git
 cd RedCode
 bun install
-
-# 启动 TUI（终端界面）
-bun dev
-
-# 或启动桌面 GUI
-cd packages/desktop && bun run dev
 ```
+
+装好依赖后，在**仓库根目录**任选一个入口：
+
+| 界面      | 启动命令              |
+| --------- | --------------------- |
+| 终端 TUI  | `bun dev`             |
+| 桌面 GUI  | `bun run dev:desktop` |
+
+两个入口都直接运行源码，不需要先打包。
 
 ### 编译打包
 
-> 嫌敲命令麻烦？直接双击两个一键 bat 即可：
-> TUI → `packages/redspace/build.bat`；桌面 GUI → `packages/desktop/build-and-package.bat`。
+需要独立的终端程序或桌面安装包时，从仓库根目录选择下面对应的一组命令。
+
+Windows 也可以双击 [TUI 构建脚本](packages/redspace/build.bat)或[桌面打包脚本](packages/desktop/build-and-package.bat)。两者都会先把 `seed/` 中的共享资源同步到 `~/.redcode/`；TUI 脚本还会跳过内嵌 Web UI。如果不希望同步本机配置，使用下面的命令。
 
 ```bash
-# TUI 单文件 exe（可在无 Bun 环境的机器运行）
-# 产物本来就是 Windows 单目标，无需额外开关
-cd packages/redspace && bun run build
-
-# 桌面 GUI
-cd packages/desktop && bun run build && bun run package
+# TUI：单文件 exe（Windows x64），可在没有 Bun 环境的机器上运行
+cd packages/redspace
+bun run build
+# 产物（相对仓库根目录）：packages/redspace/dist/redcode-windows-x64/bin/redcode.exe
 ```
+
+```bash
+# 桌面 GUI：先构建，再用 electron-builder 打安装包
+cd packages/desktop
+bun run build
+bun run package
+```
+
+TUI 的编译产物名为 `redcode.exe`。只复制这个文件时，后面的 CLI 示例用该 exe 运行；从源码运行时，用 `bun dev` 代替 `redspace`。
 
 ### 启动后发生了什么
 
 第一次启动时，系统自动：
 
 1. 创建 `~/.redcode/` 目录（存放全局配置和记忆），以及 `souls/` 子目录（`memory/` 只作归档，不再写入）
-2. 保留式迁移旧 `Tsoul.md` / `Gsoul.md`，再补齐 `souls/karina.md`、`souls/yuqi.md` 与 `MEMORY.md` 的缺省模板——模板**编译时内嵌在二进制里**，已有文件与自定义正文不覆盖，旧文件保留
+2. 补齐 `souls/karina.md`、`souls/yuqi.md` 与 `MEMORY.md` 的缺省模板——模板**编译时内嵌在二进制里**，已有文件与自定义正文不覆盖；旧 `Tsoul.md` / `Gsoul.md` 迁移时保留原文件与正文
 3. 从可找到的 `seed/skill/` 播种技能到 `~/.redcode/skill/`（只补不覆盖）。先查当前目录，再查可执行文件上一级的 `seed/skill/`；单独复制 exe 不保证附带这些文件，缺失时会记录警告，技能也可自行安装
 4. 加载配置、MCP 服务器与 skill 技能
 5. 启动 TUI/GUI 界面
 
-**你已经可以开始聊天了。** 但要想发挥全部能力，继续往下看。
+界面打开后，如果还没有可用模型，按 [2.1 添加 AI 模型](#21-添加-ai-模型) 配好再发第一条消息。
 
 ---
 
@@ -73,9 +85,7 @@ cd packages/desktop && bun run build && bun run package
 
 ### 2.1 添加 AI 模型
 
-RedCode 支持多种模型。首次启动后，你需要至少配置一个 provider 才能对话。
-
-建议先在 `~/.redcode/redcode.local.jsonc`（全局、仅本机）中添加。下面的密钥只是占位符，真实密钥不要写进要提交或同步的配置：
+使用云端 API 时，把连接信息写入本机的 `~/.redcode/redcode.local.jsonc`；文件不存在就新建。下面以 DeepSeek 为例，请替换密钥，并选择你的账号可用的模型。真实密钥不要写进要提交或同步的配置。使用本地模型则跳到 [3.3 Ollama](#33-本地模型ollama)。
 
 ```jsonc
 {
@@ -92,38 +102,7 @@ RedCode 支持多种模型。首次启动后，你需要至少配置一个 provi
 }
 ```
 
-**注意两点**（写错了不会报错，只会静默失效）：
-
-- **没有 `type` 字段**。决定用哪个协议适配器的是 `npm`。
-- **`apiKey` / `baseURL` 必须嵌在 `options` 里**，不能放在 provider 顶层。多余的键会被静默丢弃，结果是一个没有凭据的 provider，且不产生任何报错。
-
-provider 顶层可用的键只有：`npm`、`options`、`models`、`name`、`api`、`env`、`id`、`whitelist`、`blacklist`（定义见 `packages/redspace/src/config/provider.ts`）。
-
-常用的 `npm` 适配器：
-
-| 适配器                      | 适用                                                                         |
-| --------------------------- | ---------------------------------------------------------------------------- |
-| `@ai-sdk/openai-compatible` | 绝大多数第三方/自建服务（DeepSeek、GLM、MiniMax、各类中转、Ollama 的 `/v1`） |
-| `@ai-sdk/anthropic`         | Anthropic 官方 API                                                           |
-| `@ai-sdk/google`            | Google Gemini 官方 API                                                       |
-
-参考配置示例（本地 Ollama，省略 `npm` 时默认按 OpenAI 兼容处理）：
-
-```jsonc
-{
-  "provider": {
-    "ollama": {
-      "options": { "baseURL": "http://localhost:11434/v1" },
-      "models": {
-        "qwen3.5:9b-q8_0": { "name": "Qwen3.5 9B" },
-      },
-    },
-  },
-  "model": "ollama/qwen3.5:9b-q8_0",
-}
-```
-
-> 仓库里的 `seed/redcode.home.jsonc` 是一份可直接参照的真实配置模板。
+`npm` 选择协议适配器，不是 `type`；`apiKey` 和 `baseURL` 都写在 `options` 里，不放在 provider 顶层。换服务商时，见 [3.1 选择适配器](#31-选哪个适配器npm)。[仓库配置模板](seed/redcode.home.jsonc)包含多个服务的设置，按需取用即可。
 
 ### 2.2 设置称呼
 
@@ -133,19 +112,13 @@ provider 顶层可用的键只有：`npm`、`options`、`models`、`name`、`api
 { "username": "哥哥" }
 ```
 
-具体称呼、AI 的性格、语气与协作方式写在灵魂文件里（见 5.1）。0.8.2 之前这些散在
-`~/.redcode/USER.md`，与灵魂文件大量重复，已下线；老用户那份文件留着不会再被加载，可以自行删除。
+具体称呼、AI 的性格、语气与协作方式写在灵魂文件里（见 5.1）。早期的 `~/.redcode/USER.md` 已下线，不再被加载；旧文件留着也无影响，可以自行删除。
 
 ### 2.3 自定义 AI 人格
 
-Soul 文件定义 AI 的身份、性格、语气与协作方式。TUI 和 GUI 都可以选择同一份 Soul：
+Soul 文件定义 AI 的身份、性格、语气与协作方式。TUI 和 GUI 都可以选择同一份 Soul。用文本编辑器打开 `~/.redcode/souls/` 下对应的 `.md` 文件，例如在 PowerShell 中运行 `notepad "$HOME\.redcode\souls\karina.md"`。
 
-```bash
-$EDITOR ~/.redcode/souls/karina.md
-$EDITOR ~/.redcode/souls/yuqi.md
-```
-
-灵魂文件内容自由格式，但建议包括：
+灵魂文件的正文写法自由，但开头需要 YAML frontmatter（`id`、`name` 等，完整写法见 5.3）；建议正文包括：
 
 - AI 的身份和名字
 - 怎么称呼你
@@ -176,19 +149,24 @@ $EDITOR ~/.redcode/souls/yuqi.md
 对话时点击模型选择器切换，或在 `redcode.jsonc` 中设置默认模型：
 
 ```jsonc
-"model": "my-provider/my-model"
+{
+  "model": "my-provider/my-model"
+}
 ```
+
+`my-provider` 是供应商 ID，`my-model` 是该供应商下的模型 ID。配置自定义模型时，这两个值分别对应 `provider` 和 `models` 下的键名。
 
 ### 3.3 本地模型（Ollama）
 
-> [2.1](#21-添加-ai-模型) 的 Ollama 示例用的是另一个模型，只为给出最小可抄的形状；这里换成 coder 模型，顺带演示 `temperature` / `tool_call` / `limit` 的完整写法。
+先安装 [Ollama](https://ollama.com) 并让它保持运行，再拉取模型：
 
 ```bash
-# 安装 Ollama
-# 下载模型
 ollama pull qwen2.5-coder:7b
+```
 
-# 在 redcode.jsonc 中配置
+然后在 `~/.redcode/redcode.local.jsonc`（只在本机生效）或 `~/.redcode/redcode.jsonc` 里加入 provider 与默认模型。没有这个文件就新建一个，JSONC 允许注释和尾逗号：
+
+```jsonc
 {
   "provider": {
     "ollama": {
@@ -206,6 +184,8 @@ ollama pull qwen2.5-coder:7b
   "model": "ollama/qwen2.5-coder:7b"
 }
 ```
+
+`temperature` 和 `tool_call` 描述服务端实际支持的能力，把它们设为 `true` 不会让模型获得新能力。`limit` 按实际可用窗口填写；用量显示和自动压缩都会参考它。
 
 ---
 
@@ -228,7 +208,7 @@ MCP（Model Context Protocol）让 AI 按需要接入外部工具。
 | **markitdown** | 二进制文档转 Markdown：`.docx`/`.xlsx`/`.pptx`/`.pdf` 等 read 读不了的文件用它提取文本 | —          |
 | **fff**        | 高性能文件查找/grep（`fff_find_files`/`fff_grep`/`fff_multi_grep`）                    | —          |
 
-SQLite 结构化查询使用原生工具 `sqlite_query`，不再是 MCP 服务器；源码构建时由同步脚本把 `seed/tool/sqlite.ts` 播种到 `~/.redcode/tool/`。
+SQLite 结构化查询使用原生工具 `sqlite_query`，不是 MCP 服务器；源码构建时由同步脚本把 `seed/tool/sqlite.ts` 播种到 `~/.redcode/tool/`。
 
 ### 4.3 网络与视觉
 
@@ -241,10 +221,8 @@ SQLite 结构化查询使用原生工具 `sqlite_query`，不再是 MCP 服务�
 
 | 服务器               | 用途                                                                                                          | 首次使用前           |
 | -------------------- | ------------------------------------------------------------------------------------------------------------- | -------------------- |
-| **su-prememory**     | 可选的本地记忆库服务；模板的 `tools: []` 不向模型暴露工具，需要时再配置白名单。记忆维护仍须遵守索引与全文双写 | 本地记忆库与服务依赖 |
+| **su-prememory**     | 本机记忆库（SQLite + FTS5，即 `~/.redcode/supermemory.db`）。模板只向模型暴露 `list-memories`，用于分页列出全量做审计/清理；写入按 [6.2](#62-索引化与双写) 的文档优先规则，只有无权威文档承接的独立教训才入库；召回可直接用 `sqlite_query` 查库 | 本地记忆库与服务依赖 |
 | **mcp-process-mgmt** | 管理交互式/长驻 shell 会话（REPL、dev server 等需要 stdin 的进程）                                            | —                    |
-
-> 曾预配置过的 **gbrain**（记忆）、**Exa Search**（语义搜索）、**Agent Reach**（B站/抖音/GitHub 统一搜索）已彻底移除（gbrain 元数据损坏且功能被 su-prememory 覆盖；Exa 与 Web Search 冗余；Agent Reach 实际使用率过低，插件源码已删除）。
 
 ### 4.5 添加自己的 MCP
 
@@ -280,16 +258,9 @@ Soul 是助手身份的唯一来源，客户端只负责选择新会话的默认
 
 显示名、会话标题前缀与 commit 署名都来自所绑定的 Soul，不再根据 TUI / GUI 猜测。文件缺失或无效时会明确提示，并保留原绑定，不偷偷换成另一个人格。
 
-> 0.8.2 之前还有一层 `~/.redcode/USER.md`（用户画像），内容与灵魂文件大量重复，每轮白吃一道加载，已下线。
-
 ### 5.2 选择 Soul
 
-在对话中输入：
-
-```
-/soul          # TUI：打开选择器
-/soul karina   # TUI：选择指定 ID
-```
+在 TUI 的 Code 会话中输入 `/soul` 打开选择器；如果知道 ID，也可以直接输入 `/soul karina`。
 
 GUI 在 **设置 → 个性化 → Soul** 中选择新会话的默认人格。两端的偏好独立保存，已有会话显示自己绑定的 Soul。
 
@@ -335,51 +306,63 @@ description: 擅长简洁分析与清晰解释
 
 两层同时注入（全局在前、项目在后），不是二选一。
 
-> 早期版本还有一层当日日志（`~/.redcode/memory/YYMMDD.md`），260729 起退役——实测几乎无人主动读、写入质量也不稳定，历史文件保留可查，不再写入。
+**Chat 不注入这两份工程记忆，也不加载项目 `AGENTS.md`。** 伙伴的身份、关系与个人资料来自 `~/.redcode/companions/<id>/` 下的档案，见 [6.5](#65-redspace-chat-个人档案)；引擎配置、MCP、普通技能与权限门控仍由两种模式共用。
 
-### 6.2 索引化与双写（260812 起）
+> `~/.redcode/memory/` 下的旧当日日志已退役，历史文件保留可查，不再写入。
 
-记忆已索引化：MEMORY.md 正文只存**索引行**（编号 + 4-8 字主题 + 关键动作词），完整教训全文落在本地记忆库 `~/.redcode/supermemory.db`（memories 表，project=global/项目名，FTS5 全文索引）。写入必须**双写**——MEMORY.md 加索引行 + 数据库存全文，缺一不可。
+### 6.2 索引化与双写
+
+记忆已索引化：MEMORY.md 只留**摘要与索引行**（主题 + 关键动作词 + 正文路径），完整正文优先写进项目 `.redcode/docs/` 或既有权威文档。只有**没有权威文档承接、又值得独立召回**的长期教训，才把全文存进本地记忆库 `~/.redcode/supermemory.db`（memories 表，project=global/项目名，FTS5），并在 MEMORY.md 留对应索引。不是每条记忆都必须入库；已有正文只更新文档和索引。
 
 配套核对机制：
 
-- 自检脚本 `bun ~/.redcode/scripts/check-memory-dualwrite.mjs`——每个 `#NN` 索引行必须对数据库全文，缺则列出
-- 长期记忆只在本机维护，`MEMORY.md` 与 `supermemory.db` 不进入同步仓库；双写核对在本机运行
-- 260825 定案：索引化前的存量项目（正文无 `#NN` 索引行结构）不做一次性迁移，在该工作区整理记忆或收尾时**就地索引化**（全文入库 + 正文改写为索引行）
+- 自检脚本 `bun ~/.redcode/scripts/check-memory-dualwrite.mjs`——核对全局 `#NN` 索引行与数据库全文，缺则列出
+- 长期记忆只在本机维护，`MEMORY.md` 与 `supermemory.db` 不进入同步仓库；核对在本机运行
+- 存量项目（正文还没有索引结构）不做一次性迁移，在该工作区整理记忆或收尾时**就地整理**：有效正文进文档，MEMORY.md 改成索引与工作路标
 
 ### 6.3 教训提炼
 
-收工时，AI 自动：
+只有在出现值得长期保留的新教训、已确定的项目决策，或需要跨会话续接的工作状态时才整理；**普通问答和局部修复不触发记忆整理**。整理时 AI 按 `memory` skill 处理：
 
 1. 审视当前项目的 `.redcode/MEMORY.md`，删掉已完成、过时的进度段，保留经验教训
-2. 把**跨项目通用**的教训摘入全局 `~/.redcode/MEMORY.md`
-3. 每条过三道门禁（换项目仍成立？忘了会再踩且修复贵？未被 AGENTS.md/skill 覆盖？）
+2. 先写或更新完整正文：优先放项目 `.redcode/docs/` 或既有权威文档
+3. 再在同一批更新 MEMORY.md 的索引与路标；没有权威文档承接的独立教训才全文入库，全局条目用 `#NN` 编号
+4. 一条教训要升到全局，还要满足三个条件：换个项目仍然成立，忘掉它会付出明显代价，而且已有规则或技能没有覆盖。
 
 全局记忆每轮都要付 token，只留值得长期持有的条目。进度正文放项目 `.redcode/docs/`，MEMORY.md 只留工作路标；参考文档同样放在项目 `.redcode/` 下，只留一句指针。
 
 ### 6.4 关闭记忆
 
-两条 MEMORY.md 由引擎**固定注入**（`session/instruction.ts` 的 systemPaths 硬编码路径），没有官方开关。确实不想要的话：清空两份 MEMORY.md 内容，或改 `instruction.ts` 重新编译（不推荐）。
+两条 MEMORY.md 在 Code 中由引擎**固定注入**（`session/instruction.ts` 的 systemPaths 硬编码路径），没有官方开关；Chat 本来就不注入这两份。确实不想要的话：清空两份 MEMORY.md 内容，或改 `instruction.ts` 重新编译（不推荐）。
 
 ---
 
 ### 6.5 RedSpace Chat 个人档案
 
-Chat 可以从第一句闲聊开始培养新伙伴，也可以接续已有伙伴。档案保存身份、关系、长期记忆、日记和可识别的旧对话文本；Code 继续按原有默认 Soul 和工作区运行。产品模式只有 Chat / Code，Plan / RedMind / Auto 仍是独立的执行权限选择。
+Chat 可以从第一句闲聊开始培养新伙伴，也可以接续已有伙伴。档案保存身份、关系、长期记忆、日记和可识别的旧对话文本；Code 继续按原有默认 Soul 和工作区运行。
+
+**先把两种模式的边界分清：**
+
+- 两种模式共用同一套全局 `redcode.jsonc`、MCP 配置、普通技能与权限体系；Chat 里发起的读写、命令同样受权限门控。
+- Chat 主会话从绑定伙伴的档案读取个人资料，不加载 Code 的工程 `MEMORY.md` 和 `AGENTS.md`。`companion_memory` 只在绑定伙伴的主会话提供，不传给子任务。
+- `session_query` 在 Chat 里只能查该伙伴自己的当前与历史主会话，不能扩大到别的项目或伙伴；在 Code 里默认只查当前工程。
+- 档案目录不是普通项目工作区：引擎不会在 `~/.redcode/companions/<id>/workspace/` 下生成项目的 `.redcode/MEMORY.md`。
+
+产品模式只有 Chat / Code，Plan / RedMind / Auto 仍是独立的执行权限选择。
 
 #### TUI：导入与进入
 
 ```powershell
 # 从 .openclaw 目录、其 workspace，或 ZIP 导入；路径包含空格时加引号
-redcode companion import "D:\Archives\.openclaw.zip" --id qiuqiu --name "秋秋"
-redcode companion list
-redcode --companion qiuqiu
+redspace companion import "D:\Archives\.openclaw.zip" --id qiuqiu --name "秋秋"
+redspace companion list
+redspace --companion qiuqiu
 
 # 只续接这个伙伴最近的有效主会话
-redcode --companion qiuqiu --continue
+redspace --companion qiuqiu --continue
 ```
 
-从源码运行时，用 `bun dev companion import ...`、`bun dev --companion qiuqiu`。已进入本地 TUI 后，`/chat` 选择伙伴并续接会话，`/code` 选择开发工作区。Chat 中 `/new` 保留当前伙伴；`/soul` 不会改变伙伴身份或 Code 的默认 Soul。普通 `--continue` 只恢复 Code；`--session` 与 `--companion` 同用时必须匹配。远程 attach 暂不提供依赖本地目录切换的 `/chat`、`/code` 入口。
+命令主名是 `redspace`，旧名 `redcode` 等价可用。从源码运行时用 `bun dev` 代替 `redspace`，参数照常追加（例如 `bun dev --companion qiuqiu`）。已进入本地 TUI 后，`/chat` 选择伙伴并续接会话，`/code` 选择开发工作区。Chat 中 `/new` 保留当前伙伴；`/soul` 不会改变伙伴身份或 Code 的默认 Soul。普通 `--continue` 只恢复 Code；`--session` 与 `--companion` 同用时必须匹配。远程 attach 暂不提供依赖本地目录切换的 `/chat`、`/code` 入口。
 
 #### GUI：同一份档案
 
@@ -394,13 +377,13 @@ TUI 与 GUI 连接同一个后端、使用同一个本机数据目录时，读�
 - 默认上下文有界加载 USER / IDENTITY、MEMORY 与最近两篇日记；需要更早个人资料时用 `companion_memory search/read`，日记未记录的旧聊天可在 `session_query` 可用时按同一伙伴范围检索。分页结果给出来源及续读位置。
 - 新的共同经历、偏好与承诺通过 `companion_memory remember` 选择性追加到对应时区的当日日记，成功后才确认记住。它遵守读取/编辑权限与用户不希望保存的意图；不会无条件把每轮原文复制进个人日记。普通会话仍按原有 Session 机制保存。
 - 在同一伙伴的新会话里，第一句话可以接上上次没写进日记的几句对话。聊天时出现与旧日记相近的用词，伙伴也可能自然想起其中一小段。用户亲口表达的长期偏好或纠正，可以通过 `companion_memory retain` 带日期和出处存进该伙伴的 `MEMORY.md`。
-- GUI 的 设置中打开伙伴的 **记忆 → 查看详情 → 日常记录** 可以翻阅已写下的日记，默认显示最近一篇。日记由伙伴在聊天时选择性记录，新伙伴和导入的伙伴使用同一套机制。
+- 在 GUI 设置中打开伙伴的 **记忆 → 查看详情 → 日常记录**，可以翻阅日记，默认显示最近一篇。新建和导入的伙伴都在聊天时选择性记录日记。
 - 以同一来源重新导入会补入缺失的派生聊天历史，不覆盖现有 Soul 或之后新增的日记。同 ID 的不同档案返回冲突，需改用新 ID 或先人工整理；不自动合并两个有分歧的档案。
 - 导入说明会列出异常编码等问题。源文件保留；不能可靠解码的内容不会被伪装成有效记忆。
-- 旧 AGENTS、技能和机制文件仅保留为来源或可读资料；旧渠道 token、设备密钥、网关认证、绝对路径和运行任务不被激活。0.19.1 会从同一 OpenClaw 身份的 JSONL 中提取可识别的用户/伙伴文本，保存为带来源信息的派生资料供按需检索；原始 JSONL 不会还原为可继续的完整旧会话，工具载荷也不导入。轨迹、梦境、心跳和 cron 调度仍未接入。导入成功不等于完整旧运行时迁移完成。
+- 旧 AGENTS、技能和机制文件仅保留为来源或可读资料；旧渠道 token、设备密钥、网关认证、绝对路径和运行任务不被激活。导入时还会从同一 OpenClaw 身份的 JSONL 中提取可识别的用户/伙伴文本，保存为带来源信息的派生资料供按需检索；原始 JSONL 不会还原为可继续的完整旧会话，工具载荷也不导入。轨迹、梦境、心跳和 cron 调度仍未接入。导入成功不等于完整旧运行时迁移完成。
 - Chat 不因全局 Code 自动分享配置而被自动公开；显式分享仍沿用现有功能。个人档案与来源文件不应加入项目代码仓库。
 
-当前 CLI 名称、`.redcode` 路径与包名用于兼容既有安装；0.19.0 接通两种模式及档案接续，0.19.1 增加可识别旧对话的导入与按需召回。
+当前 CLI 主名 `redspace`，`redcode` 与 `~/.redcode/` 路径保留用于兼容既有安装。
 
 ---
 
@@ -431,7 +414,7 @@ TUI 与 GUI 连接同一个后端、使用同一个本机数据目录时，读�
 
 ### 7.2 权限门控
 
-权限门控由**代码强制层**（doom_loop 检测，服务端拦截）兜底，配合默认规则、配置中的 `permission` 与各 agent 的规则工作。内置子代理定义随程序编译，自定义子代理可放在 `~/.redcode/agent/`。行为指令层（ECC_PROFILE guardrail）已退役。
+权限门控由**代码强制层**（doom_loop 检测，服务端拦截）兜底，配合默认规则、配置中的 `permission` 与各 agent 的规则工作。内置子代理定义随程序编译，自定义子代理可放在 `~/.redcode/agent/`。
 
 `ask`、`allow`、`deny` 分别表示询问、放行、拒绝；工具调用权限接口不代表一定弹窗，命中 `allow` 时会直接执行。例如，想让历史会话查询先询问，可以配置：
 
@@ -443,7 +426,7 @@ TUI 与 GUI 连接同一个后端、使用同一个本机数据目录时，读�
 
 #### 代码强制层（防空转，软硬双层）
 
-**软层——递进提醒**（`session/repeat-tool-reminder.ts`，0.8.17 起）：同一工具+同一参数连续调用 3 / 5 / 8 次时，把 `[System notice]` 提醒贴在该次结果尾部让模型自纠——不打扰你，纯建议。轮询类调用（每次输出在变）只会触发这层。`todowrite`/`todoread` 这类记账工具不计数也不打断计数。
+**软层——递进提醒**（`session/repeat-tool-reminder.ts`）：同一工具+同一参数连续调用 3 / 5 / 8 次时，把 `[System notice]` 提醒贴在该次结果尾部让模型自纠——不打扰你，纯建议。轮询类调用（每次输出在变）只会触发这层。`todowrite`/`todoread` 这类记账工具不计数也不打断计数。
 
 **硬层——权限弹窗**（`processor.ts` doom_loop 检测），自动检测两种模式：
 
@@ -496,7 +479,7 @@ AI 正在干活时你发的消息怎么处理，`redcode.jsonc` 顶层 `busy_ent
 两边都显示：当前占用 / 模型标称窗口 · 占用率、会话累计、解码速率与首字延迟、in/out/思考
 token、缓存读写与命中率、花费。
 
-**颜色按绝对上下文用量提示，不按百分比，也不代表正在执行某种压缩操作。** 当前 GUI 的提醒档位：
+**颜色按绝对上下文用量提示，不按百分比，也不代表正在执行某种压缩操作。** TUI 侧边栏与 GUI 圆环使用同一组档位：
 
 | 颜色 | 上下文用量 |
 | ---- | ---------- |
@@ -505,9 +488,9 @@ token、缓存读写与命中率、花费。
 | 橙   | 360k–400k  |
 | 红   | ≥ 400k     |
 
-原生自动压缩开启时，模板的 `compaction.native.trigger_tokens` 为 400k，实际触发还受模型可用窗口限制。旧的工具输出 prune 在当前模板中已关闭，不能把橙色理解成“已经开始裁剪工具结果”。
+原生自动压缩开启时，模板的 `compaction.native.trigger_tokens` 为 400k，实际触发还受模型可用窗口限制。模板的 `compaction.prune` 已关闭，不能把橙色理解成“已经开始裁剪工具结果”。
 
-日常可主动精简：TUI 在命令面板选择 `/compact` 或按 `<leader>c`，GUI 点击圆环或在命令面板选择精简会话，都会先确认。用量数字仍以模型标称窗口为分母显示，与颜色档位分开读取。
+日常可主动精简：TUI 用 `/compact`（别名 `/summarize`）或按 `<leader>c`；GUI 点击圆环会先弹出确认，再发起压缩。用量数字仍以模型标称窗口为分母显示，与颜色档位分开读取。
 
 **解码速率与首字延迟是两回事，所以分开显示。** `52.4 tok/s · 首字 2.3s`——首字慢是排队与
 预填（供应商侧负载、上下文长度），解码慢是吐字本身。合成一个「总速度」会让这两种完全不同
@@ -543,8 +526,11 @@ token、缓存读写与命中率、花费。
 | `/goal <目标>`     | 钉住会话目标，防止 AI 跑题（见 [8.1](#81-钉住的目标钉了之后在哪看)）                                |
 | `/goal clear`      | 清掉当前目标                                                                                        |
 | `/goal done`       | 标为完成，自动归档教训                                                                              |
-| `/soul [ID]`       | 打开 Soul 选择器，或按 ID 直接选择（TUI）；只影响后续新会话，见 [5.2](#52-选择-soul)                |
-| `/recall <关键词>` | 按关键词从记忆库（含 supermemory.db）语义召回历史教训                                               |
+| `/soul [ID]`       | 在 TUI 的 Code 会话里选默认 Soul：省略 ID 时打开选择器，指定 ID 时直接选择。只影响新会话，见 [5.2](#52-选择-soul) |
+| `/chat`            | 选择并进入一个伙伴的 Chat，续接该伙伴的会话（TUI）                                                  |
+| `/code`            | 选择开发工作区，回到 Code（TUI）                                                                    |
+| `/new`             | 新建会话；在 Chat 里保留当前伙伴                                                                    |
+| `/recall <关键词>` | 按关键词从本机的工程记忆库（`supermemory.db`）查找历史教训                                          |
 | `/subtask <任务>`  | 在隔离子会话中执行子任务，上下文隔离不污染当前会话（父流程等待结果）                                |
 | `/commit`          | 按 conventional commit 格式提交代码                                                                 |
 | `/changelog`       | 生成 CHANGELOG.md 条目                                                                              |
@@ -556,10 +542,10 @@ token、缓存读写与命中率、花费。
 | `/ai-deps`         | 排查 AI SDK 依赖可升级的 minor/patch 版本                                                           |
 | `/lan`             | 打开或查看手机（局域网）远程访问入口                                                                |
 | `/busy-enter`      | 切换繁忙时消息送达：插话 ↔ 排队（TUI/GUI 均内置，立即生效，见 [7.3](#73-繁忙时消息送达busy_enter)） |
-| `/compact`         | 打开精简会话确认：TUI 命令面板或 `<leader>c`；GUI 命令面板或上下文圆环                              |
+| `/compact`         | 发起精简会话：TUI 用 `/compact`（别名 `/summarize`）或 `<leader>c`；GUI 点击上下文圆环（先确认）     |
 | `/pending`         | 管理排队消息，逐条送达、编辑或取消（TUI；GUI 在排队消息上直接操作）                                 |
 
-命令文件位于 `seed/command/` 和 `~/.redcode/command/`，纯文本，可以自己添加或修改；`/soul`、`/busy-enter`、`/compact`、`/pending` 是内置入口，不在命令文件里。
+命令文件位于 `seed/command/` 和 `~/.redcode/command/`，纯文本，可以自己添加或修改；`/soul`、`/chat`、`/code`、`/new`、`/busy-enter`、`/compact`、`/pending` 是内置入口，不在命令文件里。
 
 ### 8.1 钉住的目标：钉了之后在哪看
 
@@ -592,7 +578,7 @@ Skill 是扩展 AI 行为的机制——本质上是注入给 AI 的指令文件
 
 | Skill                        | 作用                                                                     | 触发词                     |
 | ---------------------------- | ------------------------------------------------------------------------ | -------------------------- |
-| **memory**                   | 记忆的写与剪：双层 MEMORY.md 注入 + 索引化双写 + 剪枝阈值                | "整理记忆""记忆太长了"     |
+| **memory**                   | 记忆的写与剪：双层 MEMORY.md 注入 + 文档优先/索引 + 剪枝阈值            | "整理记忆""记忆太长了"     |
 | **ce-code-review**           | 结构化多维度代码审查                                                     | "帮我看看代码""review一下" |
 | **diagnose**                 | 形式化 bug 诊断循环                                                      | "查bug""排查一下""debug"   |
 | **tdd-flow**                 | 测试先行、假阳性过滤与置信度门控，已整合原 defensive-agent               | "认真做""用 TDD""别乱改"   |
@@ -603,8 +589,10 @@ Skill 是扩展 AI 行为的机制——本质上是注入给 AI 的指令文件
 | **red-scribe**               | Red 的写作风格与中英去 AI 味，已整合 yuqi-slop、stop-slop                | "按我的风格写""去AI味"     |
 | **effect**                   | 在本仓编写与调试 Effect v4 代码（service / layer / Schema / 类型化错误） | 写或调 Effect 代码时       |
 | **harmonyos-android-compat** | Android 应用移植/验证到华为鸿蒙（HarmonyOS 6+、卓易通）                  | 鸿蒙移植与兼容验证时       |
+| **security-audit**           | 面向代码库、API、CLI 与服务的安全审查和漏洞排查，按请求强度分级执行      | "安全审计""漏洞审查""渗透测试" |
+| **visual-prototype**         | 先做可编辑的 HTML 视觉原型，再按稿实现                                   | "做个 HTML""开个网页""照这份 HTML 做" |
 
-以上 11 个随仓库分发（`seed/skill/`），找到种子目录时会播种到 `~/.redcode/skill/`。播种不覆盖本机已有的同名技能；更新仓库不等于自动更新个人修改过的副本。
+上表中的技能随仓库分发，完整文件在 [seed/skill/](seed/skill/)。首次启动找到种子目录时，程序会把缺少的技能复制到 `~/.redcode/skill/`，不会覆盖已有的同名技能。
 
 下面这些只存在于维护者本机的 `~/.redcode/skill/`，**不在仓库里**，克隆的人不会有——举例说明个人库可以怎么扩展（**不是全量清单**，个人库随维护者习惯持续增删）：
 
@@ -617,10 +605,9 @@ Skill 是扩展 AI 行为的机制——本质上是注入给 AI 的指令文件
 
 ### 9.2 添加自定义 Skill
 
-```bash
-# 在 ~/.redcode/skill/ 下创建目录和 SKILL.md
-mkdir -p ~/.redcode/skill/my-rules
-$EDITOR ~/.redcode/skill/my-rules/SKILL.md
+```powershell
+New-Item -ItemType Directory -Force "$HOME\.redcode\skill\my-rules" | Out-Null
+notepad "$HOME\.redcode\skill\my-rules\SKILL.md"
 ```
 
 SKILL.md 需要 YAML frontmatter（`name` + `description`），引擎靠 description 语义匹配自动触发：
@@ -652,7 +639,7 @@ description: 我的编码规范。用户说"按规范来""检查规范"时触发
 seed/                          ~/.redcode/
 ├── skill/           ← 种子     ├── souls/*.md         ← 你的人格（karina / yuqi，首启由内嵌模板播种）
 ├── command/         ← 种子     ├── MEMORY.md       ← 你的记忆
-├── tool/sqlite.ts   ← 种子     ├── supermemory.db  ← 本机长期记忆全文
+├── tool/sqlite.ts   ← 种子     ├── supermemory.db  ← 无文档承接的独立教训全文
 ├── scripts/         ← 种子     ├── skill/ command/ agent/
 └── redcode.home.jsonc ← 配置模板 └── data/           ← 会话 DB / 日志 / 快照
 
@@ -662,23 +649,17 @@ seed/                          ~/.redcode/
 
 内置子代理（explore/execute）定义在 `packages/redspace/src/agent/definition/`，构建时内联，不复制到用户目录；自行编写的 `~/.redcode/agent/*.md` 仍可使用。
 
-- 仓库**仅包含模板和共享配置**，没有任何你的个人数据
-- `~/.redcode/` **不在仓库中**，不会被推送
-- 其他人克隆此项目只会看到空白模板
+克隆 RedSpace 源码不会复制你的本机配置或历史会话。`~/.redcode/` 独立于源码仓库；其中的 `companions/` 还可能保存伙伴日记和导入的旧对话，不要把它当作可分发的模板。
 
 ### 10.2 多机同步
 
-多台电脑可用私有 GitHub 仓库同步人格、技能、自定义命令、插件与**不含密钥**的共享配置，不要直接同步整个 `~/.redcode/`。
+多台电脑可以用自己的**私有仓库**共享选定的 Soul、技能、命令、插件及不含密钥的配置。工程记忆、伙伴档案、会话数据和本机凭据留在各自的电脑上。
 
-长期记忆只在本机维护和备份：`MEMORY.md`、`supermemory.db` 及其备份不进入同步仓库。会话数据、凭据和本地覆盖配置也必须排除。
+在 `~/.redcode/.gitignore` 中加入以下规则。如果文件已经存在，合并规则，不要覆盖原文件：
 
-```powershell
-# 第一台电脑：初始化私有仓
-cd ~/.redcode
-# 创建 .gitignore 排除机器本地数据
-# data/ 含会话数据库和凭据；长期记忆、备份和本地配置也不共享
-@'
+```gitignore
 data/
+companions/
 cache/
 state/
 locks/
@@ -692,39 +673,32 @@ scripts/
 temp/
 redcode.local.json
 redcode.local.jsonc
-'@ | Set-Content -Encoding utf8 .gitignore
-git init
-git add .gitignore
-git commit -m "init"
-# 在 GitHub 创建一个 Private 仓库
-git remote add origin https://github.com/你的用户名/redcode-private.git
+```
+
+**第一台电脑**：如果 `~/.redcode/` 还不是 Git 仓库，可以这样开始。下面只选一个你愿意共享的 Soul 作为示例：
+
+```powershell
+cd ~/.redcode
+git init -b main
+git add -- .gitignore souls/karina.md
+git diff --cached
+```
+
+确认暂存内容不含密钥或私人对话后，在 GitHub 上创建一个空的 **Private** 仓库，再提交并推送：
+
+```powershell
+git commit -m "Add shared RedSpace settings"
+git remote add origin (Read-Host "粘贴私有仓库的 Git 地址")
 git push -u origin main
-
-# 第二台电脑：克隆
-cd ~
-git clone https://github.com/你的用户名/redcode-private.git .redcode
-git clone https://github.com/JiaHuiRed/RedCode.git
 ```
 
-之后只用 `git add <具体文件>` 暂存确认可共享的内容，例如 `git add souls/karina.md`。`.gitignore` 不会自动移除已经被 Git 跟踪的文件，同步前要检查暂存内容；共享配置中也不能包含 `provider.options.apiKey` 等真实密钥。
+已有配置仓库就沿用原分支和远端，不必重新初始化。以后也按文件名暂存，不要整目录添加；`.gitignore` 不能排除已经被跟踪的文件。
 
-日常同步：
-
-```bash
-# 在家：改完就推
-cd RedCode && git push
-cd ~/.redcode && git push
-
-# 在公司：先拉
-cd RedCode && git pull
-cd ~/.redcode && git pull
-```
+**第二台电脑**：如果 `~/.redcode/` 尚不存在，在用户主目录用 `git clone <私有仓库地址> .redcode` 克隆。若目录已有配置，先克隆到别处，再合并想共享的文件，不要覆盖旧档案。同步个人配置不需要向 RedSpace 源码仓库推送。
 
 #### 机器本地覆盖层（避免两台机器来回改）
 
-同步 `~/.redcode/` 会遇到一个必然的问题：配置里有些值**天生因机而异**——某个 MCP 的绝对安装路径、按显存挑的本地模型档位、只有一台机器装了的服务。它们一旦写进被同步的 `redcode.jsonc`，就会进入死循环：这台机改好推上去，另一台拉下来直接报错（路径不存在，MCP 启动失败）；在另一台改回来，轮到这台报错。
-
-解法是把这类值下沉到 `~/.redcode/redcode.local.jsonc`，它加载在 `redcode.jsonc` 之后、优先级更高，且不进版本库：
+MCP 程序的绝对路径和按显存选择的模型可能每台电脑都不同。这类设置写在 `~/.redcode/redcode.local.jsonc`。它覆盖全局 `redcode.jsonc` 中的同名设置，不随私仓同步：
 
 ```jsonc
 // ~/.redcode/redcode.local.jsonc —— 只在这台机器上生效
@@ -740,18 +714,11 @@ cd ~/.redcode && git pull
 }
 ```
 
-在 `~/.redcode/.gitignore` 里加上：
-
-```
-redcode.local.json
-redcode.local.jsonc
-```
-
-判断标准很简单：**这个值换台机器还成立吗？** 不成立就放本地层。同步文件里只留机器无关的东西——provider、权限规则、以及用 `$REDCODE_ROOT` 表达的相对路径命令。
+共享配置里只留换台机器仍能使用的设置，例如权限规则。API 密钥即使两台机器都要用，也不要写进同步文件。
 
 ### 10.3 跨平台注意事项
 
-RedCode 目前主要在 Windows 10/11 上开发和测试。跨平台兼容性问题欢迎提交 PR。
+RedSpace 目前主要在 Windows 10/11 上开发和测试。跨平台兼容性问题欢迎提交 PR。
 
 ---
 
