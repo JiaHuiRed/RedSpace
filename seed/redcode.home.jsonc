@@ -22,7 +22,9 @@
       "command": ["uvx", "jcodemunch-mcp"],
       "environment": { "JCODEMUNCH_USE_AI_SUMMARIES": "false", "PYTHONIOENCODING": "utf-8" },
       "timeout": 300000,
-      "description": "代码符号检索/仓库理解首选——找定义、调用链、改动影响面比 grep 准（search_symbols/search_text/get_symbol_source/get_file_outline/find_references/find_importers 等）。改代码前先用它摸清依赖，grep/read 兜底。",
+      // 261128 Red mcp 块没有 description 字段（见 src/config/mcp.ts 的 Local/Remote）：写在这里
+      // 不影响模型，模型看到的是 MCP 服务 tools/list 返回的那份。以下各家说明统一留作注释。
+      // 说明：代码符号检索/仓库理解首选——找定义、调用链、改动影响面比 grep 准（search_symbols/search_text/get_symbol_source/get_file_outline/find_references/find_importers 等）。改代码前先用它摸清依赖，grep/read 兜底。
       "enabled": true,
       "tools": [
         "index_repo",
@@ -50,7 +52,7 @@
     "markitdown": {
       "type": "local",
       "command": ["markitdown-mcp"],
-      "description": "把 Office/PDF 等非纯文本文档转 Markdown 供 LLM 读——read 读不了的二进制文档（.docx/.xlsx/.pptx/.pdf）用它提取文本；纯文本/代码仍用 read。",
+      // 说明：把 Office/PDF 等非纯文本文档转 Markdown 供 LLM 读——read 读不了的二进制文档（.docx/.xlsx/.pptx/.pdf）用它提取文本；纯文本/代码仍用 read。
       // 261111 Karina 懒启动：低频工具不值得每次开机 spawn 握手。缓存非空才 defer，
       // 首次调用触发连接；没有缓存自动退回 eager（工具表不会缺一组）。
       "startup": "lazy",
@@ -60,7 +62,7 @@
       "type": "local",
       "command": ["node", "./webqa-server/index.js"],
       "cwd": "$REDCODE_ROOT",
-      "description": "WebQA v1.4.0 浏览器自动化与视觉验证（Playwright headless）——webqa_interact 跨调用保留页面状态；先 observe 拿 aria 语义快照（带 [ref=sXeY]），再用 aria-ref 定位。支持 click/fill/type/press、clickAt 坐标点击（canvas/终端等自绘控件）、drag 坐标拖拽（真实鼠标管道 move→down→move(steps)→up，指针捕获语义全真，量法同 clickAt）、scroll、hover、waitFor（selector/loadState/url）、tab 多标签（list/new/switch/close）、selector 限定的 observe 与元素截图；单步失败保留已执行结果和 error。截图落 Temp/webqa，多模态主模型直接 read 读图。替代旧 browsermcp（已移除）。",
+      // 说明：WebQA v1.4.0 浏览器自动化与视觉验证（Playwright headless）——webqa_interact 跨调用保留页面状态；先 observe 拿 aria 语义快照（带 [ref=sXeY]），再用 aria-ref 定位。支持 click/fill/type/press、clickAt 坐标点击（canvas/终端等自绘控件）、drag 坐标拖拽、scroll、hover、waitFor、tab 多标签、selector 限定的 observe 与元素截图；单步失败保留已执行结果和 error。截图落 Temp/webqa，多模态主模型直接 read 读图。替代旧 browsermcp（已移除）。
       "timeout": 120000,
       "enabled": true,
     },
@@ -68,7 +70,7 @@
       "type": "local",
       "command": ["node", "./seed/search-server/index.js"],
       "cwd": "$REDCODE_ROOT",
-      "description": "联网搜实时信息——知识截止后的新事物、最新文档/版本、外部事实查证时用；本地代码问题用 jcodemunch/grep，不要搜网。",
+      // 说明：联网搜实时信息——知识截止后的新事物、最新文档/版本、外部事实查证时用；本地代码问题用 jcodemunch/grep，不要搜网。
       "timeout": 120000,
       "enabled": true,
     },
@@ -78,7 +80,7 @@
       "type": "local",
       "command": ["bun", "./plugins/mcp-su-prememory-local/src/index.ts"],
       "cwd": "$REDCODE_ROOT",
-      "description": "本机记忆库（SQLite+FTS5，就是 ~/.redcode/supermemory.db，与 MEMORY.md 同一份）——list-memories 分页列全量（审计/清理），recall 按语义查全文、stats 看条目分布。召回主通道是 memory-recall 插件注入 + sqlite_query 直查，所以白名单只暴露 list-memories（260830 吸收上游，其他工具维持隐藏）；写入仍用 MEMORY.md 索引行 + 库全文双写，别直接写这边。",
+      // 说明：本机记忆库（SQLite+FTS5，就是 ~/.redcode/supermemory.db，与 MEMORY.md 同一份）——list-memories 分页列全量（审计/清理），recall 按语义查全文、stats 看条目分布。召回主通道是 memory-recall 插件注入 + sqlite_query 直查，所以白名单只暴露 list-memories（260830 吸收上游，其他工具维持隐藏）；写入仍用 MEMORY.md 索引行 + 库全文双写，别直接写这边。
       // 261111 Red 与 live 对齐：260830 吸收上游后只暴露 list-memories（原 260807「零调用留空」已过时）
       "tools": ["list-memories"],
       "enabled": true,
@@ -87,7 +89,7 @@
       "type": "local",
       "command": ["bun", "./plugins/mcp-process-mgmt/src/index.ts"],
       "cwd": "$REDCODE_ROOT",
-      "description": "管理交互式/长驻 shell 会话（REPL、dev server、需 stdin 的进程）：start_process 起 pipe 会话，pty_spawn 起真 PTY 会话（交互式程序首选）；send_input/pty_write 写输入（pty_write 支持 \\x03 等转义序列），read_process_output/pty_read 读输出（pty_read 增量读 + ANSI 剥除 + regex 过滤），stop_process/pty_kill 终止，pty_wait 等退出。一次性命令仍用 bash。",
+      // 说明：管理交互式/长驻 shell 会话（REPL、dev server、需 stdin 的进程）：start_process 起 pipe 会话，pty_spawn 起真 PTY 会话（交互式程序首选）；send_input/pty_write 写输入（pty_write 支持 \x03 等转义序列），read_process_output/pty_read 读输出（pty_read 增量读 + ANSI 剥除 + regex 过滤），stop_process/pty_kill 终止，pty_wait 等退出。一次性命令仍用 bash。
       // 261111 Red 与 live 对齐：固定前缀瘦身时禁掉 pty_resize（90 天零调用），模板同样不发。
       "disabledTools": ["pty_resize"],
       "enabled": true,
@@ -95,7 +97,7 @@
     "fff": {
       "type": "local",
       "command": ["fff-mcp"],
-      "description": "文件名/内容高速检索——fff_find_files 按名字模糊找文件（支持路径前缀与 glob 约束），fff_grep 单模式、fff_multi_grep 多模式 OR 查内容（约束语法可按 *.ts / src/ 预筛）。大范围找东西优先它，比原生 glob/grep 快；已知精确路径直接 read。",
+      // 说明：文件名/内容高速检索——fff_find_files 按名字模糊找文件（支持路径前缀与 glob 约束），fff_grep 单模式、fff_multi_grep 多模式 OR 查内容（约束语法可按 *.ts / src/ 预筛）。大范围找东西优先它，比原生 glob/grep 快；已知精确路径直接 read。
       "enabled": true,
     },
     // 已移除/下沉：chrome-devtools（绝对路径，见本地层，日常用 WebQA 需要时手动开）、
