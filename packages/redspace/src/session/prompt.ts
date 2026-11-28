@@ -2375,8 +2375,14 @@ export const layer = Layer.effect(
           const modelMsgsCache = { sessionID, modelKey, messages: [...stabilizedMsgs] }
           if (sessionModelMsgs) sessionModelMsgs.set(modelKey, modelMsgsCache)
           else _caches.modelMsgs.set(sessionID, new Map([[modelKey, modelMsgsCache]]))
-          // Keep the legacy Soul-near-instructions placement. It now follows config instruction sources
-          // (formerly Soul preceded them); it remains before MCP/skills and is independently session-cached.
+          // 261128 Red 主 Code 的身份和相处契约放在 skills 后、日期前；Chat 和子任务沿用原顺序。
+          // docs/notes/implemented/architecture/2026-11-17-code-prompt-voice-ownership.md
+          const mainCode = !chatMode && !stepSettings.session.parentID
+          const identity = [
+            ...(soul.prompt ? [soul.prompt] : []),
+            // injection-registry: conversation-contract
+            ...(personalChat || stepSettings.session.parentID ? [] : [CONVERSATION]),
+          ]
           const system = [
             ...env,
             // 261120 Red Chat 只加载伙伴自己的一份 AGENTS：全局/项目工程 AGENTS 在 Chat 不注入。
@@ -2384,16 +2390,11 @@ export const layer = Layer.effect(
             // 决策见 docs/notes/implemented/architecture/2026-11-20-companion-agents.md
             ...(personalChat ? [companionAgents] : []),
             ...instructions,
-            ...(soul.prompt ? [soul.prompt] : []),
-            // 261117 Red 主会话共享相处契约，身份仍只取绑定 Soul；工具循环不重复追加。
-            // docs/notes/implemented/architecture/2026-11-17-soul-conversation-continuity.md
-            // injection-registry: conversation-contract
-            // 261120 Red Chat 最小前缀：绑定主 Chat 不再注入共享交流契约，规则收敛到 chat.md。
-            // docs/notes/implemented/architecture/2026-11-20-companion-prefix-v3.md
-            ...(personalChat || stepSettings.session.parentID ? [] : [CONVERSATION]),
+            ...(mainCode ? [] : identity),
             ...(companion ? [companion] : []),
             ...(mcpGuide ? [mcpGuide] : []),
             ...(skills ? [skills] : []),
+            ...(mainCode ? identity : []),
           ]
           // 260718 Red today's date lives here, not in the cached <env> block above - this
           // section runs fresh every turn (unlike env/instructions/skills, which are cached per

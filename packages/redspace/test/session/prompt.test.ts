@@ -147,6 +147,16 @@ function userMessageCount(body: Record<string, unknown>, text: string) {
   }).length
 }
 
+function expectSystemOrder(content: string, ...sections: string[]) {
+  let previous = -1
+  for (const section of sections) {
+    const at = content.indexOf(section)
+    expect(at).toBeGreaterThan(previous)
+    expect(content.lastIndexOf(section)).toBe(at)
+    previous = at
+  }
+}
+
 const mcp = Layer.succeed(
   MCP.Service,
   MCP.Service.of({
@@ -1159,6 +1169,7 @@ it.live("companion Chat recalls history, selectively saves a memory, and keeps C
         expect(prefix.content).not.toContain(CONVERSATION)
         expect(prefix.content.split(CHAT_PROMPT)).toHaveLength(2)
         expect(prefix.content).not.toContain("Search: query and limit")
+        expectSystemOrder(prefix.content, "Mira identity sentinel", "Shared practical capability sentinel")
         expect(JSON.stringify(requests[0].tools)).toContain("then read the needed source lines")
         for (const request of requests.slice(1, 4)) {
           expect((request.messages as unknown[])[0]).toEqual(prefix)
@@ -1228,14 +1239,18 @@ it.live("companion Chat recalls history, selectively saves a memory, and keeps C
         yield* Effect.addFinalizer(() => sessions.remove(code.id).pipe(Effect.orDie))
         yield* llm.text("The code is ready.")
         yield* prompt.prompt({ sessionID: code.id, model: ref, parts: [{ type: "text", text: "Review the code." }] })
-        const wire = JSON.stringify((yield* llm.inputs)[7])
-        expect(wire).toContain(JSON.stringify(CONVERSATION).slice(1, -1))
-        expect(wire.match(/# Conversation/g)).toHaveLength(1)
-        expect(wire).toContain("Code identity sentinel")
-        expect(wire).toContain("Engineering memory sentinel")
+        const request = (yield* llm.inputs)[7]
+        const wire = JSON.stringify(request)
+        expectSystemOrder(
+          (request.messages as { content: string }[])[0].content,
+          "Engineering memory sentinel",
+          "Shared practical capability sentinel",
+          "Code identity sentinel",
+          CONVERSATION,
+          "Today's date: ",
+        )
         expect(wire).toContain("ENGINEERING_PLUGIN_SENTINEL")
         expect(wire).toContain("ENGINEERING_RECALL_SENTINEL")
-        expect(wire).toContain("Shared practical capability sentinel")
         expect(wire).not.toContain("Mira identity sentinel")
         expect(wire).not.toContain("paper lantern")
         expect(wire).not.toContain("blue ribbon")
@@ -1250,8 +1265,13 @@ it.live("companion Chat recalls history, selectively saves a memory, and keeps C
           model: ref,
           parts: [{ type: "text", text: "Inspect the parser." }],
         })
-        const childWire = JSON.stringify((yield* llm.inputs)[8])
-        expect(childWire).toContain("Code identity sentinel")
+        const childRequest = (yield* llm.inputs)[8]
+        const childWire = JSON.stringify(childRequest)
+        expectSystemOrder(
+          (childRequest.messages as { content: string }[])[0].content,
+          "Code identity sentinel",
+          "Shared practical capability sentinel",
+        )
         expect(childWire).not.toContain("# Conversation")
         expect(childWire).not.toContain("companion_memory")
       }).pipe(provideInstance(codeDirectory))
