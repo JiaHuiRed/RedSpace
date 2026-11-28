@@ -171,9 +171,9 @@ expect(detect(t).kinds).toEqual([])
 })
 })
 
-describe("B 类：工具说明 / JSON schema 成片泄漏", () => {
-  // 取自哥哥 0.8.1 家用机截图的真实形态（DCP compress 工具说明）
-  const leak = [
+describe("旧 B 类猜测已移除：英文规则清单 / schema 段不再被误切", () => {
+  // 这几行旧 B 类会当 DCP 工具说明整段切掉，但用户写规则清单、接口说明时也会长这样。
+  const rules = [
     "让我先确认当前状态。",
     "",
     "Rules:",
@@ -193,13 +193,27 @@ describe("B 类：工具说明 / JSON schema 成片泄漏", () => {
     "}",
   ].join("\n")
 
-  test("成片 schema 被切掉，开头的真话保留", () => {
-    const r = detect(leak)
-    expect(r.kinds).toContain("tool-schema")
-    expect(r.stripped).toContain("让我先确认当前状态")
-    expect(r.stripped).not.toContain("Do not invent IDs")
-    expect(r.stripped).not.toContain("BATCHING")
-    expect(r.stripped).not.toContain('"startId"')
+  test("★不误切：英文规则清单与 schema 段原样保留", () => {
+    const r = detect(rules)
+    expect(r.kinds).toEqual([])
+    expect(r.stripped).toBe(rules)
+  })
+
+  test("★不误切：代码块里的英文规则不被削掉围栏", () => {
+    const t = [
+      "规则如下：",
+      "",
+      "```",
+      "RULES",
+      "- Always keep names readable.",
+      "- Never log credentials.",
+      "```",
+      "",
+      "后续说明仍应保留。",
+    ].join("\n")
+    const r = detect(t)
+    expect(r.kinds).toEqual([])
+    expect(r.stripped).toBe(t)
   })
 
   test("★不误切：用户正常讨论 JSON 字段时不动", () => {
@@ -331,12 +345,14 @@ describe("C 类：DCP turn-nudge 指令复述（260810 G:\Game 实测）", () =>
 })
 
 describe("组合与幂等", () => {
-  test("A 类与 B 类同时出现，两类都记录", () => {
+  test("A 类剥离后，旁边的英文规则清单原样保留", () => {
     const t =
       "<system-reminder>x</system-reminder>\nRules:\n- Do not invent IDs.\n- IDs must exist in the current visible context.\n- Pick startId and endId directly."
     const r = detect(t)
-    expect(r.kinds).toContain("system-reminder")
-    expect(r.kinds).toContain("tool-schema")
+    expect(r.kinds).toEqual(["system-reminder"])
+    expect(r.stripped).toBe(
+      "Rules:\n- Do not invent IDs.\n- IDs must exist in the current visible context.\n- Pick startId and endId directly.",
+    )
   })
 
   test("剥完再跑一次不再变化（幂等）", () => {
