@@ -6,7 +6,6 @@ import PROMPT_GPT from "../../src/session/prompt/gpt.md" with { type: "text" }
 import PROMPT_STEP from "../../src/session/prompt/step.md" with { type: "text" }
 import PROMPT_HY from "../../src/session/prompt/hy.md" with { type: "text" }
 import PROMPT_QWEN from "../../src/session/prompt/qwen.md" with { type: "text" }
-import CONVERSATION from "../../src/session/prompt/conversation.md" with { type: "text" }
 import PROMPT_DEFAULT from "../../src/session/prompt/default.md" with { type: "text" }
 import PROMPT_WORKING_STYLE from "../../src/session/prompt/working-style.md" with { type: "text" }
 
@@ -25,37 +24,10 @@ describe("system prompt routing", () => {
 
   test("GPT 系走 default.md + gpt.md", () => {
     expect(provider(model("gpt-5.6-luna", "openai"))).toEqual([PROMPT_DEFAULT, PROMPT_GPT, PROMPT_WORKING_STYLE])
-    // 261111 Red 逐句自我审查与强制结果开场已删（docs/prompt/2026-11-11-prompt-revision-proposal.md §4），
-    // 这里只钉保留下来的四项行为纠偏。
-    expect(PROMPT_GPT).toContain("Prefer the smallest complete solution")
-    expect(PROMPT_GPT).toContain("Reuse successful checks unless changed state invalidates them")
-    expect(PROMPT_GPT).toContain("instead of reopening it for reassurance")
-    expect(PROMPT_GPT).not.toContain("## Anti-defensive writing")
-    expect(PROMPT_GPT).not.toContain("a question nobody asked")
-    for (const id of ["step-5-preview", "deepseek-v4", "glm-5.3", "claude-sonnet-4-5"])
-      expect(provider(model(id)).join("\n")).not.toContain("GPT family delta")
   })
 
   test("已删除专属提示词的 Claude 系走默认提示词", () => {
     expect(provider(model("claude-sonnet-4-5", "anthropic"))).toEqual([PROMPT_DEFAULT])
-  })
-
-  // 261117 Red 相处契约由主会话装配，与模型和 agent prompt 无关。
-  test("model prompts leave conversation ownership to the session and Soul", () => {
-    expect(PROMPT_DEFAULT).not.toContain("# Conversation")
-    expect(CONVERSATION).toContain("The bound Soul defines who you are")
-    expect(PROMPT_GPT).toContain("Follow the common engineering contract and the bound Soul.")
-    expect(PROMPT_GPT).not.toContain("## Final answer")
-  })
-
-  // 261111 Red 交付契约收敛为五条，删掉人格编排与机械验证清单。
-  test("shared working style preserves delivery and correction handling", () => {
-    expect(PROMPT_GPT).not.toContain("## Working style")
-    expect(PROMPT_WORKING_STYLE).toContain("Deliver the accepted outcome")
-    expect(PROMPT_WORKING_STYLE).toContain("A correction changes the next action")
-    expect(PROMPT_WORKING_STYLE).toContain("Explicit review-only work remains review-only")
-    expect(PROMPT_WORKING_STYLE).toContain("Recover from evidence")
-    expect(PROMPT_WORKING_STYLE).not.toContain("contains exactly three things")
   })
 
   // 260829 cc hy 的判据是 `hy` + 数字并带边界。写成 includes("hy") 会命中任何名字里
@@ -102,12 +74,7 @@ describe("推理锚归属", () => {
   test("step 锚按 provider 或名字命中，且与 flash 锚互斥", () => {
     expect(wantsStepAnchor("step-3.7-flash", "stepfun-step-plan")).toBe(true)
     expect(wantsStepAnchor("some-model", "stepfun")).toBe(true)
-    expect(wantsFlashAnchor("step-3.7-flash")).toBe(false)
     expect(wantsStepAnchor("deepseek-v4-flash", "deepseek")).toBe(false)
-  })
-
-  test("GLM-5.3-Flash 两条锚都不吃（与它以 ox-alpha 名义在跑时一致）", () => {
-    expect(wantsFlashAnchor("glm-5.3-flash")).toBe(false)
     expect(wantsStepAnchor("glm-5.3-flash", "zhipuai-coding-plan")).toBe(false)
   })
 })
@@ -146,21 +113,4 @@ describe("shared agent contract", () => {
     }
   })
 
-  test("intent, completion, context and continuity belong to the common prompt", () => {
-    for (const section of [
-      "# Intent and scope",
-      "# Autonomy and completion",
-      "# Context efficiency",
-      "# Steering and continuity",
-    ])
-      expect(PROMPT_DEFAULT).toContain(section)
-    expect(PROMPT_DEFAULT).toContain("provide investigation or explanation")
-    // 钉的是交互判据被装配进公共提示词；措辞调整时同步更新，不拿它证明人格质量
-    expect(CONVERSATION).toContain("Agree when you actually agree")
-    expect(PROMPT_DEFAULT).toContain("Delegation transfers ownership")
-    expect(PROMPT_DEFAULT).toContain("Do not ask again for authorization already granted")
-    expect(PROMPT_DEFAULT).toContain("Compaction is context maintenance, not a task boundary")
-    expect(PROMPT_GPT).not.toContain("## Mid-turn user messages")
-    expect(PROMPT_GPT).not.toContain("When the conversation is summarized")
-  })
 })

@@ -157,7 +157,6 @@ describe("prompt-pin", () => {
     await PromptPin.flush()
     const pin = PromptPin.load("ses_m")
     expect(pin!.nativeRevision).toBe("rev-7")
-    expect(pin!.messages).toEqual(Object.fromEntries(parts))
     // 逐字节比对是前缀稳定的硬要求：恢复后的 parts 必须与落盘时完全相同
     expect(JSON.stringify(pin!.messages)).toBe(JSON.stringify(Object.fromEntries(parts)))
   })

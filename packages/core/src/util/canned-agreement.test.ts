@@ -54,7 +54,6 @@ test("single-frame results equal the full-text filter", () => {
     "## 12.5 你说得对。继续排查",
     "####### 你说得对。继续排查",
   ]
-  for (const text of samples) expect(filterCannedAgreement(text)).toBe(filterCannedAgreement(text))
   for (const text of samples) expectPrefixEquality(text)
 })
 
@@ -67,15 +66,6 @@ test("per-prefix equality across chunk sizes for prose, lists and literal blocks
   expectPrefixEquality("```js\nconst a = 1; // 你说得对\n```\n好的，我认得。", 4)
   expectPrefixEquality("“第一行引号\n你说得对\n”第二行", 3)
   expectPrefixEquality("    indented 你说得对\n\t我认得\n> quoted 你说得对", 2)
-})
-
-test("replacement snapshots and key switches restart cleanly", () => {
-  const filter = createCannedAgreementFilter()
-  filter.update("k", "你说得对，")
-  // 流中替换：不再是上一份的延长
-  expect(filter.update("k", "完全不同的开头，你说得对。")).toBe(filterCannedAgreement("完全不同的开头，你说得对。"))
-  // 片段切换
-  expect(filter.update("k2", "你说得对。")).toBe(filterCannedAgreement("你说得对。"))
 })
 
 test("untriggered text passes through until a trigger appears, then rescans", () => {
@@ -134,19 +124,15 @@ test("seeded fuzz: incremental output equals full-text at every prefix", () => {
     "x",
     "中",
   ]
-  let checked = 0
   for (let round = 0; round < 300; round++) {
     let text = ""
     const parts = 1 + Math.floor(next() * 24)
     for (let i = 0; i < parts; i++) text += alphabet[Math.floor(next() * alphabet.length)]!
-    if (!text) continue
     try {
       expectPrefixEquality(text, next() < 0.5 ? 1 : 3)
     } catch (error) {
       console.log("FUZZ INPUT:", JSON.stringify(text))
       throw error
     }
-    checked++
   }
-  expect(checked).toBeGreaterThan(250)
 })

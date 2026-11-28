@@ -393,12 +393,6 @@ describe("file/index Filesystem patterns", () => {
         expect(yield* failureMessage(read("../outside.txt"))).toContain("Access denied")
       }),
     )
-
-    it.instance("throws for paths outside project directory", () =>
-      Effect.gen(function* () {
-        expect(yield* failureMessage(read("../outside.txt"))).toContain("Access denied")
-      }),
-    )
   })
 
   describe("status()", () => {

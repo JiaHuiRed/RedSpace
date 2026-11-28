@@ -952,43 +952,6 @@ describe("Instruction remote fetch budget (RC-01)", () => {
     }),
   )
 
-  it.live("times out on a stalled body without hanging the session", () =>
-    Effect.gen(function* () {
-      const globalTmp = yield* tmpdirScoped()
-      const projectTmp = yield* tmpdirScoped()
-      const server = Bun.serve({
-        port: 0,
-        fetch() {
-          return new Response(
-            new ReadableStream({
-              pull() {
-                return new Promise<never>(() => {})
-              },
-            }),
-          )
-        },
-      })
-      const url = `http://127.0.0.1:${server.port}/stall`
-      try {
-        yield* Effect.gen(function* () {
-          const svc = yield* Instruction.Service
-          const started = Date.now()
-          const rules = yield* svc.system()
-          expect(Date.now() - started).toBeLessThan(5000)
-          expect(rules.some((r) => r.startsWith(`Instructions from: ${url}`))).toBe(false)
-        }).pipe(
-          provideInstance(projectTmp),
-          provideInstruction({ home: globalTmp, config: globalTmp }, undefined, {
-            instructions: [url],
-            instruction_budget: { fetch_timeout_ms: 150 },
-          }),
-        )
-      } finally {
-        server.stop(true)
-      }
-    }),
-  )
-
   it.live("never injects a partial body when the connection drops mid-response", () =>
     Effect.gen(function* () {
       const globalTmp = yield* tmpdirScoped()

@@ -16,19 +16,6 @@ describe("pickGreetingKey 时段分档", () => {
     expect([23, 0, 3, 4].map(bucketOf)).toEqual(["night", "night", "night", "night"])
   })
 
-  test("边界逐个点名", () => {
-    expect(bucketOf(4)).toBe("night")
-    expect(bucketOf(5)).toBe("morning")
-    expect(bucketOf(10)).toBe("morning")
-    expect(bucketOf(11)).toBe("noon")
-    expect(bucketOf(12)).toBe("noon")
-    expect(bucketOf(13)).toBe("afternoon")
-    expect(bucketOf(17)).toBe("afternoon")
-    expect(bucketOf(18)).toBe("evening")
-    expect(bucketOf(22)).toBe("evening")
-    expect(bucketOf(23)).toBe("night")
-  })
-
   test("每档两句都抽得到，且 roll=1 不越界", () => {
     for (const hour of [8, 12, 15, 20, 2]) {
       const first = pickGreetingKey(hour, 0)

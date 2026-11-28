@@ -46,11 +46,9 @@ describe("assistant display: canned assent only", () => {
     expect(frames.map(clean)).toEqual(["你", "你说", "你说得", "", "", "这里是我改错了。"])
   })
 
-  test("never modifies stored input and is idempotent", () => {
+  test("filtering the same output again is idempotent", () => {
     const raw = "哥哥，你说得对，我认。这里是我改错了。"
-    const copy = raw
     const filtered = clean(raw)
-    expect(raw).toBe(copy)
     expect(clean(filtered)).toBe(filtered)
   })
 })
