@@ -2,7 +2,7 @@
 
 [简体中文](README.md) · English
 
-[![Version](https://badgen.net/badge/Version/0.20.7/blue)](CHANGELOG.md)
+[![Version](https://badgen.net/badge/Version/0.20.8/blue)](CHANGELOG.md)
 [![Platform](https://badgen.net/badge/Platform/Windows%2010%2F11/green)](https://github.com/JiaHuiRed/RedCode)
 [![TypeScript](https://badgen.net/badge/TypeScript/7.x/3178c6)](https://typescriptlang.org)
 [![Bun](https://badgen.net/badge/Bun/1.3.x/fb6e19)](https://bun.sh)
