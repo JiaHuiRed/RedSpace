@@ -1,16 +1,9 @@
-Read a file or directory from the local filesystem. If the path does not exist, an error is returned.
+Read a file or directory from the local filesystem.
 
-Usage:
-
-- The filePath parameter should be an absolute path.
-- By default, this tool returns up to 2000 lines from the start of the file.
-- The offset parameter is the line number to start from (1-indexed).
-- To read later sections, call this tool again with a larger offset.
-- Use the grep tool to find specific content in large files or files with long lines.
-- If you are unsure of the correct file path, use the glob tool to look up filenames by glob pattern.
-- Contents are returned with each line prefixed by its line number as `<line>: <content>`. For example, if a file has contents "foo\n", you will receive "1: foo\n". For directories, entries are returned one per line (without line numbers) with a trailing `/` for subdirectories.
-- Any line longer than 2000 characters is truncated.
-- Call this tool in parallel when you know there are multiple files you want to read.
-- Avoid tiny repeated slices (30 line chunks). If you need more context, read a larger window.
-- This tool can read image files and PDFs and return them as file attachments.
-- For supported languages (TS/JS, Python, Go, Rust), the output includes a `<snippets>` section listing detected symbols (functions, classes, etc.) with snippet IDs. Use the `snippet` tool with a snippet ID to re-read just that symbol without reading the whole file again.
+- `filePath` is absolute. Defaults to the first 2000 lines; continue later sections with `offset` (1-indexed).
+- Output lines are prefixed `<line>: <content>`; lines over 2000 characters are truncated.
+- Directories list one entry per line, with a trailing `/` on subdirectories.
+- Use grep for specific content or long lines, glob when the path is unknown.
+- Batch parallel reads instead of tiny repeated slices (30-line chunks) — read a larger window.
+- Images and PDFs come back as attachments.
+- TS/JS, Python, Go, Rust output includes a `<snippets>` section; re-read one symbol with the `snippet` tool.

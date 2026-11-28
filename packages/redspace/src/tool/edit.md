@@ -1,55 +1,28 @@
-Performs exact string replacements in files.
+Performs exact string replacements in files. Two modes.
 
-Two modes of operation:
+### Hashline (preferred) — `input` parameter
 
-### Mode 1: Hashline (preferred) — use the `input` parameter
-
-Self-contained patch format using content-hash anchors. The Read tool returns a `[path#TAG]` header — use that tag and the file's line numbers to edit.
-
-Format (first line is required `[path#TAG]`, followed by operations):
+Self-contained patch anchored on the Read tool's `[path#TAG]` header:
 
 ```
-[path/to/file#A1B2]
-replace N..M:
-+ replacement line 1
-+ replacement line 2
-insert before N:
-+ inserted line
-insert after N:
-+ inserted line
-delete N..M
-insert head:
-+ content at start
-insert tail:
-+ content at end
-```
-
-Indented content — the space immediately after `+` is the separator and is NOT part of the content.
-To write a line that itself begins with two spaces, put three spaces after the `+`:
-
-```
-[path/to/file#A1B2]
+[path#A1B2]
 replace 3..4:
 +   const x = 1
 +   return x
+insert before 9:
++ new line
+delete 12..15
 ```
 
-That patch writes lines with exactly two leading spaces.
+- Line numbers are 1-indexed from the Read output, and every operation in one call refers to the original file (operations apply bottom-up, so earlier numbers stay valid).
+- Body lines start with `+ `. That first space is the separator, not content: a line needing N leading spaces takes N+1 spaces after the `+`. Miscounting shifts the whole line and still reports success.
+- `replace 7..7` replaces a single line.
+- TAG is a content hash. On mismatch the error returns the current content and its new TAG — rebuild the patch from that and retry directly; re-read only when no content came back.
 
-Rules:
+### Classic — `filePath` + `oldString` + `newString`
 
-- Body lines start with `+ ` (one space after the plus). That separator space is not content: a line whose content begins with N spaces needs N+1 spaces after the `+`. Miscounting shifts every written line one space to the left and still reports success — count carefully.
-- Line numbers are 1-indexed from the Read tool output
-- The TAG comes from the Read tool's `[path#TAG]` header — it's a content hash. If the file changed since you last read it, the edit will fail with a hash mismatch; re-read the file to get the current tag.
-- Supports multiple operations per file in one call
-- Operations are applied bottom-up so line numbers stay stable
-
-### Mode 2: Classic (legacy) — use `filePath` + `oldString` + `newString`
-
-- You must use your `Read` tool at least once in the conversation before editing. This tool will error if you attempt an edit without reading the file.
-- When editing text from Read tool output, ensure you preserve the exact indentation (tabs/spaces) as it appears AFTER the line number prefix (format `<line>: <content>` — defined in the Read tool description). Everything after that space is the actual file content to match. Never include any part of the line number prefix in the oldString or newString.
-- ALWAYS prefer editing existing files in the codebase. NEVER write new files unless explicitly required.
-- Only use emojis if the user explicitly requests it. Avoid adding emojis to files unless asked.
-- The edit will FAIL if `oldString` is not found in the file with an error "oldString not found in content". When this happens, the error includes a **fuzzy match suggestion** — the closest matching block found in the file, its similarity percentage, and a character-level diff. Use this feedback to re-read the file and adjust your oldString to match the actual content.
-- The edit will FAIL if `oldString` is found multiple times in the file with an error "Found multiple matches for oldString. Provide more surrounding lines in oldString to identify the correct match." Either provide a larger string with more surrounding context to make it unique or use `replaceAll` to change every instance of `oldString`.
-- Use `replaceAll` for replacing and renaming strings across the file. This parameter is useful if you want to rename a variable for instance.
+- Requires a prior Read in this session.
+- Match the exact text after the `<line>: ` prefix; never include the prefix itself.
+- A miss returns a fuzzy-match suggestion — adjust from it rather than guessing again.
+- If `oldString` appears multiple times, add surrounding context or set `replaceAll`.
+- Prefer editing existing files; never create new files unless required.

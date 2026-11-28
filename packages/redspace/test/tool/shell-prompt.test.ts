@@ -17,11 +17,11 @@ describe("shell prompt contracts", () => {
       expect(rendered.description).toContain("120000")
       expect(rendered.description).toContain("600000")
       expect(rendered.description).toContain("workdir")
-      expect(rendered.description).toContain("Only commit, amend, push")
       expect(rendered.description).toContain("stage only intended files")
       expect(rendered.description).toContain("do not amend the failed commit")
+      // 261128 Red 提交授权归 default.md，模板不再重复一遍。
+      expect(rendered.description).not.toContain("Only commit, amend, push")
       expect(Buffer.byteLength(rendered.description)).toBeLessThanOrEqual(4096)
-      expect(rendered.description).not.toContain("If the commands are independent and can run in parallel")
       const schema = ToolJsonSchema.fromSchema(rendered.parameters)
       for (const parameter of ["command", "timeout", "workdir", "description"])
         expect(schema.properties).toHaveProperty(parameter)

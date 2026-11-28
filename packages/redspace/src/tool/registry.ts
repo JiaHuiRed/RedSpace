@@ -506,17 +506,12 @@ export const layer = Layer.effect(
       const ctx = yield* InstanceState.context
       const list = yield* skill.available(agent, ctx.directory)
       if (list.length === 0) return "No skills are currently available."
+      // 261128 Red 去掉与 skill.md 重复的分段介绍：完整描述已在 <available_skills>，这里只留
+      // 名字来源与名字表（表尾截断时仍能给出全部合法值）。
       return [
-        "Load a specialized skill that provides domain-specific instructions and workflows.",
+        "Load a matching skill's full instructions and bundled-resource references.",
         "",
-        "When you recognize that a task matches one of the available skills, use this tool to load the full skill instructions.",
-        "",
-        "The skill will inject detailed instructions, workflows, and access to bundled resources (scripts, references, templates) into the conversation context.",
-        "",
-        'Tool output includes a `<skill_content name="...">` block with the loaded content.',
-        "",
-        "Each skill's full description is in the <available_skills> block of the system prompt — decide from there.",
-        "The names below are the valid values for the name parameter:",
+        "Each skill's full description is in the <available_skills> block of the system prompt — decide from there. The names below are the valid values for the name parameter:",
         "",
         Skill.fmt(list, { verbose: false, namesOnly: true }),
       ].join("\n")

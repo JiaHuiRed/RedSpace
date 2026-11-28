@@ -1,18 +1,3 @@
-Read the current task list for this session from persistent storage. Returns the full list of todos with their status and priority for the current session.
+Read the current session's task list from persistent storage. Use after compaction or a reset to restore what is done and what remains, or when the list is no longer visible in the conversation.
 
-## When to use
-
-- After `compress` to re-read what's been done and what's remaining
-- After conversation resets or context compaction
-- When you need to restore task context without relying on conversation history
-- Before starting new work to check for in-progress items
-- At session start to pick up where you left off
-
-## When NOT to use
-
-- When the todo list is already visible in recent conversation history
-- For non-todo related state queries (use other tools)
-
-## Output
-
-Returns the complete list of todos with fields: `content`, `status` (pending/in_progress/completed/cancelled), `priority` (high/medium/low), and optional `id`/`parent_id` for nested sub-tasks. Includes a summary line showing total, done, active, and pending counts.
+Returns every todo with `content`, `status`, `priority`, and optional `id`/`parent_id`, plus a summary of totals.
