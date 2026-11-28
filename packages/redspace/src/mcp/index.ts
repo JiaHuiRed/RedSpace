@@ -385,28 +385,33 @@ function listTools(key: string, client: MCPClient, timeout: number) {
   )
 }
 
-// Convert MCP tool definition to AI SDK Tool type
-// 260807 Red: client 参数改为 getClient 闭包——断线重连（reconnectServer→storeClient）会换新 client，
-// 旧实现 execute 捕获当时的 client 引用，超时重连后仍指向已 close 的旧 client → 重试永远 Not connected。
-// 261008 Red: 调用体抽成 mcpToolExecute 供连接版与缓存 stub 共用，stub 只在执行前多一步有界等待。
+// 261128 Red 每次发送读当前连接及其工具声明，不沿用旧缓存或已替换的 client。
+// docs/notes/implemented/bug-fix/2026-11-28-mcp-replay.md
 function mcpToolExecute(
   mcpTool: MCPToolDef,
   serverName: string,
-  getClient: () => MCPClient | undefined,
+  state: State,
   reconnectFn: (() => Promise<void>) | undefined,
   timeout: number | undefined,
   retryMode: McpRetry.Mode | undefined,
 ) {
-  return async (args: unknown, toolOptions?: { abortSignal?: AbortSignal }) =>
-    McpRetry.run({
+  return (args: unknown, toolOptions?: { abortSignal?: AbortSignal }) => {
+    let replaySafe = false
+    return McpRetry.run({
       mode: retryMode,
+      get replaySafe() {
+        return replaySafe
+      },
       signal: toolOptions?.abortSignal,
       call: async () => {
-        // 260807 Red: 每次调用从 clients 表取最新 client（s.clients[name] 由 storeClient 更新）
-        const client = getClient()
-        if (!client) {
-          throw new Error(`MCP server "${serverName}" is not connected`)
+        const client = state.clients[serverName]
+        if (!client?.transport || state.invalid.get(serverName) === client) {
+          throw new McpRetry.NotSentError(`MCP server "${serverName}" is not connected`)
         }
+        const hints = state.defs[serverName]?.find((tool) => tool.name === mcpTool.name)?.annotations
+        const wasRetry = replaySafe
+        replaySafe = hints?.readOnlyHint === true || hints?.idempotentHint === true
+        if (wasRetry && !replaySafe) throw new Error("MCP tool no longer declares replay safety; call was not retried.")
         // 260603 Red 进度推送：实时记录 MCP 工具调用进度
         let progressLog = ""
         return await client.callTool(
@@ -425,7 +430,16 @@ function mcpToolExecute(
             timeout,
             signal: toolOptions?.abortSignal,
           },
-        )
+        ).catch((error: unknown) => {
+          if (replaySafe || toolOptions?.abortSignal?.aborted) throw error
+          const timedOut = error instanceof McpError && error.code === ErrorCode.RequestTimeout
+          if (error instanceof McpError && error.code !== ErrorCode.ConnectionClosed && !timedOut) throw error
+          if (retryMode !== "none" && !timedOut && state.clients[serverName] === client)
+            state.invalid.set(serverName, client)
+          throw new Error("MCP tool may have already executed. Result unknown; not retried. Check before repeating.", {
+            cause: error,
+          })
+        })
       },
       reconnect: reconnectFn,
       onFailure: ({ error, attempt }) => {
@@ -439,15 +453,16 @@ function mcpToolExecute(
         })
       },
     })
+  }
 }
 
 function convertMcpTool(
   mcpTool: MCPToolDef,
-  getClient: () => MCPClient | undefined,
+  state: State,
   serverName: string,
-  reconnectFn?: () => Promise<void>,
-  timeout?: number,
-  retryMode?: McpRetry.Mode,
+  reconnectFn: (() => Promise<void>) | undefined,
+  timeout: number | undefined,
+  retryMode: McpRetry.Mode | undefined,
 ): Tool {
   const inputSchema = mcpTool.inputSchema
 
@@ -462,7 +477,7 @@ function convertMcpTool(
   return dynamicTool({
     description: mcpTool.description ?? "",
     inputSchema: jsonSchema(schema),
-    execute: mcpToolExecute(mcpTool, serverName, getClient, reconnectFn, timeout, retryMode),
+    execute: mcpToolExecute(mcpTool, serverName, state, reconnectFn, timeout, retryMode),
   })
 }
 
@@ -545,7 +560,7 @@ function convertMcpToolCached(
   mcpTool: MCPToolDef,
   serverName: string,
   waitUntilConnected: (signal?: AbortSignal) => Promise<boolean>,
-  getClient: () => MCPClient | undefined,
+  state: State,
   reconnectFn: (() => Promise<void>) | undefined,
   timeout: number | undefined,
   retryMode: McpRetry.Mode | undefined,
@@ -557,14 +572,16 @@ function convertMcpToolCached(
     properties: (inputSchema.properties ?? {}) as JSONSchema7["properties"],
     additionalProperties: false,
   }
-  const call = mcpToolExecute(mcpTool, serverName, getClient, reconnectFn, timeout, retryMode)
+  const call = mcpToolExecute(mcpTool, serverName, state, reconnectFn, timeout, retryMode)
   return dynamicTool({
     description: mcpTool.description ?? "",
     inputSchema: jsonSchema(schema),
     execute: async (args: unknown, toolOptions?: { abortSignal?: AbortSignal }) => {
       const connected = await waitUntilConnected(toolOptions?.abortSignal)
-      if (!connected) {
-        throw new Error(`MCP server "${serverName}" is not connected. Tools from disk cache are read-only.`)
+      if (!connected && !(state.status[serverName]?.status === "failed" && state.invalid.has(serverName))) {
+        throw new McpRetry.NotSentError(
+          `MCP server "${serverName}" is not connected. Tools from disk cache are read-only.`,
+        )
       }
       return call(args, toolOptions)
     },
@@ -637,6 +654,8 @@ interface State {
   disposed: boolean
   // 261104 Red 重连退避预算（按服务器）：见 mcp/reconnect-policy.ts
   reconnect: Map<string, McpReconnectPolicy.Budget>
+  // 261128 Red 结果未知且不可重放的调用把客户端移出轮换；下一次调用按现有 reconnect 路径恢复。
+  invalid: Map<string, MCPClient>
 }
 
 export interface Interface {
@@ -1055,6 +1074,7 @@ export const layer = Layer.effect(
           requests: new Map(),
           disposed: false,
           reconnect: new Map(),
+          invalid: new Map(),
         }
 
         const connectAll = Effect.forEach(
@@ -1268,6 +1288,7 @@ export const layer = Layer.effect(
         log.info("mcp reconnected after failure", { key: name, previousError: previous.error, phase: "startup" })
       }
       s.clients[name] = client
+      s.invalid.delete(name)
       s.defs[name] = listed
       const rawReconnect = client.getInstructions()?.trim()
       const reconnectInstructions = rawReconnect ? capInstructions(rawReconnect) : undefined
@@ -1452,6 +1473,7 @@ export const layer = Layer.effect(
     const disconnect = Effect.fn("MCP.disconnect")(function* (name: string) {
       const s = yield* InstanceState.get(state)
       s.requests.delete(name)
+      s.invalid.delete(name)
       // 261104 Red 手动断开清掉退避预算：下次 connect 立即重试，不被旧失败次数挡住
       s.reconnect.delete(name)
       if (s.creating.has(name)) s.cancelled.add(name)
@@ -1497,9 +1519,8 @@ export const layer = Layer.effect(
               if (allow && !allow.includes(mcpTool.name)) continue
               if (disabled?.includes(mcpTool.name)) continue
               result[sanitize(clientName) + "_" + sanitize(mcpTool.name)] = convertMcpTool(
-                // 260807 Red: 传 getClient 闭包而非 client 引用——s.clients[name] 重连后由 storeClient 换新
                 mcpTool,
-                () => s.clients[clientName],
+                s,
                 clientName,
                 doReconnect,
                 timeout,
@@ -1547,7 +1568,7 @@ export const layer = Layer.effect(
             mcpTool,
             serverName,
             waitUntilConnected,
-            () => s.clients[serverName],
+            s,
             cachedReconnect,
             cachedTimeout,
             entry.retry,

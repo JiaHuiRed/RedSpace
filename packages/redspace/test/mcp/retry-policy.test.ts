@@ -29,14 +29,15 @@ describe("MCP retry policy", () => {
     expect(reconnects).toBe(0)
   })
 
-  test("default mode preserves three attempts and two reconnects", async () => {
+  test("default mode preserves three attempts and two reconnects for calls known not to be delivered", async () => {
     let calls = 0
     let reconnects = 0
 
     const result = await McpRetry.run({
       call: async () => {
         calls += 1
-        throw new Error("temporary transport failure")
+        // 调用点自己抛出（client 缺失/缓存 stub 等不到连接），请求从未交给 transport，重放安全。
+        throw new McpRetry.NotSentError("not connected")
       },
       reconnect: async () => {
         reconnects += 1
@@ -117,6 +118,7 @@ describe("MCP retry policy", () => {
     })
 
     const task = McpRetry.run({
+      replaySafe: true,
       signal: controller.signal,
       call: async () => {
         calls += 1

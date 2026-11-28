@@ -2,6 +2,7 @@ import { expect, mock, beforeEach } from "bun:test"
 import { Cause, Effect, Exit, Fiber, Option } from "effect"
 import fs from "node:fs"
 import path from "node:path"
+import { ErrorCode, McpError } from "@modelcontextprotocol/sdk/types.js"
 import type { MCP as MCPNS } from "../../src/mcp/index"
 import { Global } from "@redcode-ai/core/global"
 import { pollWithTimeout, testEffect } from "../lib/effect"
@@ -12,7 +13,13 @@ import { CrossSpawnSpawner } from "@redcode-ai/core/cross-spawn-spawner"
 
 // Per-client state for controlling mock behavior
 interface MockClientState {
-  tools: Array<{ name: string; description?: string; inputSchema: object; outputSchema?: object }>
+  tools: Array<{
+    name: string
+    description?: string
+    inputSchema: object
+    outputSchema?: object
+    annotations?: { readOnlyHint?: boolean; idempotentHint?: boolean }
+  }>
   listToolsCalls: number
   requestCalls: number
   listToolsShouldFail: boolean
@@ -22,6 +29,7 @@ interface MockClientState {
   callToolCalls: number
   callToolSignals: Array<AbortSignal | undefined>
   callToolShouldFail: boolean
+  callToolError?: Error
   prompts: Array<{ name: string; description?: string }>
   resources: Array<{ name: string; uri: string; description?: string }>
   closed: boolean
@@ -45,7 +53,15 @@ function getOrCreateClientState(name?: string): MockClientState {
   let state = clientStates.get(key)
   if (!state) {
     state = {
-      tools: [{ name: "test_tool", description: "A test tool", inputSchema: { type: "object", properties: {} } }],
+      tools: [
+        {
+          name: "test_tool",
+          description: "A test tool",
+          inputSchema: { type: "object", properties: {} },
+          // 261128 Red 显式只读提示：既有「断线可重试并能取消」用例依赖失败后的自动重放。
+          annotations: { readOnlyHint: true },
+        },
+      ],
       listToolsCalls: 0,
       requestCalls: 0,
       listToolsShouldFail: false,
@@ -177,7 +193,7 @@ void mock.module("@modelcontextprotocol/sdk/client/index.js", () => ({
       if (this._state) {
         this._state.callToolCalls++
         this._state.callToolSignals.push(options?.signal)
-        if (this._state.callToolShouldFail) throw new Error("tool call failed")
+        if (this._state.callToolShouldFail) throw this._state.callToolError ?? new Error("tool call failed")
       }
       return { content: [], isError: false }
     }
@@ -441,6 +457,58 @@ it.instance(
           enabled: true,
           retry: "default",
         },
+      },
+    },
+  },
+)
+
+it.instance(
+  "a lost response on an unannotated tool executes once and the next call recovers",
+  () =>
+    MCP.Service.use((mcp: MCPNS.Interface) =>
+      Effect.gen(function* () {
+        lastCreatedClientName = "side-effect-server"
+        const serverState = getOrCreateClientState("side-effect-server")
+        serverState.tools = [
+          { name: "write_tool", description: "Writes something", inputSchema: { type: "object", properties: {} } },
+        ]
+
+        yield* pollWithTimeout(
+          mcp.status().pipe(Effect.map((s) => s["side-effect-server"]?.status === "connected" ? true : undefined)),
+          "side-effect MCP server never connected",
+        )
+
+        const tool = (yield* mcp.tools())["side-effect-server_write_tool"]
+        expect(tool?.execute).toBeDefined()
+        if (!tool?.execute) return
+        const options = {} as Parameters<typeof tool.execute>[1]
+
+        // 回包丢失（-32000）：请求可能已在服务端执行，未标注只读/幂等的工具不能被自动重放。
+        serverState.callToolShouldFail = true
+        serverState.callToolError = new McpError(ErrorCode.ConnectionClosed, "Connection closed")
+        const before = clientCreateCount
+        const first = yield* Effect.promise(() => tool.execute!({}, options)).pipe(Effect.exit)
+
+        expect(Exit.isFailure(first)).toBe(true)
+        if (Exit.isFailure(first)) {
+          const error = Cause.squash(first.cause)
+          expect(error instanceof Error ? error.message : String(error)).toContain("not retried")
+        }
+        expect(serverState.callToolCalls).toBe(1)
+        expect(clientCreateCount).toBe(before)
+
+        // 下一次新调用把失效客户端移出轮换，走现有 reconnect 路径恢复连接。
+        serverState.callToolShouldFail = false
+        serverState.callToolError = undefined
+        yield* Effect.promise(() => tool.execute!({}, options))
+        expect(serverState.callToolCalls).toBe(2)
+        expect(clientCreateCount).toBe(before + 1)
+      }),
+    ),
+  {
+    config: {
+      mcp: {
+        "side-effect-server": { type: "local", command: ["echo", "test"], enabled: true },
       },
     },
   },
