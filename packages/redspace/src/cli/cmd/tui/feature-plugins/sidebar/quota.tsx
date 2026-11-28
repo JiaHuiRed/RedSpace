@@ -1,17 +1,51 @@
 import type { TuiPlugin, TuiPluginApi } from "@redcode-ai/plugin/tui"
+import type { ProviderQuota, UserMessage } from "@redcode-ai/sdk/v2"
+import { useLocal } from "@tui/context/local"
 import type { InternalTuiPlugin } from "../../plugin/internal"
 import { createMemo, createSignal, For, onCleanup, onMount, Show } from "solid-js"
 
 const id = "internal:sidebar-quota"
 
+// 261128 Red 当前会话实际使用的套餐置顶。优先 local.model.current()——prompt 在切会话时
+// 用它同步最后一条用户消息的模型，之后用户换模型（还没发送）也会立刻反映在侧栏；拿不到真实
+// 选择（模型列表尚未就绪）时退回最后一条用户消息 / session.model 的实际模型。
+// 只匹配 provider——额度快照的 accountID 在 TUI 侧没有“当前账户”来源，同 provider 多账号时
+// 不下钻猜具体账号。
+type QuotaOrder = { rows: ReadonlyArray<ProviderQuota>; providerID?: string; single: boolean }
+
+function sessionProvider(api: TuiPluginApi, sessionID: string): string | undefined {
+  const lastUser = api.state.session
+    .messages(sessionID)
+    .findLast((message): message is UserMessage => message.role === "user" && !!message.model?.providerID)
+  return lastUser?.model.providerID ?? api.state.session.get(sessionID)?.model?.providerID
+}
+
+function orderQuota(quotas: ReadonlyArray<ProviderQuota>, providerID: string | undefined): QuotaOrder {
+  if (!providerID) return { rows: quotas, single: false }
+  const current = quotas.filter((quota) => quota.providerID === providerID)
+  if (current.length === 0) return { rows: quotas, single: false }
+  return {
+    // 稳定排序：同一 provider 的多份快照和其余套餐都保持原相对顺序。
+    rows: [...current, ...quotas.filter((quota) => quota.providerID !== providerID)],
+    providerID,
+    single: current.length === 1,
+  }
+}
+
 // 260919 Red 额度面板：GET /provider/quota + provider.quota.updated 全局事件。
 // 服务端同时捕获 GPT 响应头并查询 GLM Coding Plan 监控接口；这里每分钟触发一次刷新。
-function View(props: { api: TuiPluginApi }) {
+export function QuotaView(props: { api: TuiPluginApi; session_id: string }) {
+  const local = useLocal()
   const theme = () => props.api.theme.current
   // 260929 Red 第三个账单面板（Step Plan）进来后，三套餐齐显会挤爆侧栏；对齐 MCP 的折叠模式，
   // 多于一个套餐才出箭头，单套餐保持原样不折。
   const [open, setOpen] = createSignal(true)
   const list = createMemo(() => props.api.state.provider_quota())
+  const view = createMemo(() =>
+    orderQuota(list(), local.model.current()?.providerID ?? sessionProvider(props.api, props.session_id)),
+  )
+  const providerName = (providerID: string) =>
+    props.api.state.provider.find((provider) => provider.id === providerID)?.name ?? providerID
 
   onMount(() => {
     const timer = setInterval(() => {
@@ -108,13 +142,23 @@ function View(props: { api: TuiPluginApi }) {
           </Show>
         </box>
         <Show when={list().length <= 1 || open()}>
-          <For each={list()}>
+          <Show when={view().single ? undefined : view().providerID}>
+            {(providerID) => <text fg={theme().textMuted}>当前供应商 · {providerName(providerID())}</text>}
+          </Show>
+          <For each={view().rows}>
             {(q) => (
               <box flexDirection="column" gap={0}>
                 <box flexDirection="row" justifyContent="space-between" gap={1}>
-                  <text flexShrink={0} fg={theme().text}>
-                    <b>{q.planType}</b>
-                  </text>
+                  <box flexDirection="row" gap={1}>
+                    <text flexShrink={0} fg={theme().text}>
+                      <b>{q.planType}</b>
+                    </text>
+                    <Show when={view().single && q.providerID === view().providerID}>
+                      <text flexShrink={0} fg={theme().success}>
+                        当前
+                      </text>
+                    </Show>
+                  </box>
                   <Show when={q.accountID}>
                     {(accountID) => <text fg={theme().textMuted}>{shortAccount(accountID())}</text>}
                   </Show>
@@ -147,8 +191,8 @@ const tui: TuiPlugin = async (api) => {
   api.slots.register({
     order: 150,
     slots: {
-      sidebar_content() {
-        return <View api={api} />
+      sidebar_content(_ctx, props) {
+        return <QuotaView api={api} session_id={props.session_id} />
       },
     },
   })
