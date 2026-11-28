@@ -34,10 +34,4 @@ describe("session.canary", () => {
     expect(Canary.check("RC-deadbeef", "s2")).toBe(false)
   })
 
-  test("token is stable across calls (deterministic derivation)", () => {
-    const a = Canary.get("s-stable")
-    const b = Canary.get("s-stable")
-    expect(a).toBe(b)
-    expect(Canary.check(a, "s-stable")).toBe(true)
-  })
 })

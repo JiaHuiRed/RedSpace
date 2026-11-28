@@ -19,21 +19,9 @@ const broken: () => string = () => {
   throw new Error("os.userInfo unavailable")
 }
 
+// 系统用户名/空白/去空白这些基础判据由 test/session/reasoning-language.test.ts 覆盖，
+// 这里只保留本文件独有的截断与注入点回归。
 describe("addressFrom", () => {
-  test("排除系统用户名与电脑名", () => {
-    expect(addressFrom(os.hostname())).toBeUndefined()
-    expect(addressFrom(os.userInfo().username)).toBeUndefined()
-  })
-
-  test("空值、纯空白返回 undefined", () => {
-    expect(addressFrom(undefined)).toBeUndefined()
-    expect(addressFrom("   ")).toBeUndefined()
-  })
-
-  test("正常名字去空白后原样返回", () => {
-    expect(addressFrom("  哥哥  ")).toBe("哥哥")
-  })
-
   test("按 code point 截断到 128", () => {
     expect(addressFrom("名".repeat(200))).toHaveLength(128)
   })

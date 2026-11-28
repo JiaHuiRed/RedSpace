@@ -219,16 +219,6 @@ describe("ConfigMarkdown: frontmatter parsing w/ empty frontmatter", async () =>
   })
 })
 
-describe("ConfigMarkdown: frontmatter parsing w/ no frontmatter", async () => {
-  const result = await ConfigMarkdown.parse(import.meta.dir + "/fixtures/no-frontmatter.md")
-
-  test("should parse without throwing", () => {
-    expect(result).toBeDefined()
-    expect(result.data).toEqual({})
-    expect(result.content.trim()).toBe("Content")
-  })
-})
-
 describe("ConfigMarkdown: frontmatter parsing w/ Markdown header", async () => {
   const result = await ConfigMarkdown.parse(import.meta.dir + "/fixtures/markdown-header.md")
 

@@ -297,8 +297,6 @@ describe("Instruction.resolve", () => {
       }).pipe(provideInstance(project), provideInstruction({ home: project, config: project }))
     }),
   )
-
-  test.todo("fetches remote instructions from config URLs via HttpClient", () => {})
 })
 
 // 261109 Karina RC-01：路径包含判定不能是字符串前缀。这些用例钉住路径语义本身

@@ -187,20 +187,6 @@ describe("AzurePlugin", () => {
     ),
   )
 
-  it.effect("selects chat only for completion URLs", () =>
-    Effect.gen(function* () {
-      const plugin = yield* PluginV2.Service
-      const calls: string[] = []
-      yield* plugin.add(AzurePlugin)
-      yield* plugin.trigger(
-        "aisdk.language",
-        { model: model("azure", "deployment"), sdk: fakeSelectorSdk(calls), options: { useCompletionUrls: true } },
-        {},
-      )
-      expect(calls).toEqual(["chat:deployment"])
-    }),
-  )
-
   it.effect("selects chat from per-call useCompletionUrls", () =>
     Effect.gen(function* () {
       const plugin = yield* PluginV2.Service

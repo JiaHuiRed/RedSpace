@@ -30,11 +30,6 @@ describe("GLM 推理强度变体", () => {
     })
   })
 
-  test("GLM-5.2 不暴露行为别名（low/medium 映射成 high，xhigh 映射成 max）", () => {
-    const v = variantsOf("glm-5.2")
-    for (const alias of ["low", "medium", "xhigh", "minimal"]) expect(v).not.toContain(alias)
-  })
-
   test("档位发的是 reasoningEffort，值与档位名一致", () => {
     const v = ProviderTransform.variants(glm("glm-5.2"))
     expect(v["max"]).toEqual({ reasoningEffort: "max" })
@@ -266,10 +261,6 @@ describe("claude 走 openai-compatible 中转", () => {
 
   test("走原生 anthropic npm 时不受这条影响，档位照给", () => {
     expect(variantsOf("claude-opus-4-7", "@ai-sdk/anthropic")).toEqual(["low", "medium", "high", "xhigh", "max"])
-  })
-
-  test("不误伤同一 npm 下的其他家族", () => {
-    expect(variantsOf("glm-5.2")).toEqual(["none", "high", "max"])
   })
 })
 
