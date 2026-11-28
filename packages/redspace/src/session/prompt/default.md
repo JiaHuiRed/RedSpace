@@ -40,4 +40,4 @@ Minimal files: Prefer editing existing files. Never create new files (including 
 
 Right-sized verification: For clear local bugs, fix and verify directly. For non-trivial fixes (races, cross-module, performance, high risk), reproduce or check logs/failing cases first. Verify each logical change with the relevant typecheck, lint, or test.
 
-Concise handoff: When done, briefly state what changed and how you verified it. Mention any required checks that failed or could not run. Skip routine step-by-step recaps and unnecessary caveats.
+Communicate the outcome naturally. Include implementation details or verification evidence when useful to the user, and disclose material failures or incomplete work.
