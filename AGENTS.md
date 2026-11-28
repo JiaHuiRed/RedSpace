@@ -1,91 +1,95 @@
 # 边界
 
-**写"RedSpace 长什么样"**：目录路由、构建/验证命令、代码风格、版本清单、分支与 commit scope、本仓红线。
-
----
+本文件记录 RedSpace 的项目路由、构建与验证、模型上下文、版本与代码规范。
 
 # 项目路由
 
-| 目录                 | 内容                                                                                                                                                                                                                                                                                                                                                                                                                                                                           | 入口 AGENTS.md                |
-| -------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------- |
-| `packages/redspace/` | **TUI 核心** — CLI、plugin 系统、MCP、Effect、session                                                                                                                                                                                                                                                                                                                                                                                                                          | `packages/redspace/AGENTS.md` |
-| `packages/desktop/`  | **GUI** — Electron、main/renderer、sidecar                                                                                                                                                                                                                                                                                                                                                                                                                                     | `packages/desktop/AGENTS.md`  |
-| `packages/app/`      | **SolidJS Web UI** — 组件、路由、i18n                                                                                                                                                                                                                                                                                                                                                                                                                                          | `packages/app/AGENTS.md`      |
-| `packages/plugin/`   | Plugin SDK 类型定义                                                                                                                                                                                                                                                                                                                                                                                                                                                            | -                             |
-| `seed/`              | **种子/暂存目录**（原 `.opencode/` 改名）——skill、command、agent、配置模板。引擎**不**加载它，由 `script/sync-home.bat` 播种到 `~/.redcode/` 才生效。三种同步方向：`seed/scripts` 经 `sync-home-scripts.bat` **真镜像**（改 `~/.redcode/scripts/` 侧会被下次构建物理删除，必须改 seed）；`seed/{skill,command}` 是 **seed-only**（本机已有同名则不覆盖，只改 seed 本机永不生效）；`seed/tool` 只同步 `sqlite.ts`（整目录会带进上游 CI 帮手，在 home 加载失败会连累整张工具表） | -                             |
+| 目录 | 职责 | 包级指南 |
+| --- | --- | --- |
+| `packages/redspace/` | 共享执行核心、TUI、CLI、plugin、MCP、Effect、session | `packages/redspace/AGENTS.md` |
+| `packages/desktop/` | Electron GUI、main/renderer、sidecar | `packages/desktop/AGENTS.md` |
+| `packages/app/` | SolidJS Web UI、组件、路由、i18n | `packages/app/AGENTS.md` |
+| `packages/plugin/` | Plugin SDK 类型定义 | — |
+| `seed/` | skill、command、agent、配置与工具的种子目录 | — |
 
-改某 package 前先 read 一次它的 AGENTS.md：包级不在启动时注入（引擎只取全局 + 第一个项目级，见 `session/instruction.ts` 的 `discover`），但 read 包内文件时会就近附带（`Instruction.resolve`），一次 read 即触达；两者都生效，scoped 规则覆盖根的代码细节。
+改动 package 前先读对应的 AGENTS.md；包级规则补充并优先于根目录的代码细节。
 
-# 验证命令
+`seed/` 由 `script/sync-home.bat` 同步到 `~/.redcode/` 后生效：
 
-- 类型检查在实际受影响的 package 目录跑 `bun run typecheck`（如 `packages/redspace`、`packages/app`、`packages/desktop`），不在 repo root 跑 `tsc`。
-- 各 package 的代码风格/构建细节见该 package 的 AGENTS.md
-- 跑单测**必须带完整文件路径过滤**：不带过滤的 `bun test` 会碰 live 配置（已修根因，但 plugin-loader 那类直接操作 live 文件名的用例仍靠路径隔离兜着）
-- 核心包的 `bun run typecheck` 走 `script/typecheck.ts`，内存不足或 tsgo 崩溃时使用 TypeScript 5.x。
-- **子进程超时不变量**：`bun run check:subprocess-timeout`（已挂 pre-push）。新增 `appProcess.run` 调用点必须显式给 `timeout`，或在调用行上方写 `// subprocess-timeout: none — <理由>`。无界的子进程等待不触发 evloop drift 探针，挂起时日志里一个字都没有
-- **httpapi 路由覆盖门禁**（已挂 pre-push，~6s）：新增 HTTP 端点必须在 `httpapi-exercise` 里有场景，coverage 模式只做路由↔场景对账、不执行场景。同型事故已五次才红在 nightly（0.17.0 instructions、261115 UX-15 query / UX-17 result；e2e mock 兜底 `{}` 崩页面另有三次），推送时就拦
+- `seed/scripts`：由 `sync-home-scripts.bat` 镜像同步，以 seed 为准；仅修改 home 中的脚本会在下次构建时丢失。
+- `seed/{skill,command}`：seed-only，已有同名文件不覆盖；修改 seed 后，本机已有版本需另行同步。
+- `seed/tool`：只同步 `sqlite.ts`。
 
-## 证据面匹配（永不默认全量）
+# 构建与验证
 
-**按改动面选验证，不按文件后缀凑检查。** 同包相关改动合并验证；已经通过且相关输入没变的检查不重复跑。
-
-- 改生产 TypeScript 的实现或类型，或改 `tsconfig` 纳入的测试中的类型、服务装配 → 对相关 package 跑 typecheck。只改样例或断言不用加跑；`packages/app/e2e/` 和 `packages/desktop/src/**/*.test.ts` 不在各自默认 typecheck 的覆盖范围内。
-- 行为或测试改动 → 跑对应测试文件（带路径过滤）。核心包的 `bun test` 必须带 `--timeout 30000`；默认 5 秒会让 session 测试假超时。
-- 改了进 OpenAPI 的 schema 出口（`packages/redspace/src/config/*.ts`、`session/status.ts` 等 `Schema.Struct`）→ **commit 前跑 `bun run check:openapi-drift`**（~8s，不一致就跑两条生成命令：`bun ./packages/sdk/js/script/build.ts` + `bun run gen:openapi`）。pre-commit 钩子也会拦，但钩子是兜底、不是不跑的理由——推送时才发现就要补 fixup commit（9-01 以来已发生 6 次）
-- 提示词/模型可见内容改动 → 对照该模型的实际会话验证
-- 版本号/徽章/发布清单相关文档改动 → `check-version-consistency.ts`；普通措辞或注释变更只需对应检查
-- 构建路径改动 → 该 package 的 build
-- 全量套件只在用户明确要求、或改动确属仓库级时才跑
-### 测试 lane（bun test 无 exclude，lane = package.json scripts 分组）
-
-| lane | 命令（packages/redspace 下） | 用途 |
-|---|---|---|
-| unit（默认） | `bun run test` | 全量单进程顺序跑。写 `process.env` 的「进程绑定」文件与全局态耦合，排污染前先 `bun run script/lane-inventory.ts` 重新生成清单（约 41 个，会漂移，别背） |
-| httpapi | `bun run test:httpapi` | 真服务器 HTTP 覆盖 / auth / Effect 三模式。< 32GB 且非 CI 的机器全量 effect 会响亮跳过——完整门禁归 nightly，本地定向跑 `script/httpapi-exercise.ts --mode effect --include <名>`；coverage/auth 不受限 |
-| 套件计时 | `bun run bench:test` | 全套件耗时 sanity check，见 `perf/test-suite.md` |
-| 逐文件 profiler | `bun run profile:test` | 定位慢测试候选（`TEST_PROFILE_GLOB` 过滤） |
-| 性能预算 | `bun run bench:budget` | `filterCompactedEffect` 预算门禁（隔离临时 DB），开机先跑正负控制自检，门禁逻辑坏了直接拒跑 |
-
-# 本仓红线
-
-- **改到函数家族时，先数同形状兄弟。** 无法解释的不对称通常意味着漏了一次抽取，"补齐了"这个说法本身要复核——数一遍函数，别信上一次的收尾结论。
-- **误配置要响。** 自包含的在加载时响，否则在最早能解析的时刻响；**永远不要静默跳过一个解析不到的引用**。
-- **diagnose skill 按触发条件加载，不是每刀编辑的入口税**：触发于——未知根因 bug、回归、跨子系统/时序相关异常、同方向连续失败、高风险行为变化、证据不足又不能安全猜的异常。未知根因、反复失败、跨模块或时序问题按 diagnose skill 建立足够的反馈与假设，然后修复和验证；收尾记录在修复验证后进行。根因已明确的局部问题（文案、布局微调、局部重命名、条件分支修正、文档）直接修改并做相关验证。
-
-# 版本与文档
-
-- **单一版本线**，**升版 checklist** 见 bump-version skill；无该 skill 时按 CHANGELOG 顶部说明 + `script/check-version-consistency.ts` 的断言执行。核心纪律一句话：**升版 = 收编 `[Unreleased]` 并用 `git log <上一版 bump>..HEAD` 逐条对照**；本地 annotated tag `v<版本号>`。
-- 文档（版本号/徽章/CHANGELOG/README）可直接改好。
-- **决策记录 `docs/notes/`，写完必须回链**（规则与模板见其 README；注入项硬上限与模型可见四问见下方专条）。
-  - **链**：note 落地时**必须**在对应代码头注释 / CHANGELOG 条目回链其路径。notes 不进上下文，**只能靠链接网被撞见**——没有回链的 note 等于没写。
-  - **读**：notes 不进上下文，只有两个可靠触发点——① 读代码撞见回链时（回链就是为这个存在的，撞见就读）；② 写新 note 前 `ls docs/notes/*/` 查同主题旧决策，前后矛盾的决策比没有决策更坏。
-- **模型可见改动的四问**（改提示词 / 注入段 / 工具 schema 与 description / 工具输出格式，必答）：在 commit 说明里逐条回答，有 note 的写进 note。
-  1. **模型看到什么变了**——加了删了还是移了哪一段，给原文对照。
-  2. **token 影响**——固定前缀增减多少（`session/prefix-shape.ts` 能直接量）。
-  3. **KV cache 影响**——从哪一段起前缀作废，还是完全不动。**这条最容易漏、代价最大**。
-  4. **注入项有没有硬上限**——任何进入模型上下文的东西都必须有确定的字节或 token 上限，**没有上限就是缺陷**。单项超过 1K token 在 commit 里单独点名；超过 10K 要说明为什么不能截断。本仓两次栽在这条：`tool/read.ts` 的文本分支有 `MAX_BYTES = 50KB` 而**图片分支一个上限都没有**（库里最大单条 3.23MB）；`summary.diffs` 无上限写回消息行（单行 32MB，占 message 表 79%）。两处都是"写的时候没人问上限"。段落顺序也算模型可见改动：**运行时维持稳定装配**；版本化提示词修订允许合并、移动和删除，在发布说明记录最早变化段及一次性缓存重建影响，不要为保留旧字节在末尾不断追加相互抵消的补丁。
-
-# 项目指令
-
-- Commit scope（非穷举，按改动所在的包或领域取）：`core` `redcode` `tui` `app` `desktop` `ui` `sdk` `plugin` `seed` `notes` `agent` `skill` `mcp` `config` `prompt` `session` `tool` `provider` `script` `ci` `changelog` `version`
-- **重新生成 SDK 是两条命令，只跑第一条会漏掉 `packages/sdk/openapi.json`**：
-
+- **类型检查**：在实际受影响的 package 目录运行 `bun run typecheck`。核心包使用 `script/typecheck.ts`，内存不足或 tsgo 崩溃时回退 TypeScript 5.x。
+- **单测**：从 package 目录运行，使用完整文件路径过滤，避免触碰 live 配置。核心包的 `bun test` 加 `--timeout 30000`；各包的测试与构建命令见包级 AGENTS.md。
+- **子进程超时**：新增 `appProcess.run` 调用须显式传入 `timeout`，无需超时的调用在上一行注明 `// subprocess-timeout: none — <理由>`。门禁：`bun run check:subprocess-timeout`（pre-push）。
+- **HTTP API 覆盖**：新增端点在 `httpapi-exercise` 补对应场景；coverage 模式核对路由与场景（pre-push）。
+- **OpenAPI 与 SDK**：修改进入 OpenAPI 的 schema 出口（如 `packages/redspace/src/config/*.ts`、`session/status.ts`），commit 前运行 `bun run check:openapi-drift`。如有差异，在仓库根目录依次运行：
   ```bash
-  bun ./packages/sdk/js/script/build.ts                              # → packages/sdk/js/src/v2/gen/**
-  cd packages/redspace && bun dev generate > ../sdk/openapi.json     # → packages/sdk/openapi.json
+  bun ./packages/sdk/js/script/build.ts
+  bun run gen:openapi
   ```
+  两条命令分别更新 SDK 与仓库的 OpenAPI；`script/generate.ts` 会触发全仓 prettier `--write`。
 
-  第一条自己也会生成一份 openapi，但落在 `packages/sdk/js/` 下当临时输入，末尾 `rm` 掉，
-  **不碰仓库里那份**。别跑 `script/generate.ts` 整脚本——它最后一步是 prettier 全仓 `--write`。
+## 按改动面验证
 
-# 代码规范
+同包相关改动合并验证，已通过且输入未变的检查不重跑。
 
-- **不为推测性防御买单**：给推测性的、或几乎不会发生的竞态/安全边界加复杂度前，先讲清具体失败模式、发生概率和复杂度成本，征得同意再加，不为理论健壮性悄悄扩范围。同理，未知值只在拥有它的边界校验一次、向内传类型值，不对 schema/构造器/内部类型已保证的值重复防御检查。
-- 尽量避免 `try`/`catch` 和 `any`
-- **`catch` 要么处理要么说明**：空 `catch` 必须用一行注释写清它吞掉的是什么、以及为什么别的错误到不了这里；`try` 只包会抛的那一条语句。（`packages/redspace/src` 现有 97 处空的或无说明的 catch，不要求一次清完，新写的必须带说明。）
-- 优先用类型推断、Bun API、函数式数组（`flatMap`、`filter`、`map`）
-- 优先 `const` + 三元/early return，避免 `else`
-- 值只用一次就内联，减少变量
-- 主函数读 happy path，细节抽 helper 放下面
-- 测试测实际实现，避免 mock，从 package 目录跑
-- **注释格式** — 只在注释有长期解释价值时写 `// YYMMDD Red xxx`（日期 + Red + 改动说明）；作者与修改日期由 Git 记录。保留已有有用注释，不发起全仓清理。
+| 改动 | 验证 |
+| --- | --- |
+| 生产 TS 实现或类型、纳入 tsconfig 的测试类型与服务装配 | 对应 package 的 typecheck |
+| 行为、测试 | 对应测试文件 |
+| 提示词、模型可见内容 | 对照该模型的实际会话 |
+| 版本号、徽章、发布清单 | `script/check-version-consistency.ts` |
+| 构建路径 | 对应 package 的 build |
+
+仅改测试样例或断言无需额外 typecheck；`packages/app/e2e/` 与 `packages/desktop/src/**/*.test.ts` 不在各自默认 typecheck 范围内。全量套件仅在用户要求或改动涉及全仓时运行。
+
+## 核心包测试 lane
+
+在 `packages/redspace/` 下运行：
+
+| lane | 命令 | 用途 |
+| --- | --- | --- |
+| unit | `bun run test` | 全量单进程顺序跑；排查全局态污染前用 `bun run script/lane-inventory.ts` 更新进程绑定文件清单 |
+| httpapi | `bun run test:httpapi` | 真服务器 coverage / auth / Effect；非 CI 且内存不足 32GB 时全量 Effect 跳过，可用 `script/httpapi-exercise.ts --mode effect --include <名>` 定向运行 |
+| 套件计时 | `bun run bench:test` | 全套件耗时，见 `perf/test-suite.md` |
+| 逐文件 profiler | `bun run profile:test` | 慢测试定位，支持 `TEST_PROFILE_GLOB` |
+| 性能预算 | `bun run bench:budget` | `filterCompactedEffect` 预算门禁，隔离临时 DB，先跑正负控制自检 |
+
+# 本仓工程原则
+
+- **函数家族对齐**：修改同族函数时核对所有同形状兄弟函数，避免遗漏和无意的不对称。
+- **配置报错要响**：在加载时或最早可解析处报告误配置，无法解析的引用显式报错。
+- **按需 diagnose**：未知根因、回归、跨模块或时序异常、同方向连续失败、高风险行为变化或证据不足时加载 diagnose skill；根因明确的局部问题直接修改并验证。
+- **复杂度有成本**：增加推测性防御前，说明失败模式、概率与成本并征得同意。未知值在拥有方边界校验一次，内部依赖已建立的类型与契约。
+- **配置归属清晰**：已有用户配置契约或需跨部署调整的值，归入拥有方的配置入口并复用校验；内部策略和局部默认值保持简单。
+
+# 模型上下文
+
+新增模型输入复用现有有界诊断与请求证据，记录来源、版本、大小及装配位置，秘密不进入明文日志。如诊断样本无法完整还原请求，明确其覆盖范围。
+
+模型可见改动须在 commit 正文写明『四问』并逐项回答。
+
+1. **模型看到什么变了**：列出增删或移动的段落，给出原文对照。
+2. **Token 影响**：固定前缀增减多少，可用 `session/prefix-shape.ts` 测量。
+3. **KV Cache 影响**：从哪一段起前缀失效，还是完全不动。
+4. **注入上限**：进入上下文的数据须有确定的字节或 token 上限；单项超过 1K token 在 commit 中点名，超过 10K 说明为何不能截断。
+
+运行时保持稳定装配顺序。版本化修订直接合并、移动或删除段落，在发布说明记录最早变化位置和一次性缓存重建影响。
+
+# Git、版本与决策记录
+
+- **Commit scope**：按改动所属包或领域取值，常用 `core` `redcode` `tui` `app` `desktop` `ui` `sdk` `plugin` `seed` `notes` `agent` `skill` `mcp` `config` `prompt` `session` `tool` `provider` `script` `ci` `changelog` `version`。
+- **版本与文档**：维持单一版本线，按 bump-version skill 或 CHANGELOG 顶部说明与 `script/check-version-consistency.ts` 升版；收编 `[Unreleased]`，用 `git log <上一版 bump>..HEAD` 逐条核对，并打本地 annotated tag `v<版本号>`。版本号、徽章、CHANGELOG、README 可直接修改。
+- **决策记录 `docs/notes/`**：遵循目录 README 的规则。遇到代码回链时查阅对应决策；写新 note 或调整历史决策前用 `ls docs/notes/*/` 查重；落地后在对应代码头注释或 CHANGELOG 中回链。
+
+# 代码风格
+
+- 优先类型推断、Bun API、函数式数组方法、`const` 与 early return。
+- 主函数呈现 happy path，辅助函数表达真实概念，单次使用的简单值直接内联。
+- 尽量避免 `any` 与 `try/catch`；`try` 只包可能抛错的语句，空 `catch` 注明吞掉的错误与理由。
+- 测试实际实现，尽量少用 mock。
+- 仅在有长期解释价值时写 `// YYMMDD Red xxx`，保留已有有用注释。
