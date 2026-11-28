@@ -152,3 +152,96 @@
   opacity: 0.5;
   cursor: not-allowed;
 }
+
+/* Action tones derive from the shared palette, not from the active brand. */
+[data-component="button-v2"][data-variant="primary"],
+[data-action="prompt-submit"][data-tone="primary"] {
+  --action-bg: var(--v2-blue-900);
+  --action-dark-bg: var(--v2-blue-400);
+  --action-dark-text: var(--v2-blue-1200);
+}
+[data-component="button-v2"][data-variant="success"] {
+  --action-bg: var(--v2-green-1000);
+  --action-dark-bg: var(--v2-green-400);
+  --action-dark-text: var(--v2-green-1200);
+}
+[data-component="button-v2"][data-variant="warning"] {
+  --action-bg: var(--v2-orange-1100);
+  --action-dark-bg: var(--v2-orange-400);
+  --action-dark-text: var(--v2-orange-1200);
+}
+[data-component="button-v2"][data-variant="danger"],
+[data-action="prompt-submit"][data-tone="danger"] {
+  --action-bg: var(--v2-red-900);
+  --action-dark-bg: var(--v2-red-400);
+  --action-dark-text: var(--v2-red-1200);
+}
+:is(
+  [data-component="button-v2"]:is(
+    [data-variant="primary"],
+    [data-variant="success"],
+    [data-variant="warning"],
+    [data-variant="danger"]
+  ),
+  [data-action="prompt-submit"][data-tone]
+) {
+  --action-fill: var(--action-bg);
+  --action-text: var(--v2-alpha-light-100);
+  --action-rim: var(--v2-alpha-light-10);
+  color: var(--action-text);
+  background: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--action-fill) 94%, var(--v2-alpha-light-100)),
+    var(--action-fill)
+  );
+  border: 1px solid var(--action-rim);
+  box-shadow:
+    inset 0 1px var(--action-rim),
+    var(--v2-elevation-button-neutral);
+}
+:root[data-color-scheme="dark"] :is([data-component="button-v2"], [data-action="prompt-submit"][data-tone]) {
+  --action-fill: var(--action-dark-bg);
+  --action-text: var(--action-dark-text);
+}
+:is(
+    [data-component="button-v2"]:is(
+      [data-variant="primary"],
+      [data-variant="success"],
+      [data-variant="warning"],
+      [data-variant="danger"]
+    ),
+    [data-action="prompt-submit"][data-tone]
+  ):is(:hover, [data-state="hover"]):not(:disabled) {
+  background: color-mix(in srgb, var(--action-fill) 92%, var(--action-text));
+}
+:is(
+    [data-component="button-v2"]:is(
+      [data-variant="primary"],
+      [data-variant="success"],
+      [data-variant="warning"],
+      [data-variant="danger"]
+    ),
+    [data-action="prompt-submit"][data-tone]
+  ):is(:active, [data-state="pressed"]):not(:disabled) {
+  background: color-mix(in srgb, var(--action-fill) 86%, var(--action-text));
+  box-shadow: inset 0 2px 4px var(--v2-alpha-dark-20);
+  transform: translateY(1px);
+}
+:is([data-component="button-v2"], [data-action="prompt-submit"][data-tone]):is(:disabled, [data-state="disabled"]):not(
+    [aria-busy="true"]
+  ) {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+[data-component="button-v2"][aria-busy="true"] {
+  cursor: progress;
+  opacity: 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  :is([data-component="button-v2"], [data-action="prompt-submit"][data-tone]):active {
+    transform: none;
+  }
+  [data-component="button-v2"] [data-component="spinner"] * {
+    animation: none;
+  }
+}

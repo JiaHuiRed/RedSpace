@@ -18,6 +18,7 @@ export default function HomeCompose(props: {
   onProjectChange: (directory: string) => void
   onSubmit: () => void
   focusRequest: number
+  recentMount: () => HTMLDivElement | undefined
 }) {
   const sync = useServerSync()
   onMount(() => sync.ensureProviders(props.directory))
@@ -55,12 +56,13 @@ function HomeComposer(props: Parameters<typeof HomeCompose>[0]) {
   let handledFocus = 0
 
   const focus = () => {
-    if (!editor || props.focusRequest <= handledFocus) return
-    handledFocus = props.focusRequest
+    if (!editor?.isConnected || props.focusRequest <= handledFocus) return
     editor.focus()
+    if (document.activeElement !== editor) return
+    handledFocus = props.focusRequest
     editor.scrollIntoView({ block: "nearest" })
   }
-  createEffect(on(() => props.focusRequest, focus))
+  createEffect(on(() => props.focusRequest, () => requestAnimationFrame(focus)))
   createEffect(() => {
     const text = searchParams.prompt
     if (!text || !prompt.ready()) return
@@ -81,6 +83,7 @@ function HomeComposer(props: Parameters<typeof HomeCompose>[0]) {
   return (
     <NewSessionDesignView
       embedded
+      recentMount={props.recentMount}
       worktree={state.worktree}
       newSessionSoul={() => state.soul}
       onNewSessionSoulChange={(soul) => setState("soul", soul)}
@@ -94,7 +97,7 @@ function HomeComposer(props: Parameters<typeof HomeCompose>[0]) {
           variant="new-session"
           ref={(el) => {
             editor = el
-            queueMicrotask(focus)
+            requestAnimationFrame(focus)
           }}
           newSessionWorktree={state.worktree}
           onNewSessionWorktreeChange={(worktree) => setState("worktree", worktree)}

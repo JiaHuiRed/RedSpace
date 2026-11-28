@@ -1,6 +1,6 @@
 import type { Session } from "@redcode-ai/sdk/v2/client"
 import { DateTime } from "luxon"
-import { createMemo, createResource, For, Show } from "solid-js"
+import { createMemo, createResource, For, Show, type JSX } from "solid-js"
 import { Spinner } from "@redcode-ai/ui/spinner"
 import { ContextMenu } from "@redcode-ai/ui/context-menu"
 import { Icon } from "@redcode-ai/ui/icon"
@@ -39,6 +39,7 @@ export function HomeKanban(props: {
   selectedProjectName?: string
   /** 显式搜索与归档视图保留全部已加载的结果。 */
   showAllIdle?: boolean
+  recentImages?: JSX.Element
   openSession: (session: Session, focus?: "prompt") => void
   onArchive: (session: Session) => void
   onUnarchive?: (session: Session) => void
@@ -84,23 +85,8 @@ export function HomeKanban(props: {
     return "var(--v2-text-text-muted, var(--text-weak))"
   }
 
-  // 261124 YuQi 布局重排（哥哥在 layout-planner 摆的终版）：三列横排改为两子列——
-  // 左子列「工作中 + 需关注」竖排，右子列「空闲」。列宽固定 436px（画布 245 × 2560/1440），
-  // 260901 的「按内容量 flex-grow + 空列 150px 地板」随横排一起退役——列宽不再参与分配，
-  // 列内卡片仍走 auto-fill 网格（436px 列宽下自然单列，窄窗口继续退化）。
-  // 260829 的裁剪负边距手法（pt-2 -mt-2 px-2 -mx-2）保留；整带随页面滚动，
-  // 不再做列内纵向滚动（空闲 9 卡竖排一列到底）。
-  const columnBlock = (column: KanbanColumn) => {
-    // 261124 四轮（哥哥反馈）：卡片缩到原宽的 85%（436→370），空闲列一行放两张——
-    // 9 张 idle 卡从 9 行收到 5 行，最后一张不用滚动就能看到。网格不再 auto-fill
-    // 自适应（260901 的封顶三列逻辑随固定列宽退役），列内排布直接定死。
-    // 261124 五轮：卡片 355px；idle 容器 355×2+缝10=720。
-    const wide = column.id === "idle"
-    return (
-    // 261123 Red 列宽不再固定 355/720：父容器 max-w-full 缩窄时，固定宽 + shrink-0 会横向溢出。
-    // 两子列改成 flex-1 + 355 basis（第一排容纳不下就 wrap 成纵向），idle 满宽、
-    // 内部卡片网格 auto-fill 自适应列数。
-    <div class={`flex min-w-0 flex-col gap-3 ${wide ? "w-full" : "flex-1 basis-[355px]"}`}>
+  const columnBlock = (column: KanbanColumn) => (
+    <section class="home-board-lane" data-lane={column.id} aria-label={columnLabel(column.id)}>
       <div class="flex items-center gap-2 px-2 h-7 shrink-0">
         <div class="size-2 rounded-full" style={{ "background-color": columnColor(column.id) }} />
         <span class="text-v2-text-text-muted [font-weight:530] text-[13px]">{columnLabel(column.id)}</span>
@@ -115,8 +101,7 @@ export function HomeKanban(props: {
           grid-template-columns 走 style 而不是 Tailwind 任意值：这个值里有空格和括号，
           任意值语法要靠下划线转义，写错了不会报错、只会静默退化成一列。 */}
       <div
-        class="pt-2 -mt-2 px-2 -mx-2 grid gap-2.5 auto-rows-min content-start"
-        style={{ "grid-template-columns": wide ? "repeat(auto-fill,minmax(240px,1fr))" : "minmax(0,1fr)" }}
+        class="grid min-w-0 gap-1.5 auto-rows-min content-start"
       >
         <Show
           when={column.records.length > 0}
@@ -149,25 +134,13 @@ export function HomeKanban(props: {
           </Show>
         </Show>
       </div>
-    </div>
-    )
-  }
+    </section>
+  )
 
-  // 261124 三轮（哥哥终版）：第一排「工作中 + 需关注」同高并列，空闲单独一排在下。
-  // 261124 七轮（哥哥发现看板与面板右缘错位）：两笔叠加——① 根容器 px-2 的右内缩 8px；
-  // ② 第一排（355×2+48=758）比空闲行（720）宽 38px，flex-col 左对齐把空闲右缘又缩进去。
-  // 修法：第一排列距收到 gap-x-2.5（与空闲两卡缝一致，两排等宽 720、右缘天然齐），
-  // 根容器只保留左侧 px-2 中的 pl-2（260829 网格负边距手法的左补偿）。
   return (
-    // 261124 八轮：去掉 overflow-x-auto——内容固定 720 宽永远用不上横向滚动，
-    // 它自己倒是把滚动条渲染出来了（哥哥：滚动条比不对齐更丑）。
-    // 261123 Red 容器宽随父级收缩（w-full + 728 上限 = 720 内容 + pl-2），窄窗口不再溢出。
-    <div data-component="home-kanban" class="flex min-h-0 w-full max-w-[728px] flex-col gap-y-6 pl-2 pb-4">
-      <div class="flex gap-x-2.5">
-        {columnBlock(columns()[0]!)}
-        {columnBlock(columns()[1]!)}
-      </div>
-      {columnBlock(columns()[2]!)}
+    <div data-component="home-kanban" class="home-board-grid">
+      <For each={columns()}>{columnBlock}</For>
+      {props.recentImages}
     </div>
   )
 }
@@ -244,10 +217,11 @@ function KanbanCard(props: {
         as="button"
         type="button"
         data-component="kanban-card"
-        class="flex flex-col gap-2.5 rounded-[8px] border border-v2-border-border-base bg-v2-background-bg-layer-01 px-4 py-3.5 text-left transition-colors duration-[120ms] ease-in-out hover:bg-v2-overlay-simple-overlay-hover focus-visible:bg-v2-overlay-simple-overlay-hover focus-visible:outline-none cursor-default"
+        data-lane={props.columnId}
+        class="flex min-w-0 w-full flex-col gap-0.5 rounded-[8px] border px-2.5 py-1.5 text-left cursor-pointer"
         onClick={() => props.onClick(next()?.focus)}
       >
-        <div class="flex items-center gap-2 min-w-0 w-full">
+        <div data-slot="kanban-card-title" class="flex items-center gap-2 min-w-0 w-full">
           <Show when={props.columnId === "working"}>
             <div class="shrink-0" style={{ color: tint() ?? "var(--icon-interactive-base)" }}>
               <Spinner class="size-[14px]" />
@@ -256,7 +230,7 @@ function KanbanCard(props: {
           <Show when={props.columnId === "attention"}>
             <div class="size-1.5 shrink-0 rounded-full bg-surface-warning-strong" />
           </Show>
-          <span class="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-v2-text-text-base [font-weight:530] text-[15px]">
+          <span class="min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap text-v2-text-text-base [font-weight:530] text-[13px]">
             {title()}
           </span>
           {/* 260823 Red 压缩中徽标：session.time.compacting 非空 = 正按 token 预算在后台压缩，
@@ -267,7 +241,7 @@ function KanbanCard(props: {
             </span>
           </Show>
         </div>
-        <div class="flex items-center gap-2 min-w-0 w-full">
+        <div data-slot="kanban-card-meta" class="flex items-center gap-2 min-w-0 w-full">
           <Show when={parts().persona}>
             <span class="shrink-0 text-v2-text-text-faint [font-weight:440] text-[12px]">{parts().persona}</span>
           </Show>

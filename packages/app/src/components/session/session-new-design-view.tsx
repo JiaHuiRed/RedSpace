@@ -1,4 +1,5 @@
 import type { JSX } from "solid-js"
+import { Portal } from "solid-js/web"
 import { createMemo, createResource, createSignal, For, Show } from "solid-js"
 import type { Session } from "@redcode-ai/sdk/v2/client"
 import { useQuery } from "@tanstack/solid-query"
@@ -42,6 +43,7 @@ export function NewSessionDesignView(props: {
   worktree: string
   children: JSX.Element
   embedded?: boolean
+  recentMount?: () => HTMLDivElement | undefined
   onProjectChange?: (directory: string) => void
   // 261114 Red UX-03 评审：Soul 选择从输入区工具栏挪到上下文行，状态由 session.tsx 持有
   newSessionSoul?: () => string | undefined
@@ -138,6 +140,26 @@ export function NewSessionDesignView(props: {
     navigate(`/${base64Encode(session.directory)}/session/${session.id}${focus ? "?focus=prompt" : ""}`)
   }
 
+  const renderRecent = () => (
+    <Show when={recentTasks().length > 0}>
+      <div
+        data-component="new-session-recent"
+        class={props.embedded ? "mt-4" : "mt-[42px]"}
+        aria-label={language.t("session.new.recent.title")}
+      >
+        <div class="flex min-w-0 items-baseline gap-2 px-2 pb-0.5">
+          <span class="shrink-0 text-sm font-medium text-v2-text-text-muted">{language.t("session.new.recent.title")}</span>
+          <Show when={!props.embedded}>
+            <span class="min-w-0 truncate text-sm text-v2-text-text-faint">{language.t("session.new.recent.hint")}</span>
+          </Show>
+        </div>
+        <div class="flex flex-col">
+          <For each={recentTasks()}>{(session) => <RecentTaskRow session={session} onOpen={openRecent} />}</For>
+        </div>
+      </div>
+    </Show>
+  )
+
   // 260814 Red 毛玻璃 B 遗漏点：下面这层的实色底盖住了整窗壁纸，新建会话页黑成一块
   // （会话页 #session-root / #session-chat-panel 已于 260813 清底，独漏这个容器）。
   // 清底交给 index.css 的 [data-app-frost] [data-component="session-new-design"] 规则，
@@ -171,8 +193,8 @@ export function NewSessionDesignView(props: {
           {/* 260828 cc 问候语。字标是品牌、输入框是功能，中间这一句是唯一说人话的地方，
               所以放这儿。字号刻意压在 15px：它是陪衬，抢了输入框的注意力就本末倒置了。 */}
           <h1 class={`${props.embedded ? "mt-3" : "mt-5"} text-center text-[15px] font-[440] text-v2-text-text-muted`}>{language.t(greetingKey())}</h1>
-          {/* 261124 YuQi 首页字标→输入区间距 +50px（哥哥：太紧凑）；全页视图不动。 */}
-          <div class={props.embedded ? "mt-[66px]" : "mt-8"}>
+          {/* 首页上下两区以留白分组；独立新建页面沿用自己的间距。 */}
+          <div class={props.embedded ? "mt-[clamp(24px,4vh,40px)]" : "mt-8"}>
             {props.children}
             {/* 260920 Red 把项目选择与当前分支归为一组上下文元信息，和主输入保持一条
                 清晰的分隔线；它们是开始前的选择，不再和提交动作抢同一层级。 */}
@@ -273,23 +295,10 @@ export function NewSessionDesignView(props: {
                 <span class="truncate text-[13px] font-[440]">{branch()}</span>
               </div>
             </div>
-            {/* 261116 Red B03：最近任务 =「继续已有任务」，与上方输入（开始新任务）分开。
-                只放轻量文本行，不加卡片；加载/为空时整块不渲染，保持字标与输入区的视觉中心。 */}
-            <Show when={recentTasks().length > 0}>
-              {/* 261124 YuQi 与聊天框的间距 +30px（12→42）。 */}
-              <div data-component="new-session-recent" class="mt-[42px]" aria-label={language.t("session.new.recent.title")}>
-                <div class="flex min-w-0 items-baseline gap-2 px-2 pb-0.5">
-                  <span class="shrink-0 text-sm [font-weight:530] text-v2-text-text-muted">
-                    {language.t("session.new.recent.title")}
-                  </span>
-                  <span class="min-w-0 truncate text-sm [font-weight:440] text-v2-text-text-faint">
-                    {language.t("session.new.recent.hint")}
-                  </span>
-                </div>
-                <div class="flex flex-col">
-                  <For each={recentTasks()}>{(session) => <RecentTaskRow session={session} onOpen={openRecent} />}</For>
-                </div>
-              </div>
+            <Show when={props.embedded} fallback={renderRecent()}>
+              <Show when={props.recentMount?.()} keyed>
+                {(mount) => <Portal mount={mount}>{renderRecent()}</Portal>}
+              </Show>
             </Show>
           </div>
         </div>

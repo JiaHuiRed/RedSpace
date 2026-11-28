@@ -1,16 +1,17 @@
 import { ButtonV2 } from "./button-v2"
 
 const docs = `### Overview
-Button v2 with three visual variants and two sizes.
+Button v2 with semantic action variants and three sizes.
 
 ### API
-- \`variant\`: "neutral" | "contrast" | "ghost".
-- \`size\`: "normal" | "large".
+- \`variant\`: "primary" | "success" | "warning" | "danger" | "neutral" | "contrast" | "ghost".
+- \`size\`: "small" | "normal" | "large".
 - \`icon\`: Optional icon name.
+- Loading disables activation and sets aria-busy.
 - Inherits Kobalte Button props and native button attributes.
 
 ### States
-- default, hover, pressed, focus, disabled.
+- default, hover, pressed, focus, disabled, loading.
 - State selectors are available via pseudo-classes and \`[data-state]\`.
 `
 
@@ -39,11 +40,11 @@ export default {
     },
     variant: {
       control: "select",
-      options: ["neutral", "contrast", "ghost"],
+      options: ["primary", "success", "warning", "danger", "neutral", "contrast", "ghost"],
     },
     size: {
       control: "select",
-      options: ["normal", "large"],
+      options: ["small", "normal", "large"],
     },
   },
 }
@@ -112,8 +113,8 @@ export const Icon = {
 
 export const AllStates = {
   render: () => {
-    const variants = ["neutral", "contrast", "ghost"] as const
-    const states = ["default", "hover", "pressed", "focus", "disabled"] as const
+    const variants = ["primary", "success", "warning", "danger", "neutral", "contrast", "ghost"] as const
+    const states = ["default", "hover", "pressed", "focus", "disabled", "loading"] as const
     const toTitleCase = (value: string) => value.charAt(0).toUpperCase() + value.slice(1)
     return (
       <div style={{ display: "grid", gap: "12px" }}>
@@ -134,6 +135,7 @@ export const AllStates = {
                   variant={variant}
                   data-state={state === "default" ? undefined : state}
                   disabled={state === "disabled"}
+                  loading={state === "loading"}
                 >
                   {toTitleCase(state)}
                 </ButtonV2>

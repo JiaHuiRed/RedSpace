@@ -84,6 +84,7 @@ import { resolveCachedCodeSoul } from "@/context/soul-identity"
 import { PromptPopover, type AtOption, type SlashCommand } from "./prompt-input/slash-popover"
 import { PromptContextItems } from "./prompt-input/context-items"
 import { PromptImageAttachments } from "./prompt-input/image-attachments"
+import { SkillDeck } from "./prompt-input/skill-deck"
 import { PromptDragOverlay } from "./prompt-input/drag-overlay"
 import { promptPlaceholder } from "./prompt-input/placeholder"
 import { ImagePreview } from "@redcode-ai/ui/image-preview"
@@ -793,6 +794,19 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     }))
 
     return [...custom, ...builtin]
+  })
+
+  const loadedSkills = createMemo(() => {
+    const names = new Set<string>()
+    for (const message of (params.id ? sync.data.message[params.id] : []) ?? []) {
+      if (message.role !== "assistant") continue
+      for (const part of sync.data.part[message.id] ?? []) {
+        if (part.type !== "tool" || part.tool !== "skill" || part.state.status !== "completed") continue
+        const name = part.state.metadata.name
+        if (typeof name === "string") names.add(name)
+      }
+    }
+    return [...names]
   })
 
   const handleSlashSelect = (cmd: SlashCommand | undefined) => {
@@ -1909,6 +1923,9 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
             </Show>
             <Show when={!companionChat()}>{agentControl()}</Show>
             {modelControl()}
+            <Show when={!companionChat() && store.mode === "normal"}>
+              <SkillDeck commands={slashCommands()} loaded={loadedSkills()} canSelect={blank()} onSelect={handleSlashSelect} />
+            </Show>
             {/* 260819 cc 上下文窗口指示器紧跟模型/档位——用户真正在看的位置（选模型的那一行）。
                组件自带 <Show when={params.id}> 守卫，新建会话页没有 id 时整块不渲染。
                261011 Red 与精简键合并：hover 出窗口/首字/解码数据，点击弹确认精简；
@@ -1974,6 +1991,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
             <Tooltip placement="top" inactive={!working() && blank()} value={tip()}>
               <IconButton
                 data-action="prompt-submit"
+                data-tone={companionChat() ? undefined : stopping() ? "danger" : "primary"}
                 type="submit"
                 disabled={!working() && blank()}
                 tabIndex={store.mode === "normal" ? undefined : -1}
@@ -1982,10 +2000,10 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                 // 261124 YuQi 发送键淡红（哥哥拍板）：品牌红 55% 透明度替代浓底 bg-contrast，
                 // 图标换亮色保对比度。四个输入框共用本组件，颜色统一生效。
                 class="size-7 rounded-md p-[6px] text-v2-icon-icon-base shadow-[var(--v2-elevation-button-contrast)]"
-                style={{
+                style={companionChat() ? {
                   "background-image":
                     "linear-gradient(180deg,var(--v2-alpha-light-20) 0%,var(--v2-alpha-light-0) 100%),linear-gradient(90deg,color-mix(in srgb,var(--surface-brand-base) 55%,transparent) 0%,color-mix(in srgb,var(--surface-brand-base) 55%,transparent) 100%)",
-                }}
+                } : undefined}
                 aria-label={stopping() ? language.t("prompt.action.stop") : language.t("prompt.action.send")}
               />
             </Tooltip>

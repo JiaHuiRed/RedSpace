@@ -1,0 +1,226 @@
+/* docs/notes/implemented/feature/2026-11-28-code-workbench-material.md */
+/* Workbench surfaces use the active theme, including existing wallpaper frost. */
+.home-workbench,
+.home-workbench-board {
+  margin-inline: auto;
+  max-width: 1280px;
+}
+.home-workbench {
+  padding: 0 4px clamp(24px, 4vh, 46px);
+}
+.home-workbench-top {
+  display: flex;
+  justify-content: flex-end;
+  min-height: 30px;
+  margin-bottom: 12px;
+}
+.home-workbench-top > * {
+  max-width: 100%;
+}
+.home-workbench-top[data-expanded] > * {
+  width: min(100%, 680px);
+}
+.home-workbench-compose {
+  display: flex;
+  justify-content: center;
+  min-width: 0;
+  padding-top: 12px;
+}
+.home-workbench-board {
+  padding-inline: 4px;
+}
+.home-workbench-board-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 12px;
+}
+.home-workbench-board-header h2 {
+  color: var(--text-strong);
+  font-size: 17px;
+  font-weight: 650;
+}
+.home-workbench-board-header > div {
+  width: min(44%, 312px);
+  min-width: 0;
+}
+
+.home-board-grid {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-areas: "working attention idle" "images images idle";
+  grid-template-rows: auto 1fr;
+}
+.home-board-lane[data-lane="working"] {
+  grid-area: working;
+}
+.home-board-lane[data-lane="attention"] {
+  grid-area: attention;
+}
+.home-board-lane[data-lane="idle"] {
+  grid-area: idle;
+}
+.home-recent-images {
+  grid-area: images;
+  align-self: start;
+}
+.home-recent-images h3 {
+  color: var(--text-strong);
+  font-size: 13px;
+  font-weight: 620;
+  margin-bottom: 8px;
+}
+.home-board-lane,
+.home-recent-images {
+  min-width: 0;
+  border: 1px solid var(--v2-border-border-base);
+  border-radius: 12px;
+  padding: 7px;
+  background: color-mix(in srgb, var(--v2-background-bg-layer-01) 86%, transparent);
+  box-shadow: inset 0 1px var(--v2-alpha-light-10);
+}
+.home-board-grid [data-component="kanban-card"],
+.home-workspace-toggle,
+.home-image-tile {
+  border: 1px solid var(--v2-border-border-base);
+  background: linear-gradient(155deg, var(--v2-background-bg-layer-02), var(--v2-background-bg-layer-01));
+  box-shadow:
+    inset 0 1px var(--v2-alpha-light-10),
+    var(--v2-elevation-button-neutral);
+  transition:
+    transform 120ms ease,
+    box-shadow 120ms ease;
+}
+.home-board-grid [data-component="kanban-card"]:hover:not(:active),
+.home-image-tile:hover:not(:active) {
+  transform: translateY(-1px);
+  box-shadow: var(--v2-elevation-raised);
+}
+.home-board-grid [data-component="kanban-card"]:active,
+.home-image-tile:active,
+.home-workspace-toggle:active {
+  transform: translateY(1px);
+  box-shadow: inset 0 2px 4px var(--v2-alpha-dark-20);
+}
+.home-workspace-toggle:hover {
+  background: var(--v2-background-bg-layer-02);
+}
+.home-board-grid [data-component="kanban-card"]:focus-visible,
+.home-image-tile:focus-visible,
+.home-workspace-toggle:focus-visible,
+.home-all-workspaces input:focus-visible {
+  outline: 2px solid var(--v2-border-border-focus);
+  outline-offset: 1px;
+}
+.home-all-workspaces:not([hidden]) {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  gap: 2px;
+  padding: 5px;
+  border-radius: 8px;
+  background: var(--v2-background-bg-layer-01);
+  border: 1px solid var(--v2-border-border-base);
+}
+.home-all-workspaces input {
+  width: 100%;
+  min-width: 0;
+  padding: 4px 6px;
+  font-size: 12px;
+  color: var(--text-strong);
+  background: var(--input-base);
+  border: 1px solid var(--v2-border-border-base);
+  border-radius: 6px;
+}
+.home-image-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 7px;
+}
+.home-image-tile {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  text-align: start;
+  border-radius: 8px;
+  overflow: hidden;
+  cursor: pointer;
+}
+.home-image-frame {
+  width: 100%;
+  aspect-ratio: 16/9;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  background: var(--v2-background-bg-layer-01);
+  color: var(--text-weak);
+}
+.home-image-frame img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.home-image-title {
+  display: block;
+  width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  padding: 5px 8px;
+  color: var(--text-strong);
+  font-size: 12px;
+}
+
+@container (max-width: 850px) {
+  .home-board-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-areas: "working attention" "idle idle" "images images";
+    grid-template-rows: auto;
+  }
+  .home-board-lane[data-lane="idle"] > .grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+@container (max-width: 500px) {
+  .home-board-grid {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "working" "attention" "idle" "images";
+  }
+  .home-board-lane[data-lane="idle"] > .grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .home-board-grid [data-component="kanban-card"],
+  .home-image-tile,
+  .home-workspace-toggle {
+    transition: none;
+    transform: none !important;
+  }
+}
+
+.home-workbench-compose [data-component="session-new-composer"][data-dock-surface="shell"] {
+  border: 1px solid var(--v2-border-border-base);
+  box-shadow: inset 0 1px var(--v2-alpha-light-10), var(--v2-elevation-raised);
+}
+.home-workbench-compose [data-component="session-new-composer"]:focus-within {
+  border-color: var(--v2-border-border-focus);
+}
+
+.home-board-grid [data-component="kanban-card"][data-lane="idle"] {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  column-gap: 6px;
+}
+.home-board-grid [data-component="kanban-card-next"] { grid-column: 1 / -1; }
+.home-board-grid [data-lane="idle"] [data-slot="kanban-card-meta"] { max-width: min(130px, 25vw); }
+.home-workbench-compose {
+  background: radial-gradient(ellipse at 50% 4%, color-mix(in srgb, var(--v2-state-bg-info) 37%, transparent), transparent 69%);
+}
+
+.home-sidebar-recent [data-component="new-session-recent-task"] { padding-block: 5px; }
+.home-sidebar-recent [data-component="new-session-recent-task"] > span { font-size: 11px; }

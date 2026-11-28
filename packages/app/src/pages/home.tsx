@@ -34,6 +34,8 @@ import { pickGreetingKey } from "@/utils/greeting"
 import { HomeKanban } from "@/pages/home-kanban"
 import { HomeUsagePanel, readHomeUsageCollapsed } from "@/pages/home-usage"
 import { focusProjectRow } from "@/pages/home-focus"
+import { HomeRecentImages } from "./home-recent-images"
+import "./home-workbench.css"
 
 const HomeCompose = lazy(() => import("@/pages/home-compose"))
 
@@ -93,6 +95,7 @@ export default function Home(props: { initialDirectory?: string }) {
   let searchInputRef: HTMLInputElement | undefined
   const [focusRequest, requestComposerFocus] = createSignal(props.initialDirectory ? 1 : 0)
   const [pickedProject, setPickedProject] = createSignal<string>()
+  const [recentMount, setRecentMount] = createSignal<HTMLDivElement>()
 
   onMount(() => {
     const handler = (e: KeyboardEvent) => {
@@ -406,6 +409,8 @@ export default function Home(props: { initialDirectory?: string }) {
         projects={projects()}
         selected={selectedProject()?.worktree}
         selectProject={selectProject}
+        openNewSession={openNewSession}
+        setRecentMount={setRecentMount}
         chooseProject={() => void chooseProject()}
         openSettings={openSettings}
         openFlightRecorder={openFlightRecorder}
@@ -418,16 +423,15 @@ export default function Home(props: { initialDirectory?: string }) {
         class="@container min-h-0 min-w-0 overflow-y-auto pt-6 pr-2"
         aria-label={language.t("sidebar.project.recentSessions")}
       >
-        {/* 261124 六轮（哥哥定稿）：左右整体互换——compose（字标+输入框+继续任务）是主视觉，
-            挪到左侧阅读起点；搜索+归档+用量面板的工作台列挪到右侧。看板带随之靠右
-            （board-section 里 justify-end，右缘与工作台列对齐）。
-            变量 --compose-max-w 由这里下传，session-new-design-view 内部消费。 */}
-        <div class="flex flex-col gap-x-6 pr-2 @min-[1040px]:flex-row @min-[1040px]:items-start">
-          <div
-            data-component="home-compose-section"
-            class="flex min-w-0 justify-center pt-10 pb-[clamp(26px,4vh,44px)] @min-[1040px]:flex-1"
-            style={{ "--compose-max-w": "900px" }}
-          >
+        <div class="home-workbench">
+          <div class="home-workbench-top" data-expanded={!state.usageCollapsed ? "" : undefined}>
+            <HomeUsagePanel
+              directory={selectedProject()?.worktree}
+              collapsed={state.usageCollapsed}
+              onCollapsedChange={(collapsed) => setState("usageCollapsed", collapsed)}
+            />
+          </div>
+          <div data-component="home-compose-section" class="home-workbench-compose" style={{ "--compose-max-w": "780px" }}>
             <Show when={composerDirectory()} keyed>
               {(directory) => (
                 <div class="w-full max-w-[var(--compose-max-w,720px)]">
@@ -441,14 +445,17 @@ export default function Home(props: { initialDirectory?: string }) {
                         server.projects.touch(project)
                       }}
                       focusRequest={focusRequest()}
+                      recentMount={recentMount}
                     />
                   </Suspense>
                 </div>
               )}
             </Show>
           </div>
-          {/* 261124 八轮：列宽 620→720 配合看板带宽——面板左移 100px，右列与看板同宽等右缘。 */}
-          <div class="flex w-full shrink-0 flex-col gap-3 @min-[1040px]:w-[min(720px,calc(100%-460px))]">
+        </div>
+        <div data-component="home-board-section" class="home-workbench-board pb-5">
+          <header class="home-workbench-board-header">
+            <h2>{language.t("home.kanban.title")}</h2>
             <div class="flex items-center gap-2">
               <HomeSessionSearch
                 ref={(el) => (searchInputRef = el)}
@@ -470,14 +477,7 @@ export default function Home(props: { initialDirectory?: string }) {
                 class="size-7 shrink-0"
               />
             </div>
-            <HomeUsagePanel
-              directory={selectedProject()?.worktree}
-              collapsed={state.usageCollapsed}
-              onCollapsedChange={(collapsed) => setState("usageCollapsed", collapsed)}
-            />
-          </div>
-        </div>
-        <div data-component="home-board-section" class="pt-2 pb-5">
+          </header>
           <Show when={!boardQuery().isLoading} fallback={<HomeSessionSkeleton label={language.t("common.loading")} />}>
             <Show when={boardQuery().isError}>
               <div role="alert" class="flex items-center justify-center gap-2 py-3">
@@ -512,7 +512,7 @@ export default function Home(props: { initialDirectory?: string }) {
                   <Show when={!state.archived}>
                     <ButtonV2
                       data-action="home-new-session-empty"
-                      variant="contrast"
+                      variant="primary"
                       size="normal"
                       icon="edit"
                       class="mt-2"
@@ -524,9 +524,6 @@ export default function Home(props: { initialDirectory?: string }) {
                 </div>
               )}
             >
-              {/* 261124 六轮：工作台挪右后，看板带靠右（justify-end），右缘与工作台列对齐
-                  （pr-2 对齐顶部行的同一缩进）；空态与骨架保持全宽居中，不跟着靠右。 */}
-              <div class="flex justify-end pr-2">
                 <HomeKanban
                   records={records()}
                   selectedProjectName={selectedProject() ? displayName(selectedProject()!) : undefined}
@@ -534,11 +531,13 @@ export default function Home(props: { initialDirectory?: string }) {
                   onArchive={archiveSession}
                   onUnarchive={(session) => void unarchiveSession(session)}
                   showAllIdle={state.archived || search().length > 0}
+                  recentImages={state.archived || search() ? undefined : (
+                    <HomeRecentImages sessions={records().map((record) => record.session)} />
+                  )}
                 />
-              </div>
             </Show>
             <Show when={state.archived && archivedLoad.hasNextPage && !archivedLoad.isError}>
-              <div class="flex justify-end pr-2 pt-3">
+              <div class="flex justify-center pt-3">
                 <ButtonV2 disabled={archivedLoad.isFetching} onClick={() => void archivedLoad.fetchNextPage()}>
                   {language.t(archivedLoad.isFetchingNextPage ? "common.loading" : "common.loadMore")}
                 </ButtonV2>
@@ -613,6 +612,8 @@ function HomeProjectColumn(props: {
   projects: LocalProject[]
   selected?: string
   selectProject: (directory: string) => void
+  openNewSession: () => void
+  setRecentMount: (node: HTMLDivElement) => void
   chooseProject: () => void
   openSettings: () => void
   openFlightRecorder: () => void
@@ -628,10 +629,13 @@ function HomeProjectColumn(props: {
   // 三条边界：选中项掉出前 5 时强制补位（选中态已有品牌描边，不再加「当前」标签）；
   // 展开后不重复前 5；项目 ≤5 时整个分组隐藏。
   const [projectsExpanded, setProjectsExpanded] = createSignal(readProjectsExpanded())
+  const [projectSearch, setProjectSearch] = createSignal("")
+  let workspaceToggle: HTMLButtonElement | undefined
   const toggleProjectsExpanded = () => {
     const next = !projectsExpanded()
     setProjectsExpanded(next)
     writeProjectsExpanded(next)
+    if (!next) setProjectSearch("")
   }
   const recent = createMemo(() => {
     const all = props.projects
@@ -645,7 +649,11 @@ function HomeProjectColumn(props: {
     const shown = new Set(recent().map((project) => project.worktree))
     return props.projects.filter((project) => !shown.has(project.worktree))
   })
-  const grouped = createMemo(() => rest().length > 0)
+  const grouped = createMemo(() => props.projects.length > 0)
+  const query = () => projectSearch().trim().toLocaleLowerCase()
+  const expandedProjects = createMemo(() =>
+    query() ? props.projects.filter((project) => displayName(project).toLocaleLowerCase().includes(query())) : rest(),
+  )
   // 261122 Red 第三批：键盘（或鼠标）激活「全部项目」里的条目后，选中态会让它补位到
   // 「最近常用」，原按钮随分组迁移卸载，焦点掉回 body。重排后把焦点交给同一项目的新
   // 按钮；用户已经点去别处时不抢（判据见 home-focus.ts）。
@@ -722,10 +730,16 @@ function HomeProjectColumn(props: {
     //   pt-10(40px) 顶回 12+40=52px，与改造前逐像素相同。卡顶因此高于搜索框一截——
     //   这正是 Aqua 那种侧栏卡的样子，不是失误。
     <aside
-      class="flex max-h-[23dvh] min-w-0 flex-col overflow-y-auto lg:row-span-full lg:max-h-none lg:mt-3 lg:mb-3 lg:ml-3 lg:rounded-pane lg:border lg:border-v2-border-border-base lg:bg-v2-background-bg-layer-01 lg:px-3 lg:pb-3 lg:pt-10 lg:shadow-[var(--v2-elevation-floating)]"
+      class="flex max-h-[23dvh] min-w-0 flex-col overflow-y-auto lg:row-span-full lg:max-h-none lg:mt-3 lg:mb-3 lg:ml-3 lg:rounded-pane lg:border lg:border-v2-border-border-base lg:bg-v2-background-bg-layer-01 lg:px-3 lg:pb-3 lg:pt-3 lg:shadow-[var(--v2-elevation-floating)]"
       data-frost-surface="home-sidebar"
       aria-label={props.language.t("home.projects")}
     >
+      <Show when={props.selected}>
+        <ButtonV2 data-action="home-new-session-sidebar" variant="primary" icon="plus" class="mb-3 w-full shrink-0"
+          onClick={props.openNewSession}>
+          {props.language.t("command.session.new")}
+        </ButtonV2>
+      </Show>
       <div class="flex h-7 min-w-0 items-center justify-between pl-2">
         <div class={HOME_SECTION_LABEL}>{props.language.t("home.projects")}</div>
         <IconButtonV2
@@ -753,7 +767,7 @@ function HomeProjectColumn(props: {
             </button>
           }
         >
-          <Show when={grouped()}>
+          <Show when={rest().length > 0}>
             <div class="px-2 pb-1 pt-1 text-[11px] [font-weight:440] text-v2-text-text-faint">
               {props.language.t("home.projects.recent")}
             </div>
@@ -762,14 +776,16 @@ function HomeProjectColumn(props: {
           <Show when={grouped()}>
             <button
               type="button"
+              ref={(node) => (workspaceToggle = node)}
               data-action="home-projects-toggle"
-              class={`${HOME_PROJECT_NAV_ROW} text-v2-text-text-faint`}
+              class={`${HOME_PROJECT_NAV_ROW} home-workspace-toggle`}
               aria-expanded={projectsExpanded()}
+              aria-controls="home-all-workspaces"
               onClick={toggleProjectsExpanded}
             >
               <span>{props.language.t("home.projects.all")}</span>
               <span class="shrink-0 rounded-full bg-v2-overlay-simple-overlay-hover px-1.5 text-[10px] tabular-nums">
-                {rest().length}
+                {props.projects.length}
               </span>
               <svg
                 aria-hidden="true"
@@ -787,11 +803,30 @@ function HomeProjectColumn(props: {
                 />
               </svg>
             </button>
-             <Show when={projectsExpanded()}>
-              <For each={rest()}>{renderProject}</For>
-            </Show>
+            <div id="home-all-workspaces" hidden={!projectsExpanded()} class="home-all-workspaces">
+              <input
+                type="search"
+                data-action="home-projects-search"
+                aria-label={props.language.t("home.projects.search")}
+                placeholder={props.language.t("home.projects.search")}
+                value={projectSearch()}
+                onInput={(event) => setProjectSearch(event.currentTarget.value)}
+                onKeyDown={(event) => {
+                  if (event.key !== "Escape" || event.isComposing || event.keyCode === 229) return
+                  event.preventDefault()
+                  event.stopPropagation()
+                  toggleProjectsExpanded()
+                  workspaceToggle?.focus()
+                }}
+              />
+              <For each={expandedProjects()}>{renderProject}</For>
+              <Show when={query() && expandedProjects().length === 0}>
+                <div role="status" class="px-2 py-1 text-v2-text-text-muted">{props.language.t("home.projects.noMatch")}</div>
+              </Show>
+            </div>
           </Show>
         </Show>
+        <div class="home-sidebar-recent" ref={props.setRecentMount} />
       </div>
       {/* 260709 Red 左栏底部吸底：StatsPanel + 设置按钮固定在左栏最下方，不随项目列表滚动 */}
       {/* 260901 cc StatsPanel 搬到主区会话卡下方（HomeUsagePanel 里）——左栏 232px 放不下看板，

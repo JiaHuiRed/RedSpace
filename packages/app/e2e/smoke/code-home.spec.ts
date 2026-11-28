@@ -6,7 +6,7 @@ import { fixture } from "./session-timeline.fixture"
 const homeEntry = `/${base64Encode(fixture.directory)}/session`
 const newSession = { ...fixture.sessions[0]!, id: "ses_home_first", title: "First from the workspace" }
 
-test("Code workspace puts the composer beside usage and caps only unfiltered idle cards", async ({ page }) => {
+test("Code workspace puts the composer below usage and caps only unfiltered idle cards", async ({ page }) => {
   const sessions = Array.from({ length: 12 }, (_, index) => ({
     ...fixture.sessions[0]!,
     id: `ses_home_card_${String(index).padStart(2, "0")}`,
@@ -47,7 +47,9 @@ test("Code workspace puts the composer beside usage and caps only unfiltered idl
   const board = page.locator('[data-component="home-board-section"]')
   const editor = composer.getByRole("textbox")
   await expect(editor).toBeVisible()
-  // 261124 YuQi 布局重排：usage 与 compose 并排在顶部左列，不再属于 board-section。
+  await page.locator('[data-action="home-new-session-sidebar"]').click()
+  await expect(editor).toBeFocused()
+  // 261124 YuQi 布局重排：usage 位于输入区上方，不再属于 board-section。
   await expect(page.locator('[data-frost-surface="home-usage"]')).toBeVisible()
   expect(await composer.evaluate((el) => el.getBoundingClientRect().bottom)).toBeLessThanOrEqual(
     await board.evaluate((el) => el.getBoundingClientRect().top),
@@ -299,4 +301,118 @@ test("Code archive retries an outage and reaches older tasks by search or pagina
   await board.getByRole("button", { name: "Load more" }).click()
   await expect(board.getByText(recent[0]!.title)).toBeVisible()
   await expect(board.getByText("Old deployment notes")).toBeVisible()
+})
+
+test("workspaces can be searched and collapsed without leaving Code", async ({ page }) => {
+  const worktree = "C:/RedCode/ExtraWorkspace"
+  await page.addInitScript(({ root, worktree }) => {
+    localStorage.setItem("RedCode.global.dat:server", JSON.stringify({
+      projects: { local: [{ worktree: root, expanded: true }, { worktree, expanded: true }] },
+    }))
+    localStorage.setItem("redcode-home-projects-expanded", "0")
+  }, { root: fixture.directory, worktree })
+  await mockRedCodeServer(page, { ...fixture, pageMessages: () => ({ items: [] }) })
+  await page.goto("/")
+  const toggle = page.locator('[data-action="home-projects-toggle"]')
+  const filter = page.locator('[data-action="home-projects-search"]')
+  await expect(toggle).toHaveAttribute("aria-expanded", "false")
+  await toggle.click()
+  await expect(filter).toBeVisible()
+  await filter.fill("extrawork")
+  const result = page.locator("#home-all-workspaces [data-action=home-project-row]")
+  await expect(result).toHaveCount(1)
+  await expect(result).toContainText("ExtraWorkspace")
+  await result.click()
+  await expect(result).toHaveAttribute("aria-current", "page")
+  await expect(page).toHaveURL(/\/$/)
+  await filter.press("Escape")
+  await expect(toggle).toHaveAttribute("aria-expanded", "false")
+  await expect(toggle).toBeFocused()
+})
+
+test("Skill Deck reuses slash selection, keeps the draft and supports favorites", async ({ page }) => {
+  await mockRedCodeServer(page, { ...fixture, pageMessages: () => ({ items: [] }) })
+  await page.route("**/command?**", (route) => route.fulfill({ json: [
+    { name: "review-ui", description: "Review a screenshot", source: "skill" },
+    { name: "reopen", description: "A regular command", source: "command" },
+  ] }))
+  await page.goto(homeEntry)
+  const editor = page.locator('[data-component="home-compose-section"] [data-component="prompt-input"]')
+  const trigger = page.locator('[data-action="prompt-skills"]')
+  const search = page.locator('[data-action="prompt-skills-search"]')
+  await editor.fill("Existing draft")
+  await trigger.click()
+  await search.fill("review")
+  const insert = page.getByRole("button", { name: "Insert", exact: true })
+  await expect(insert).toBeDisabled()
+  await expect(editor).toHaveText("Existing draft")
+  await search.press("Escape")
+  await expect(trigger).toBeFocused()
+  await editor.fill("")
+  await trigger.click()
+  await expect(page.getByText("reopen", { exact: true })).toHaveCount(0)
+  await page.getByRole("button", { name: "Favorites: review-ui" }).click()
+  await page.getByRole("button", { name: "Favorites", exact: true }).click()
+  await expect(insert).toBeEnabled()
+  await insert.click()
+  await expect(editor).toContainText("/review-ui")
+  await expect(search).toBeHidden()
+  await expect(page.getByText("Loaded in this session", { exact: false })).toHaveCount(0)
+  // The Enter emitted mid-composition must not submit the command.
+  await editor.dispatchEvent("compositionstart")
+  await editor.dispatchEvent("keydown", { key: "Enter", code: "Enter", isComposing: true })
+  await expect(editor).toContainText("/review-ui")
+})
+
+test("recent image tiles use completed workspace outputs and open the shared preview", async ({ page }) => {
+  const session = fixture.sessions[0]!
+  const imagePath = ".redcode/temp/smoke.png"
+  const [user, assistant] = fixture.messages[fixture.sourceID].slice(-2)
+  const tool = {
+    id: "prt_smoke_image",
+    type: "tool",
+    tool: "image",
+    sessionID: session.id,
+    messageID: assistant!.info.id,
+    callID: "call_smoke_image",
+    state: {
+      status: "completed",
+      input: {},
+      title: "smoke.png",
+      output: "Generated image",
+      metadata: { filepath: `${fixture.directory}/${imagePath}`, bytes: 68 },
+      time: { start: 1700000000000, end: 1700000001000 },
+    },
+  }
+  await page.addInitScript((directory) => {
+    localStorage.setItem("RedCode.global.dat:server", JSON.stringify({
+      projects: { local: [{ worktree: directory, expanded: true }] },
+    }))
+  }, fixture.directory)
+  await mockRedCodeServer(page, {
+    ...fixture,
+    sessions: [session],
+    pageMessages: () => ({ items: [user!, { ...assistant!, parts: [tool] }] }),
+  })
+  const reads: string[] = []
+  await page.route("**/file/content?**", async (route) => {
+    const path = new URL(route.request().url()).searchParams.get("path")
+    if (path !== imagePath) return route.fallback()
+    reads.push(path)
+    return route.fulfill({ json: {
+      type: "binary", encoding: "base64", mimeType: "image/png",
+      content: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/l9sAAAAASUVORK5CYII=",
+    } })
+  })
+  await page.goto(`${homeEntry}/${session.id}`)
+  await expect(page.getByRole("button", { name: "View preview " + imagePath })).toBeVisible()
+  await page.locator('[data-mode=code]').click()
+  const tile = page.getByRole("button", { name: "smoke.png", exact: true })
+  await expect(tile).toBeVisible()
+  await expect(tile.locator("img")).toHaveAttribute("src", /^data:image\/png;base64,/)
+  await tile.press("Enter")
+  await expect(page.locator('[data-slot="image-preview-image"]')).toBeVisible()
+  await page.keyboard.press("Escape")
+  await expect(tile).toBeFocused()
+  expect(reads).toEqual([imagePath])
 })

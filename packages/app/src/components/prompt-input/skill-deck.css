@@ -1,0 +1,53 @@
+[data-component="popover-content"].prompt-skill-deck {
+  width: min(420px, calc(100vw - 24px));
+}
+.prompt-skill-body {
+  display: grid;
+  gap: 7px;
+  padding: 0 8px 8px;
+  color: var(--text-strong);
+}
+.prompt-skill-body input {
+  padding: 5px 8px;
+  border-radius: 7px;
+  border: 1px solid var(--v2-border-border-base);
+  background: var(--input-base);
+  width: 100%;
+}
+.prompt-skill-body input:focus-visible {
+  outline: 2px solid var(--v2-border-border-focus);
+}
+.prompt-skill-body [aria-pressed="true"] {
+  box-shadow: inset 0 0 0 1px var(--v2-border-border-focus);
+}
+.prompt-skill-list {
+  max-height: min(34vh, 270px);
+  overflow: auto;
+  padding: 3px;
+  display: grid;
+  gap: 5px;
+}
+.prompt-skill-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 5px;
+  padding: 6px;
+  border: 1px solid var(--v2-border-border-base);
+  border-radius: 8px;
+  background: var(--v2-background-bg-layer-01);
+}
+.prompt-skill-item strong {
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.prompt-skill-body p {
+  font-size: 12px;
+  color: var(--v2-text-text-muted);
+}
+.prompt-skill-item p {
+  overflow-wrap: anywhere;
+}
+.prompt-skill-loaded {
+  overflow-wrap: anywhere;
+}
