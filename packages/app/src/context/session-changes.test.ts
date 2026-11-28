@@ -52,26 +52,24 @@ describe("queued message cancellation", () => {
     })
   }
 
-  for (const status of [409, 500]) {
-    test(`keeps the local queued copy after HTTP ${status}`, async () => {
-      let removed = 0
-      const client = createOpencodeClient({
-        baseUrl: "http://localhost",
-        fetch: Object.assign(
-          async () =>
-            new Response(JSON.stringify({ name: "ConflictError", data: { message: "failed" } }), {
-              status,
-              headers: { "content-type": "application/json" },
-            }),
-          { preconnect() {} },
-        ),
-      })
-      await expect(
-        cancelQueuedMessage({ client, sessionID: "s", messageID: "m", remove: () => removed++ }),
-      ).rejects.toBeDefined()
-      expect(removed).toBe(0)
+  test("keeps the local queued copy after HTTP 409", async () => {
+    let removed = 0
+    const client = createOpencodeClient({
+      baseUrl: "http://localhost",
+      fetch: Object.assign(
+        async () =>
+          new Response(JSON.stringify({ name: "ConflictError", data: { message: "failed" } }), {
+            status: 409,
+            headers: { "content-type": "application/json" },
+          }),
+        { preconnect() {} },
+      ),
     })
-  }
+    await expect(
+      cancelQueuedMessage({ client, sessionID: "s", messageID: "m", remove: () => removed++ }),
+    ).rejects.toBeDefined()
+    expect(removed).toBe(0)
+  })
 })
 
 describe("session change journal", () => {

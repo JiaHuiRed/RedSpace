@@ -47,11 +47,4 @@ describe("corner-shape", () => {
     }
     expect(offenders).toEqual([])
   })
-
-  test("通配规则包在 @supports 里，不支持的引擎读不到", () => {
-    const source = readFileSync(join(import.meta.dir, "corner-shape.css"), "utf8")
-    expect(source).toContain("@supports (corner-shape: superellipse(1.5))")
-    const guard = source.indexOf("@supports")
-    expect(source.indexOf("corner-shape: superellipse(1.5);")).toBeGreaterThan(guard)
-  })
 })

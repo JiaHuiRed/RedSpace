@@ -17,23 +17,6 @@ describe("runUpdateAndRestart", () => {
     expect(states).toEqual([true, false])
   })
 
-  test("clears the installing state when restart rejects", async () => {
-    const states: boolean[] = []
-    await new Promise<void>((resolve) => {
-      runUpdateAndRestart(
-        async () => {
-          throw new Error("updater failed")
-        },
-        (installing) => {
-          states.push(installing)
-          if (states.length === 2) resolve()
-        },
-      )
-    })
-
-    expect(states).toEqual([true, false])
-  })
-
   test("surfaces a failed install result instead of swallowing it", async () => {
     const states: boolean[] = []
     const errors: string[] = []

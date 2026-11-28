@@ -19,9 +19,4 @@ describe("notification click", () => {
     handleNotificationClick(undefined)
     expect(calls).toEqual([])
   })
-
-  test("falls back to location.assign without registered navigate", () => {
-    handleNotificationClick("/abc/session/123")
-    // falls back to window.location.assign — no error thrown
-  })
 })

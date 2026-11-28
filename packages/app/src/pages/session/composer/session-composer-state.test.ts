@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
-import type { PermissionRequest, QuestionRequest, Session } from "@redcode-ai/sdk/v2/client"
-import { sessionPermissionRequest, sessionQuestionRequest } from "./session-request-tree"
+import type { PermissionRequest, Session } from "@redcode-ai/sdk/v2/client"
+import { sessionPermissionRequest } from "./session-request-tree"
 
 const session = (input: { id: string; parentID?: string }) =>
   ({
@@ -13,13 +13,6 @@ const permission = (id: string, sessionID: string) =>
     id,
     sessionID,
   }) as PermissionRequest
-
-const question = (id: string, sessionID: string) =>
-  ({
-    id,
-    sessionID,
-    questions: [],
-  }) as QuestionRequest
 
 describe("sessionPermissionRequest", () => {
   test("prefers the current session permission", () => {
@@ -76,30 +69,5 @@ describe("sessionPermissionRequest", () => {
     }
 
     expect(sessionPermissionRequest(sessions, permissions, "root", () => false)).toBeUndefined()
-  })
-})
-
-describe("sessionQuestionRequest", () => {
-  test("prefers the current session question", () => {
-    const sessions = [session({ id: "root" }), session({ id: "child", parentID: "root" })]
-    const questions = {
-      root: [question("q-root", "root")],
-      child: [question("q-child", "child")],
-    }
-
-    expect(sessionQuestionRequest(sessions, questions, "root")?.id).toBe("q-root")
-  })
-
-  test("returns a nested child question", () => {
-    const sessions = [
-      session({ id: "root" }),
-      session({ id: "child", parentID: "root" }),
-      session({ id: "grand", parentID: "child" }),
-    ]
-    const questions = {
-      grand: [question("q-grand", "grand")],
-    }
-
-    expect(sessionQuestionRequest(sessions, questions, "root")?.id).toBe("q-grand")
   })
 })

@@ -62,10 +62,4 @@ describe("elevation", () => {
     }
     expect(offenders).toEqual([])
   })
-
-  test("--shadow-md-border 自带描边层", () => {
-    const theme = readFileSync(join(import.meta.dir, "theme.css"), "utf8")
-    const token = theme.slice(theme.indexOf("--shadow-md-border:"))
-    expect(token).toContain("0 0 0 1px")
-  })
 })

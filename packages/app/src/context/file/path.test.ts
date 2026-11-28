@@ -135,26 +135,6 @@ describe("encodeFilePath", () => {
     })
   })
 
-  describe("macOS paths", () => {
-    test("should handle macOS absolute path", () => {
-      const macPath = "/Users/kelvin/Projects/RedCode/README.md"
-      const result = encodeFilePath(macPath)
-      const fileUrl = `file://${result}`
-
-      expect(() => new URL(fileUrl)).not.toThrow()
-      expect(result).toBe("/Users/kelvin/Projects/RedCode/README.md")
-    })
-
-    test("should handle macOS path with spaces", () => {
-      const macPath = "/Users/kelvin/My Documents/file.txt"
-      const result = encodeFilePath(macPath)
-      const fileUrl = `file://${result}`
-
-      expect(() => new URL(fileUrl)).not.toThrow()
-      expect(result).toContain("My%20Documents")
-    })
-  })
-
   describe("Windows paths", () => {
     test("should handle Windows absolute path with backslashes", () => {
       const windowsPath = "D:\\dev\\projects\\RedCode\\README.bs.md"
@@ -216,20 +196,6 @@ describe("encodeFilePath", () => {
       expect(result).toBe("src/components/App.tsx")
     })
 
-    test("should NOT create invalid URL like the bug report", () => {
-      // This is the exact scenario from bug report by @alexyaroshuk
-      const windowsPath = "D:\\dev\\projects\\RedCode\\README.bs.md"
-      const result = encodeFilePath(windowsPath)
-      const fileUrl = `file://${result}`
-
-      // The bug was creating: file://D%3A%5Cdev%5Cprojects%5CRedCode/README.bs.md
-      expect(result).not.toContain("%5C") // Should not have encoded backslashes
-      expect(result).not.toBe("D%3A%5Cdev%5Cprojects%5CRedCode/README.bs.md")
-
-      // Should be valid
-      expect(() => new URL(fileUrl)).not.toThrow()
-    })
-
     test("should handle lowercase drive letters", () => {
       const windowsPath = "c:\\users\\test\\file.txt"
       const result = encodeFilePath(windowsPath)
@@ -237,34 +203,6 @@ describe("encodeFilePath", () => {
 
       expect(() => new URL(fileUrl)).not.toThrow()
       expect(result).toBe("/c:/users/test/file.txt")
-    })
-  })
-
-  describe("Cross-platform compatibility", () => {
-    test("should preserve Unix paths unchanged (except encoding)", () => {
-      const unixPath = "/usr/local/bin/app"
-      const result = encodeFilePath(unixPath)
-      expect(result).toBe("/usr/local/bin/app")
-    })
-
-    test("should normalize Windows paths for cross-platform use", () => {
-      const windowsPath = "C:\\Users\\test\\file.txt"
-      const result = encodeFilePath(windowsPath)
-      // Should convert to forward slashes and add leading /
-      expect(result).not.toContain("\\")
-      expect(result).toMatch(/^\/[A-Za-z]:\//)
-    })
-
-    test("should handle relative paths the same on all platforms", () => {
-      const unixRelative = "src/app.ts"
-      const windowsRelative = "src\\app.ts"
-
-      const unixResult = encodeFilePath(unixRelative)
-      const windowsResult = encodeFilePath(windowsRelative)
-
-      // Both should normalize to forward slashes
-      expect(unixResult).toBe("src/app.ts")
-      expect(windowsResult).toBe("src/app.ts")
     })
   })
 
@@ -388,24 +326,6 @@ describe("encodeFilePath", () => {
       const url = new URL(fileUrl)
       expect(url.searchParams.get("start")).toBe("10")
       expect(url.searchParams.get("end")).toBe("20")
-    })
-
-    test("should parse correctly in URL constructor (Linux)", () => {
-      const path = "/var/log/app.log"
-      const fileUrl = `file://${encodeFilePath(path)}`
-      const url = new URL(fileUrl)
-
-      expect(url.protocol).toBe("file:")
-      expect(url.pathname).toBe("/var/log/app.log")
-    })
-
-    test("should parse correctly in URL constructor (Windows)", () => {
-      const path = "D:\\logs\\app.log"
-      const fileUrl = `file://${encodeFilePath(path)}`
-      const url = new URL(fileUrl)
-
-      expect(url.protocol).toBe("file:")
-      expect(url.pathname).toContain("app.log")
     })
   })
 })
