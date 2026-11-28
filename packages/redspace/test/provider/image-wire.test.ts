@@ -7,11 +7,15 @@ import {
   type RequestImageInput,
 } from "@/provider/image-wire"
 
-const PNG = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d])
-const JPEG = Uint8Array.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01])
-const WEBP = Uint8Array.from([
-  0x52, 0x49, 0x46, 0x46, 0x24, 0x00, 0x00, 0x00, 0x57, 0x45, 0x42, 0x50, 0x56, 0x50, 0x38, 0x20,
-])
+const unbase64 = (value: string) => new Uint8Array(Buffer.from(value, "base64"))
+// 真实可解码的 1×1 图片；结构完整的截断头（旧的 12 字节常量）本身就是本文件的回归对象。
+const PNG = unbase64(
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=",
+)
+const JPEG = unbase64(
+  "/9j/4AAQSkZJRgABAgAAAQABAAD//gAPTGF2YzYzLjEuMTAwAP/bAEMACAQEBAQEBQUFBQUFBgYGBgYGBgYGBgYGBgcHBwgICAcHBwYGBwcICAgICQkJCAgICAkJCgoKDAwLCw4ODhERFP/EAEwAAQEAAAAAAAAAAAAAAAAAAAAGAQEBAAAAAAAAAAAAAAAAAAAGBxABAAAAAAAAAAAAAAAAAAAAABEBAAAAAAAAAAAAAAAAAAAAAP/AABEIAAEAAQMBIgACEQADEQD/2gAMAwEAAhEDEQA/AIsATX9//9k=",
+)
+const WEBP = unbase64("UklGRjwAAABXRUJQVlA4IDAAAADQAQCdASoBAAEAAgA0JaACdLoB+AADsAD+8Oj3/yC5YXXI1/8gP+QH/ID/+PIAAAA=")
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const source: ImageSource = { bytes: PNG, mime: "image/png", filename: "cat.png" }
 
@@ -393,9 +397,22 @@ describe("provider.image-wire", () => {
       Response.json({ data: [{ b64_json: Buffer.from("<html>not an image</html>").toString("base64") }] }),
     )
     try {
-      await expect(requestImage(input(server))).rejects.toThrow(/did not decode to a PNG\/JPEG\/WebP image/)
+      await expect(requestImage(input(server))).rejects.toThrow(/did not decode to a complete PNG\/JPEG\/WebP image/)
     } finally {
       server.stop(true)
+    }
+  })
+
+  test("truncated image payloads are rejected", async () => {
+    const truncated = PNG.subarray(0, 12)
+    const raw = serve(() => new Response(truncated, { headers: { "content-type": "image/png" } }))
+    const json = serve(() => Response.json({ data: [{ b64_json: b64(truncated) }] }))
+    try {
+      await expect(requestImage(input(raw))).rejects.toThrow(/not a complete PNG\/JPEG\/WebP image/)
+      await expect(requestImage(input(json))).rejects.toThrow(/did not decode to a complete PNG\/JPEG\/WebP image/)
+    } finally {
+      raw.stop(true)
+      json.stop(true)
     }
   })
 

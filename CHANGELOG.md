@@ -10,7 +10,7 @@
 
 ### [Unreleased]
 
-- **Chat / Code 内置 `image`**：新会话可以直接生成图片，或用已有图片路径继续编辑，不用切换聊天模型。图片后端可选支持生图的订阅插件或兼容 Images API 的供应商；失败不切换计费方式。原图默认另存到工作区 `.redcode/temp/`，GUI 从本轮成果打开，TUI 显示路径，图片字节不写进工具消息。配置见 `MANUAL.md` §3.4；[执行与交付边界](docs/notes/implemented/feature/2026-11-27-image-tool.md)。
+- **Chat / Code 内置 `image`**：新会话可以直接生成图片，或用已有图片路径继续编辑，不用切换聊天模型。图片后端可选支持生图的订阅插件或兼容 Images API 的供应商；失败不切换计费方式。原图默认另存到工作区 `.redcode/temp/`，GUI 从本轮成果打开，TUI 显示路径，图片字节不写进工具消息。供应商返回截断或结构不完整的图片会被拒绝而不是落盘；`output` 扩展名与返回格式不一致时按原生格式另存并在结果里提示，不再丢弃已生成的结果。配置见 `MANUAL.md` §3.4；[执行与交付边界](docs/notes/implemented/feature/2026-11-27-image-tool.md)。
 
 ### [0.20.7] - 2026-11-26
 

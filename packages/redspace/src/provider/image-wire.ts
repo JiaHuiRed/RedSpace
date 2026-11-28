@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto"
-import { sniffAttachmentMime } from "@/util/media"
+import { completeImageMime } from "@/util/media"
 
 // 261127 Karina image wire: OpenAI Images-compatible 生图/改图的线协议层。
 //
@@ -166,21 +166,20 @@ function decodeImage(response: Response, body: Uint8Array): ImageResult {
   const declared = (response.headers.get("content-type") ?? "").split(";")[0].trim().toLowerCase()
 
   if (declared.startsWith("image/")) {
-    const mime = sniffImage(body)
-    if (!mime) throw new Error(`${PREFIX}response declared ${declared} but payload is not PNG/JPEG/WebP`)
-    if (mime !== declared) throw new Error(`${PREFIX}response declared ${declared} but payload is ${mime}`)
     if (body.byteLength > MAX_IMAGE_BYTES) throw new Error(`${PREFIX}image exceeds ${MAX_IMAGE_BYTES} bytes`)
+    const mime = completeImageMime(body)
+    if (!mime)
+      throw new Error(`${PREFIX}response declared ${declared} but payload is not a complete PNG/JPEG/WebP image`)
+    if (mime !== declared) throw new Error(`${PREFIX}response declared ${declared} but payload is ${mime}`)
     return { bytes: body, mime }
   }
 
   if (declared.includes("json") || firstByte(body) === 0x7b) return decodeJson(body)
 
-  const mime = sniffImage(body)
-  if (mime) {
-    if (body.byteLength > MAX_IMAGE_BYTES) throw new Error(`${PREFIX}image exceeds ${MAX_IMAGE_BYTES} bytes`)
-    return { bytes: body, mime }
-  }
-  throw new Error(`${PREFIX}response is not a PNG/JPEG/WebP image (content-type: ${declared || "missing"})`)
+  if (body.byteLength > MAX_IMAGE_BYTES) throw new Error(`${PREFIX}image exceeds ${MAX_IMAGE_BYTES} bytes`)
+  const mime = completeImageMime(body)
+  if (mime) return { bytes: body, mime }
+  throw new Error(`${PREFIX}response is not a complete PNG/JPEG/WebP image (content-type: ${declared || "missing"})`)
 }
 
 function decodeJson(body: Uint8Array): ImageResult {
@@ -192,9 +191,10 @@ function decodeJson(body: Uint8Array): ImageResult {
 
   if (first && typeof first.b64_json === "string" && first.b64_json.length > 0) {
     const bytes = Buffer.from(first.b64_json, "base64")
-    const mime = sniffImage(bytes)
-    if (!mime) throw new Error(`${PREFIX}response data[0].b64_json did not decode to a PNG/JPEG/WebP image`)
     if (bytes.byteLength > MAX_IMAGE_BYTES) throw new Error(`${PREFIX}image exceeds ${MAX_IMAGE_BYTES} bytes`)
+    const mime = completeImageMime(bytes)
+    if (!mime)
+      throw new Error(`${PREFIX}response data[0].b64_json did not decode to a complete PNG/JPEG/WebP image`)
     return { bytes, mime }
   }
 
@@ -231,11 +231,6 @@ function errorFromStatus(status: number) {
 async function cancelBody(response: Response) {
   if (!response.body) return
   await response.body.cancel().catch(() => {}) // 已经按状态/上限失败，取消流的错误没有额外信息
-}
-
-function sniffImage(bytes: Uint8Array): ImageMime | undefined {
-  const mime = sniffAttachmentMime(bytes, "")
-  return mime === "image/png" || mime === "image/jpeg" || mime === "image/webp" ? mime : undefined
 }
 
 function firstByte(bytes: Uint8Array) {

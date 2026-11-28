@@ -17,6 +17,8 @@ import { TestInstance, tmpdirScoped } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 
 const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII="
+const jpeg =
+  "/9j/4AAQSkZJRgABAgAAAQABAAD//gAPTGF2YzYzLjEuMTAwAP/bAEMACAQEBAQEBQUFBQUFBgYGBgYGBgYGBgYGBgcHBwgICAcHBwYGBwcICAgICQkJCAgICAkJCgoKDAwLCw4ODhERFP/EAEwAAQEAAAAAAAAAAAAAAAAAAAAGAQEBAAAAAAAAAAAAAAAAAAAGBxABAAAAAAAAAAAAAAAAAAAAABEBAAAAAAAAAAAAAAAAAAAAAP/AABEIAAEAAQMBIgACEQADEQD/2gAMAwEAAhEDEQA/AIsATX9//9k="
 const it = testEffect(Layer.mergeAll(AppFileSystem.defaultLayer, Truncate.defaultLayer, Agent.defaultLayer, CrossSpawnSpawner.defaultLayer))
 const ctx: Tool.Context = {
   sessionID: SessionID.make("ses_image"),
@@ -28,8 +30,11 @@ const ctx: Tool.Context = {
   ask: () => Effect.void,
 }
 
-const fixture = Effect.fn("test.image.fixture")(function* (onRequest?: () => Promise<void>) {
+const fixture = Effect.fn("test.image.fixture")(function* (
+  options: { onRequest?: () => Promise<void>; mime?: "image/png" | "image/jpeg" } = {},
+) {
   const calls: string[] = []
+  const payload = options.mime === "image/jpeg" ? jpeg : png
   const server = yield* Effect.acquireRelease(
     Effect.sync(() =>
       Bun.serve({
@@ -38,13 +43,13 @@ const fixture = Effect.fn("test.image.fixture")(function* (onRequest?: () => Pro
         async fetch(req) {
           const route = new URL(req.url).pathname
           calls.push(route)
-          if (onRequest) await onRequest()
+          if (options.onRequest) await options.onRequest()
           if (route.endsWith("/edits")) {
             const source = (await req.formData()).get("image")
             if (!(source instanceof File) || Buffer.from(await source.arrayBuffer()).toString("base64") !== png)
               return new Response(null, { status: 422 })
           }
-          return Response.json({ data: [{ b64_json: png }] })
+          return Response.json({ data: [{ b64_json: payload }] })
         },
       }),
     ),
@@ -151,13 +156,46 @@ describe("tool.image", () => {
     Effect.gen(function* () {
       const { directory } = yield* TestInstance
       const output = path.join(directory, "claimed.png")
-      const { run, calls } = yield* fixture(() => fs.writeFile(output, "another job"))
+      const { run, calls } = yield* fixture({ onRequest: () => fs.writeFile(output, "another job") })
       const aborted = { ...ctx, abort: AbortSignal.abort() }
       expect(Exit.isFailure(yield* Effect.exit(run({ prompt: "cat", output }, aborted)))).toBe(true)
       expect(calls).toEqual([])
       expect(Exit.isFailure(yield* Effect.exit(run({ prompt: "cat", output })))).toBe(true)
       expect(calls).toEqual(["/images/generations"])
       expect(yield* Effect.promise(() => fs.readFile(output, "utf8"))).toBe("another job")
+    }),
+  )
+
+  it.instance("saves a generated image under its native extension when it differs from the requested one", () =>
+    Effect.gen(function* () {
+      const { directory } = yield* TestInstance
+      const { run, calls } = yield* fixture({ mime: "image/jpeg" })
+      const result = yield* run({ prompt: "portrait", output: "exports/知微.png" })
+      expect(calls).toEqual(["/images/generations"])
+      expect(result.metadata.filepath).toBe(path.join(directory, "exports", "知微.jpg"))
+      expect(result.metadata.mime).toBe("image/jpeg")
+      expect(result.output).toContain("saved with .jpg instead of .png")
+      expect((yield* Effect.promise(() => fs.readFile(result.metadata.filepath))).toString("base64")).toBe(jpeg)
+      expect(
+        yield* Effect.promise(() =>
+          fs
+            .stat(path.join(directory, "exports", "知微.png"))
+            .then(() => true)
+            .catch(() => false),
+        ),
+      ).toBe(false)
+    }),
+  )
+
+  it.instance("rejects a truncated source image before spending a provider request", () =>
+    Effect.gen(function* () {
+      const { directory } = yield* TestInstance
+      const { run, calls } = yield* fixture()
+      yield* Effect.promise(() =>
+        fs.writeFile(path.join(directory, "truncated.png"), Buffer.from(png, "base64").subarray(0, 12)),
+      )
+      expect(Exit.isFailure(yield* Effect.exit(run({ prompt: "edit", image: "truncated.png" })))).toBe(true)
+      expect(calls).toEqual([])
     }),
   )
 })

@@ -6,7 +6,7 @@ import path from "node:path"
 import { InstanceState } from "@/effect/instance-state"
 import { makeImageResolver } from "@/provider/image-backend"
 import { MAX_IMAGE_BYTES } from "@/provider/image-wire"
-import { sniffAttachmentMime } from "@/util/media"
+import { completeImageMime } from "@/util/media"
 import { assertExternalDirectoryEffect } from "./external-directory"
 import * as Tool from "./tool"
 
@@ -50,7 +50,11 @@ export const ImageTool = Tool.define(
           const base = requested
             ? path.join(directory, path.basename(requested))
             : path.join(directory, `image-${randomUUID()}`)
-          const paths = requested ? [base] : Object.values(extensions).map((ext) => base + ext)
+          // 供应商不保证按请求的扩展名返回格式；stem 用于在同一目录落原生格式的替代路径。
+          const stem = requested ? base.slice(0, base.length - path.extname(base).length) : base
+          const paths = requested
+            ? [...new Set([base, ...Object.values(extensions).map((ext) => stem + ext)])]
+            : Object.values(extensions).map((ext) => base + ext)
           if (paths.some((file) => file.length > 4096))
             return yield* Effect.fail(new Error("Image output path exceeds 4096 characters."))
           if (requested && !Object.hasOwn(extensions, AppFileSystem.mimeType(base)))
@@ -91,20 +95,23 @@ export const ImageTool = Tool.define(
             }),
           )
           ctx.abort.throwIfAborted()
+          const mime = result.bytes instanceof Uint8Array ? completeImageMime(result.bytes) : undefined
           if (
             !(result.bytes instanceof Uint8Array) ||
             result.bytes.byteLength > MAX_IMAGE_BYTES ||
             !Object.hasOwn(extensions, result.mime) ||
-            sniffAttachmentMime(result.bytes, "") !== result.mime
+            mime !== result.mime
           )
-            return yield* Effect.fail(new Error("Image provider returned invalid or oversized image data."))
-          if (requested && AppFileSystem.mimeType(base) !== result.mime)
-            return yield* Effect.fail(
-              new Error(
-                `Provider returned ${result.mime}, not ${AppFileSystem.mimeType(base)}. Omit output to use its native format.`,
-              ),
-            )
-          const filepath = requested ? base : base + extensions[result.mime]
+            return yield* Effect.fail(new Error("Image provider returned invalid, incomplete or oversized image data."))
+          // 格式与用户指定的扩展名不同时保留原生格式落盘：额度已经花掉，不能因为扩展名猜错就丢图。
+          const filepath =
+            requested && AppFileSystem.mimeType(base) === result.mime ? base : stem + extensions[result.mime]
+          if (requested && filepath !== base && (yield* fs.exists(filepath)))
+            return yield* Effect.fail(new Error(`Output already exists; choose a new file: ${filepath}`))
+          const notice =
+            requested && filepath !== base
+              ? ` (provider returned ${result.mime}; saved with ${path.extname(filepath)} instead of ${path.extname(base)})`
+              : ""
           yield* fs.makeDirectory(directory, { recursive: true })
           yield* fs.writeFile(filepath, result.bytes, { flag: "wx", mode: 0o600 })
           return {
@@ -117,7 +124,7 @@ export const ImageTool = Tool.define(
               mime: result.mime,
               bytes: result.bytes.byteLength,
             },
-            output: `${source ? "Edited" : "Generated"} image: ${filepath}`,
+            output: `${source ? "Edited" : "Generated"} image: ${filepath}${notice}`,
           }
         }).pipe(Effect.orDie),
     }
@@ -156,8 +163,7 @@ const readSource = Effect.fn("ImageTool.readSource")(function* (
     return yield* Effect.fail(new Error("Source image must be a regular file."))
   const bytes = Buffer.concat(yield* fs.stream(real, { bytesToRead: MAX_IMAGE_BYTES + 1 }).pipe(Stream.runCollect))
   if (bytes.length > MAX_IMAGE_BYTES) return yield* Effect.fail(new Error("Source image exceeds 20 MiB."))
-  const mime = sniffAttachmentMime(bytes, "")
-  if (!Object.hasOwn(extensions, mime))
-    return yield* Effect.fail(new Error("Source image must contain PNG, JPEG or WebP data."))
+  const mime = completeImageMime(bytes)
+  if (!mime) return yield* Effect.fail(new Error("Source image must be a complete PNG, JPEG or WebP image."))
   return { filename: path.basename(real), bytes, mime }
 })
