@@ -8,6 +8,10 @@
 
 ---
 
+### [Unreleased]
+
+- **立绘素材输出**：`image` 生成和编辑可指定透明背景，以及 PNG、WebP 或 JPEG。透明素材检查实际像素，格式不匹配时本地转码；若验收失败，原件另存，不把不合格图片写进目标路径。成功调用分别记录准备、后端往返、本地处理和保存耗时。见 `MANUAL.md` §3.4 和[生图交付边界](docs/notes/implemented/feature/2026-11-27-image-tool.md)。
+
 ### [0.20.8] - 2026-11-28
 
 - **Chat / Code 内置 `image`**：新会话可以直接生成图片，或用已有图片路径继续编辑，不用切换聊天模型。图片后端可选支持生图的订阅插件或兼容 Images API 的供应商；失败不切换计费方式。原图默认另存到工作区 `.redcode/temp/`，GUI 从本轮成果打开，TUI 显示路径，图片字节不写进工具消息。供应商返回截断或结构不完整的图片会被拒绝而不是落盘；`output` 扩展名与返回格式不一致时按原生格式另存并在结果里提示，不再丢弃已生成的结果。验证：`image-wire` 与 `image` 工具 23 项、`tool-image-trust` 3 项与核心包 typecheck 通过，另以真实 PNG/JPEG/WebP 与截断 PNG 独立验证。配置见 `MANUAL.md` §3.4；[执行与交付边界](docs/notes/implemented/feature/2026-11-27-image-tool.md)。

@@ -1,5 +1,8 @@
 const startsWith = (bytes: Uint8Array, prefix: number[]) => prefix.every((value, index) => bytes[index] === value)
 
+/** 解码前的像素预算；与 Image.normalize 共用同一条 32MP 策略。 */
+export const MAX_SOURCE_PIXELS = 32_000_000
+
 export function isPdfAttachment(mime: string) {
   return mime === "application/pdf"
 }
@@ -75,14 +78,16 @@ function completePng(bytes: Uint8Array) {
 
 // JPEG：SOI 开始、EOI 结束，头部段长度都在界内，且必须见到 SOF 与 SOS。
 // SOS 之后的熵编码数据不再解析（要正确处理 0xFF00 填充与 RST）；EOI 在末尾已经兜住了截断。
-function completeJpeg(bytes: Uint8Array) {
-  if (bytes.byteLength < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) return false
+// 同一次 marker walk 同时给出完整性结论与 SOF 尺寸，避免维护两套同形解析。
+function jpegInfo(bytes: Uint8Array) {
+  if (bytes.byteLength < 4 || bytes[0] !== 0xff || bytes[1] !== 0xd8) return
   const last = bytes.byteLength - 1
-  if (bytes[last - 1] !== 0xff || bytes[last] !== 0xd9) return false
+  if (bytes[last - 1] !== 0xff || bytes[last] !== 0xd9) return
   let offset = 2
   let frame = false
+  let size: { width: number; height: number } | undefined
   while (offset + 2 <= bytes.byteLength) {
-    if (bytes[offset] !== 0xff) return false
+    if (bytes[offset] !== 0xff) return
     let marker = bytes[offset + 1]
     // 连续的 0xFF 是 marker 前的合法填充
     while (marker === 0xff && offset + 3 <= bytes.byteLength) {
@@ -93,15 +98,114 @@ function completeJpeg(bytes: Uint8Array) {
       offset += 2
       continue
     }
-    if (marker === 0xd9) return false
-    if (offset + 4 > bytes.byteLength) return false
+    if (marker === 0xd9) return
+    if (offset + 4 > bytes.byteLength) return
     const length = (bytes[offset + 2] << 8) | bytes[offset + 3]
-    if (length < 2 || offset + 2 + length > bytes.byteLength) return false
-    if (marker === 0xda) return frame && length >= 6
-    if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) frame = true
+    if (length < 2 || offset + 2 + length > bytes.byteLength) return
+    if (marker === 0xda) return frame && length >= 6 ? (size ?? { width: 0, height: 0 }) : undefined
+    if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
+      frame = true
+      if (length >= 7) {
+        const height = (bytes[offset + 5] << 8) | bytes[offset + 6]
+        const width = (bytes[offset + 7] << 8) | bytes[offset + 8]
+        size = { width, height }
+      }
+    }
     offset += 2 + length
   }
-  return false
+  return
+}
+
+function completeJpeg(bytes: Uint8Array) {
+  return jpegInfo(bytes) !== undefined
+}
+
+export function pngDimensions(bytes: Uint8Array) {
+  if (
+    bytes.byteLength < 24 ||
+    bytes[0] !== 0x89 ||
+    bytes[1] !== 0x50 ||
+    bytes[2] !== 0x4e ||
+    bytes[3] !== 0x47 ||
+    bytes[4] !== 0x0d ||
+    bytes[5] !== 0x0a ||
+    bytes[6] !== 0x1a ||
+    bytes[7] !== 0x0a ||
+    bytes[12] !== 0x49 ||
+    bytes[13] !== 0x48 ||
+    bytes[14] !== 0x44 ||
+    bytes[15] !== 0x52
+  )
+    return
+  const header = dataView(bytes)
+  const width = header.getUint32(16, false)
+  const height = header.getUint32(20, false)
+  if (!width || !height) return
+  return { width, height }
+}
+
+export interface ImageDimensions {
+  readonly width: number
+  readonly height: number
+  readonly animated: boolean
+}
+
+// 解码前只读头部确定像素数。format 由调用方给出（工具已校验容器完整性），这里不重复
+// 全量扫描；宽高都为零/缺失时返回 undefined，让调用方拒绝而不是猜。
+export function imageDimensions(bytes: Uint8Array, format: CompleteImageMime): ImageDimensions | undefined {
+  if (format === "image/webp") {
+    const size = webpDimensions(bytes)
+    if (!size) return
+    return size.animated ? size : size.width && size.height ? { ...size, animated: false } : undefined
+  }
+  const size = format === "image/png" ? pngDimensions(bytes) : jpegDimensions(bytes)
+  if (!size || !size.width || !size.height) return
+  return { width: size.width, height: size.height, animated: false }
+}
+
+function jpegDimensions(bytes: Uint8Array) {
+  const info = jpegInfo(bytes)
+  return info && info.width && info.height ? info : undefined
+}
+
+// WebP：VP8X 画布、VP8 有损帧头、VP8L 无损头都能给出真实像素数。静态 VP8X 的画布
+// 必须与实际帧一致，否则不认画布尺寸；带 ANIM/ANMF 或动画 flag 的文件只报告 animated，
+// 不把静态首帧当作整张图的验证依据。
+function webpDimensions(bytes: Uint8Array) {
+  const view = dataView(bytes)
+  let offset = 12
+  let canvas: { width: number; height: number } | undefined
+  let frame: { width: number; height: number } | undefined
+  let animated = false
+  while (offset + 8 <= bytes.byteLength) {
+    const size = view.getUint32(offset + 4, true)
+    const start = offset + 8
+    if (start + size > bytes.byteLength) return
+    const type = ascii(bytes, offset, offset + 4)
+    if (type === "VP8X" && size >= 10) {
+      if (bytes[start] & 0x02) animated = true
+      canvas = {
+        width: 1 + (bytes[start + 4] | (bytes[start + 5] << 8) | (bytes[start + 6] << 16)),
+        height: 1 + (bytes[start + 7] | (bytes[start + 8] << 8) | (bytes[start + 9] << 16)),
+      }
+    } else if (type === "ANIM" || type === "ANMF") {
+      animated = true
+    } else if (type === "VP8L" && size >= 5 && bytes[start] === 0x2f) {
+      const bits = bytes[start + 1] | (bytes[start + 2] << 8) | (bytes[start + 3] << 16) | (bytes[start + 4] << 24)
+      frame = { width: (bits & 0x3fff) + 1, height: ((bits >>> 14) & 0x3fff) + 1 }
+    } else if (type === "VP8 " && size >= 10) {
+      const sync = start + 3
+      if (bytes[sync] !== 0x9d || bytes[sync + 1] !== 0x01 || bytes[sync + 2] !== 0x2a) return
+      const width = (bytes[start + 6] | (bytes[start + 7] << 8)) & 0x3fff
+      const height = (bytes[start + 8] | (bytes[start + 9] << 8)) & 0x3fff
+      if (width && height) frame = { width, height }
+    }
+    offset = start + size + (size % 2)
+  }
+  if (animated) return { width: canvas?.width ?? 0, height: canvas?.height ?? 0, animated: true }
+  if (canvas && frame && (canvas.width !== frame.width || canvas.height !== frame.height)) return
+  const size = canvas ?? frame
+  return size ? { ...size, animated: false } : undefined
 }
 
 // WebP：RIFF 长度必须与文件一致，chunk 链完整，且至少有一个图像块（VP8/VP8L/VP8X）。

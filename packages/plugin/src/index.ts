@@ -96,6 +96,10 @@ export type ImageGenerationInput = {
   model: string
   prompt: string
   size?: string
+  /** Native OpenAI Images `background`; omit to keep the selected backend's default. */
+  background?: "auto" | "opaque" | "transparent"
+  /** Native OpenAI Images `output_format`; omit to keep the backend default. Providers without a confirmed wire field must not send it. */
+  output_format?: "png" | "jpeg" | "webp"
   source?: ImageGenerationSource
   signal: AbortSignal
 }

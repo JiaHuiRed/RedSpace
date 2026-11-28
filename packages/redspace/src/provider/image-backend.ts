@@ -1,10 +1,10 @@
-import type { AuthHook, Hooks } from "@redcode-ai/plugin"
+import type { AuthHook, Hooks, ImageGenerationInput } from "@redcode-ai/plugin"
 import { Effect, Schema } from "effect"
 import { Auth } from "@/auth"
 import { Config } from "@/config/config"
 import { Plugin } from "@/plugin"
 import { fetchWithProxy } from "@/util/proxy"
-import { requestImage, type ImageResult, type ImageSource } from "./image-wire"
+import { requestImage, type ImageResult } from "./image-wire"
 
 // 261127 Red 生图后端解析：供应商无关。只按显式配置或「唯一一个已登录 OAuth 插件」选后端，
 // 不做任何自动降级。API 路径只走调用方明确配置的 baseURL/api 与凭据；OAuth 路径只交给
@@ -18,12 +18,8 @@ export class ImageBackendError extends Schema.TaggedError<ImageBackendError>()("
   message: Schema.String,
 }) {}
 
-export type ImageGenerateInput = {
-  prompt: string
-  size?: string
-  source?: ImageSource
-  signal: AbortSignal
-}
+/** Tool-facing input: every field except the wire model, which the resolver already holds. */
+export type ImageGenerateInput = Omit<ImageGenerationInput, "model">
 
 export type ImageBackend = {
   provider: string
@@ -226,6 +222,8 @@ export const makeImageResolver: Effect.Effect<ImageResolver, never, Config.Servi
               model,
               prompt: input.prompt,
               size: input.size,
+              background: input.background,
+              output_format: input.output_format,
               source: input.source,
               signal: input.signal,
             })

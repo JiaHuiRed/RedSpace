@@ -1,10 +1,11 @@
 import { Config } from "@/config/config"
 import type { MessageV2 } from "@/session/message-v2"
+import { MAX_SOURCE_PIXELS, pngDimensions } from "@/util/media"
 import * as Log from "@redcode-ai/core/util/log"
-import photonWasm from "@silvia-odwyer/photon-node/photon_rs_bg.wasm" with { type: "file" }
 import { Context, Effect, Layer, Schema } from "effect"
-import path from "node:path"
-import { fileURLToPath } from "node:url"
+import { loadPhoton as loadPhotonModule } from "./photon"
+
+export { pngDimensions }
 
 const MAX_BASE64_BYTES = 5 * 1024 * 1024
 const MAX_WIDTH = 2000
@@ -22,7 +23,6 @@ const MAX_HEIGHT = 2000
 const MAX_PIXELS = MAX_WIDTH * MAX_HEIGHT
 const MAX_DIMENSION = 8192
 const AUTO_RESIZE = true
-const MAX_SOURCE_PIXELS = 32_000_000
 // 260822 cc 必须严格单调递减，否则后面的档位不可达。
 //
 // 候选数组的实际顺序是 [png, q80, q85, q70, q55, q40]，.find() 取第一个字节数达标的。
@@ -112,30 +112,6 @@ export function formatResizeNotice(report: ResizeReport): string {
   )
 }
 
-export function pngDimensions(bytes: Uint8Array) {
-  if (
-    bytes.byteLength < 24 ||
-    bytes[0] !== 0x89 ||
-    bytes[1] !== 0x50 ||
-    bytes[2] !== 0x4e ||
-    bytes[3] !== 0x47 ||
-    bytes[4] !== 0x0d ||
-    bytes[5] !== 0x0a ||
-    bytes[6] !== 0x1a ||
-    bytes[7] !== 0x0a ||
-    bytes[12] !== 0x49 ||
-    bytes[13] !== 0x48 ||
-    bytes[14] !== 0x44 ||
-    bytes[15] !== 0x52
-  )
-    return
-  const header = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
-  const width = header.getUint32(16, false)
-  const height = header.getUint32(20, false)
-  if (!width || !height) return
-  return { width, height }
-}
-
 export interface Interface {
   readonly normalize: (
     input: MessageV2.FilePart,
@@ -149,12 +125,7 @@ export const layer = Layer.effect(
   Effect.gen(function* () {
     const config = yield* Config.Service
     const loadPhoton = yield* Effect.cached(
-      Effect.sync(() => {
-        // Patched photon-node reads this during module init so Bun compiled binaries use the embedded wasm path.
-        ;(globalThis as typeof globalThis & { __REDCODE_PHOTON_WASM_PATH?: string }).__REDCODE_PHOTON_WASM_PATH =
-          path.isAbsolute(photonWasm) ? photonWasm : fileURLToPath(new URL(photonWasm, import.meta.url))
-      }).pipe(
-        Effect.andThen(() => Effect.tryPromise(() => import("@silvia-odwyer/photon-node"))),
+      Effect.tryPromise(() => loadPhotonModule()).pipe(
         Effect.tapError((error) => Effect.sync(() => log.warn("failed to load photon", { error }))),
         Effect.mapError(() => new ResizerUnavailableError()),
       ),

@@ -1,7 +1,7 @@
 import { describe, expect } from "bun:test"
 import { AppFileSystem } from "@redcode-ai/core/filesystem"
 import { CrossSpawnSpawner } from "@redcode-ai/core/cross-spawn-spawner"
-import { Effect, Exit, Layer } from "effect"
+import { Cause, Effect, Exit, Layer } from "effect"
 import path from "node:path"
 import fs from "node:fs/promises"
 import { Agent } from "@/agent/agent"
@@ -16,10 +16,14 @@ import { TestConfig } from "../fixture/config"
 import { TestInstance, tmpdirScoped } from "../fixture/fixture"
 import { testEffect } from "../lib/effect"
 
-const png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII="
+const png = "iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAAFElEQVR4AQEJAPb/AAwZKP8MGSgAB84BmnnKnxUAAAAASUVORK5CYII="
+const opaque =
+  "iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAAFElEQVR4AQEJAPb/AAwZKP8MGSj/CM0CmVuv9O8AAAAASUVORK5CYII="
 const jpeg =
   "/9j/4AAQSkZJRgABAgAAAQABAAD//gAPTGF2YzYzLjEuMTAwAP/bAEMACAQEBAQEBQUFBQUFBgYGBgYGBgYGBgYGBgcHBwgICAcHBwYGBwcICAgICQkJCAgICAkJCgoKDAwLCw4ODhERFP/EAEwAAQEAAAAAAAAAAAAAAAAAAAAGAQEBAAAAAAAAAAAAAAAAAAAGBxABAAAAAAAAAAAAAAAAAAAAABEBAAAAAAAAAAAAAAAAAAAAAP/AABEIAAEAAQMBIgACEQADEQD/2gAMAwEAAhEDEQA/AIsATX9//9k="
-const it = testEffect(Layer.mergeAll(AppFileSystem.defaultLayer, Truncate.defaultLayer, Agent.defaultLayer, CrossSpawnSpawner.defaultLayer))
+const it = testEffect(
+  Layer.mergeAll(AppFileSystem.defaultLayer, Truncate.defaultLayer, Agent.defaultLayer, CrossSpawnSpawner.defaultLayer),
+)
 const ctx: Tool.Context = {
   sessionID: SessionID.make("ses_image"),
   messageID: MessageID.make("msg_image"),
@@ -31,10 +35,10 @@ const ctx: Tool.Context = {
 }
 
 const fixture = Effect.fn("test.image.fixture")(function* (
-  options: { onRequest?: () => Promise<void>; mime?: "image/png" | "image/jpeg" } = {},
+  options: { onRequest?: () => Promise<void>; mime?: "image/png" | "image/jpeg"; payload?: string } = {},
 ) {
   const calls: string[] = []
-  const payload = options.mime === "image/jpeg" ? jpeg : png
+  const payload = options.payload ?? (options.mime === "image/jpeg" ? jpeg : png)
   const server = yield* Effect.acquireRelease(
     Effect.sync(() =>
       Bun.serve({
@@ -184,6 +188,66 @@ describe("tool.image", () => {
             .catch(() => false),
         ),
       ).toBe(false)
+    }),
+  )
+
+  it.instance("rejects contradictory production specs without sending a request", () =>
+    Effect.gen(function* () {
+      const { run, calls } = yield* fixture()
+      for (const args of [
+        { background: "transparent", output_format: "jpeg" },
+        { background: "transparent", output: "asset.jpg" },
+        { output_format: "webp", output: "asset.png" },
+      ] as const) {
+        expect(Exit.isFailure(yield* Effect.exit(run({ prompt: "portrait", ...args })))).toBe(true)
+      }
+      expect(calls).toEqual([])
+    }),
+  )
+
+  it.instance("delivers verified transparent WebP from a single PNG response, including on edit", () =>
+    Effect.gen(function* () {
+      const { run, calls } = yield* fixture()
+      const first = yield* run({ prompt: "portrait", background: "transparent", output_format: "png" })
+      const next = yield* run({
+        prompt: "blue scarf",
+        image: first.metadata.filepath,
+        output: "art/unit.webp",
+        background: "transparent",
+        output_format: "webp",
+      })
+      expect(calls).toEqual(["/images/generations", "/images/edits"])
+      expect(next.metadata).toMatchObject({ mime: "image/webp", verifiedBackground: "transparent" })
+      const bytes = yield* Effect.promise(() => fs.readFile(next.metadata.filepath))
+      expect(bytes.toString("ascii", 8, 12)).toBe("WEBP")
+      const { PhotonImage } = yield* Effect.promise(() => import("@silvia-odwyer/photon-node"))
+      const asset = PhotonImage.new_from_byteslice(bytes)
+      try {
+        expect([...asset.get_raw_pixels()].filter((_, index) => index % 4 === 3)).toEqual([255, 0])
+      } finally {
+        asset.free()
+      }
+    }),
+  )
+
+  it.instance("keeps a rejected opaque original separate from the requested asset, without retry", () =>
+    Effect.gen(function* () {
+      const { directory } = yield* TestInstance
+      const { run, calls } = yield* fixture({ payload: opaque })
+      const exit = yield* Effect.exit(
+        run({
+          prompt: "portrait",
+          background: "transparent",
+          output: "art/unit.png",
+        }),
+      )
+      const files = yield* Effect.promise(() => fs.readdir(path.join(directory, "art")))
+      expect(files).toHaveLength(1)
+      expect(files[0]).not.toBe("unit.png")
+      const file = path.join(directory, "art", files[0]!)
+      expect(Exit.isFailure(exit) && Cause.pretty(exit.cause)).toContain(file)
+      expect((yield* Effect.promise(() => fs.readFile(file))).toString("base64")).toBe(opaque)
+      expect(calls).toEqual(["/images/generations"])
     }),
   )
 

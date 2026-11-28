@@ -1,5 +1,6 @@
-import { describe, expect } from "bun:test"
+import { describe, expect, test } from "bun:test"
 import { Cause, Effect, Exit, Layer } from "effect"
+import { prepareGeneratedImage } from "@/image/generated"
 import { Image } from "@/image/image"
 import { MessageID, PartID, SessionID } from "@/session/schema"
 import path from "node:path"
@@ -31,7 +32,7 @@ function part(mime: string, data: string) {
 describe("Image", () => {
   it.effect("rejects an oversized PNG pixel header before decoder allocation", () =>
     Effect.gen(function* () {
-      const data = Buffer.alloc(4 * 1024 * 1024)
+      const data = Buffer.alloc(24)
       Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(data)
       data.writeUInt32BE(13, 8)
       data.write("IHDR", 12)
@@ -45,19 +46,32 @@ describe("Image", () => {
         const error = Cause.squash(exit.cause)
         expect(error).toBeInstanceOf(Image.SizeError)
       }
+      yield* Effect.promise(async () => {
+        await expect(prepareGeneratedImage({ mime: "image/png", bytes: data }, { output_format: "webp" })).rejects.toThrow("pixel decode limit")
+      })
     }),
   )
 
-  it.effect("rejects a truncated large PNG header before decoder allocation", () =>
+  tiny.effect("rejects an unreadable PNG header when the attachment exceeds its byte budget", () =>
     Effect.gen(function* () {
-      const data = Buffer.alloc(4 * 1024 * 1024)
       const image = yield* Image.Service
-      const exit = yield* image.normalize(part("image/png", data.toString("base64"))).pipe(Effect.exit)
+      const exit = yield* image.normalize(part("image/png", "AAAA")).pipe(Effect.exit)
 
       expect(Exit.isFailure(exit)).toBe(true)
       if (Exit.isFailure(exit)) expect(Cause.squash(exit.cause)).toBeInstanceOf(Image.DecodeError)
     }),
   )
+
+  test("converts a generated PNG to JPEG and back without resizing", async () => {
+    const { PhotonImage } = await import("@silvia-odwyer/photon-node")
+    const source = new PhotonImage(Uint8Array.of(100, 50, 0, 255), 1, 1)
+    const bytes = source.get_bytes()
+    source.free()
+    const jpeg = await prepareGeneratedImage({ mime: "image/png", bytes }, { output_format: "jpeg" })
+    expect(jpeg.bytes.subarray(0, 3)).toEqual(Uint8Array.of(255, 216, 255))
+    const png = await prepareGeneratedImage(jpeg, { output_format: "png" })
+    expect(Image.pngDimensions(png.bytes)).toEqual({ width: 1, height: 1 })
+  })
 
   it.effect("normalizes generated png and jpeg attachments", () =>
     Effect.gen(function* () {

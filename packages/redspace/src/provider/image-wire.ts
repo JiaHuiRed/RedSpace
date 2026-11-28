@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto"
+import type { ImageGenerationInput, ImageGenerationSource } from "@redcode-ai/plugin"
 import { completeImageMime } from "@/util/media"
 
 // 261127 Karina image wire: OpenAI Images-compatible 生图/改图的线协议层。
@@ -24,22 +25,13 @@ export const MAX_RESPONSE_BYTES = 28 * 1024 * 1024
 export type ImageMime = "image/png" | "image/jpeg" | "image/webp"
 export type ImageProtocol = "openai" | "codex"
 
-export interface ImageSource {
-  bytes: Uint8Array
-  mime: string
-  filename: string
-}
+export type ImageSource = ImageGenerationSource
 
-export interface RequestImageInput {
+export type RequestImageInput = ImageGenerationInput & {
   baseURL: string
   protocol: ImageProtocol
   fetch: (url: URL, init: RequestInit) => Promise<Response>
   headers?: HeadersInit
-  model: string
-  prompt: string
-  size?: string
-  source?: ImageSource
-  signal: AbortSignal
 }
 
 export interface ImageResult {
@@ -93,6 +85,8 @@ function buildBody(input: RequestImageInput, headers: Headers): BodyInit {
     form.set("model", input.model)
     form.set("prompt", input.prompt)
     if (input.size) form.set("size", input.size)
+    if (input.background) form.set("background", input.background)
+    if (input.output_format) form.set("output_format", input.output_format)
     form.set(
       "image",
       new Blob([new Uint8Array(input.source.bytes).buffer], { type: input.source.mime }),
@@ -107,8 +101,12 @@ function buildBody(input: RequestImageInput, headers: Headers): BodyInit {
       model: input.model,
       prompt: input.prompt,
       ...(input.size ? { size: input.size } : {}),
+      ...(input.background ? { background: input.background } : {}),
+      ...(input.output_format ? { output_format: input.output_format } : {}),
     })
 
+  // codex 线协议只确认了 background 字段本身（默认 auto，调用方可覆盖）；
+  // output_format 没有已证实的 Codex 字段，这里不发，需要的格式由成品层转码。
   return JSON.stringify({
     model: input.model,
     prompt: input.prompt,
@@ -123,7 +121,7 @@ function buildBody(input: RequestImageInput, headers: Headers): BodyInit {
         }
       : {}),
     quality: "auto",
-    background: "auto",
+    background: input.background ?? "auto",
   })
 }
 

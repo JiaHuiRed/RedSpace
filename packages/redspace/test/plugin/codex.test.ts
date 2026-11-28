@@ -18,7 +18,13 @@ function createTestJwt(payload: object): string {
   return `${header}.${body}.sig`
 }
 
-const IMAGE_PNG = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d])
+// 真实可解码的 1×1 PNG；12 字节截断头会被 image wire 的完整容器校验拒绝。
+const IMAGE_PNG = new Uint8Array(
+  Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=",
+    "base64",
+  ),
+)
 
 describe("plugin.codex", () => {
   describe("parseJwtClaims", () => {
@@ -651,7 +657,10 @@ describe("plugin.codex", () => {
     expect(hooks.auth!.image!.defaultModel).toBe("gpt-image-2")
 
     const result = await hooks.auth!.image!.generate(
-      { model: "gpt-image-2", prompt: "a cat", size: "1024x1024", signal: new AbortController().signal },
+      {
+        model: "gpt-image-2", prompt: "a cat", size: "1024x1024",
+        background: "transparent", output_format: "webp", signal: new AbortController().signal,
+      },
       async () => ({
         type: "oauth",
         refresh: "refresh",
@@ -671,7 +680,7 @@ describe("plugin.codex", () => {
       turn: null,
       turnState: null,
       route: null,
-      body: { model: "gpt-image-2", prompt: "a cat", size: "1024x1024", quality: "auto", background: "auto" },
+      body: { model: "gpt-image-2", prompt: "a cat", size: "1024x1024", quality: "auto", background: "transparent" },
     })
   })
 

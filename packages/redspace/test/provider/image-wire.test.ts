@@ -150,7 +150,13 @@ describe("provider.image-wire", () => {
         filename: "cat.png",
       }
       const result = await requestImage(
-        input(server, { prompt: "add a hat", size: "1024x1024", source: paddedSource }),
+        input(server, {
+          prompt: "add a hat",
+          size: "1024x1024",
+          background: "opaque",
+          output_format: "jpeg",
+          source: paddedSource,
+        }),
       )
 
       expect(path).toBe("/v1/images/edits")
@@ -158,6 +164,8 @@ describe("provider.image-wire", () => {
       expect(form?.get("model")).toBe("gpt-image-1")
       expect(form?.get("prompt")).toBe("add a hat")
       expect(form?.get("size")).toBe("1024x1024")
+      expect(form?.get("background")).toBe("opaque")
+      expect(form?.get("output_format")).toBe("jpeg")
       const file = form?.get("image")
       expect(file).toBeInstanceOf(File)
       expect((file as File).name).toBe("cat.png")

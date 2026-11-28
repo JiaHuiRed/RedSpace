@@ -556,6 +556,9 @@ export async function CodexAuthPlugin(input: PluginInput, options: CodexAuthPlug
             model: imageInput.model,
             prompt: imageInput.prompt,
             size: imageInput.size,
+            // codex 线协议确认存在 background 字段（缺省 auto）；output_format 未证实，
+            // 不在这一层发，需要的格式由成品层本地转码。
+            background: imageInput.background,
             source: imageInput.source,
             signal: imageInput.signal,
           })

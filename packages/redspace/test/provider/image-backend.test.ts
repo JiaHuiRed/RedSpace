@@ -7,7 +7,13 @@ import { Config } from "@/config/config"
 import { Plugin } from "@/plugin"
 import { ImageBackendError, makeImageResolver } from "@/provider/image-backend"
 
-const PNG = Uint8Array.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d])
+// 真实可解码的 1×1 PNG；12 字节截断头会被 image wire 的完整容器校验拒绝。
+const PNG = new Uint8Array(
+  Buffer.from(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=",
+    "base64",
+  ),
+)
 
 function b64(bytes: Uint8Array) {
   return Buffer.from(bytes).toString("base64")
@@ -94,14 +100,19 @@ describe("provider.image-backend", () => {
       })
 
       expect(backend).toMatchObject({ provider: "studio", model: "paint-v1" })
-      const result = await backend.generate({ prompt: "a cat", signal: new AbortController().signal })
+      const result = await backend.generate({
+        prompt: "a cat",
+        background: "transparent",
+        output_format: "webp",
+        signal: new AbortController().signal,
+      })
       expect(result.mime).toBe("image/png")
       expect(new Uint8Array(result.bytes)).toEqual(PNG)
       expect(requests).toEqual([
         {
           path: "/v1/images/generations",
           authorization: "Bearer studio-stored-key",
-          body: { model: "paint-v1", prompt: "a cat" },
+          body: { model: "paint-v1", prompt: "a cat", background: "transparent", output_format: "webp" },
         },
       ])
 
@@ -175,21 +186,33 @@ describe("provider.image-backend", () => {
   })
 
   test("auto-selects the only logged-in OAuth image plugin and its declared default model", async () => {
-    const calls: { model: string; type: string }[] = []
+    const calls: { model: string; type: string; background?: string; output_format?: string }[] = []
     let auths: Record<string, Auth.Info> = { virtual: OAUTH }
     const plugin = imagePlugin("virtual", {
       defaultModel: "virtual/image-1",
       generate: async (input, getAuth) => {
         const auth = await getAuth()
-        calls.push({ model: input.model, type: auth.type })
+        calls.push({
+          model: input.model,
+          type: auth.type,
+          background: input.background,
+          output_format: input.output_format,
+        })
         return { bytes: PNG, mime: "image/png" }
       },
     })
 
     const backend = await run(resolveEffect(), { config: {}, plugins: [plugin], auth: () => auths })
     expect(backend).toMatchObject({ provider: "virtual", model: "virtual/image-1" })
-    await backend.generate({ prompt: "cat", signal: new AbortController().signal })
-    expect(calls).toEqual([{ model: "virtual/image-1", type: "oauth" }])
+    await backend.generate({
+      prompt: "cat",
+      background: "opaque",
+      output_format: "jpeg",
+      signal: new AbortController().signal,
+    })
+    expect(calls).toEqual([
+      { model: "virtual/image-1", type: "oauth", background: "opaque", output_format: "jpeg" },
+    ])
 
     // 运行中 auth 从 OAuth 改成 API key：插件只能拿到 oauth，必须拒绝而不是拿到别的 key。
     auths = { virtual: { type: "api", key: "swapped-key" } }
