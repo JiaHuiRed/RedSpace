@@ -97,7 +97,10 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
   agent: Agent.Info
   model: Provider.Model
   session: Session.Info
-  processor: Pick<SessionProcessor.Handle, "message" | "updateToolCall" | "completeToolCall" | "guardToolCall">
+  processor: Pick<
+    SessionProcessor.Handle,
+    "message" | "updateToolCall" | "completeToolCall" | "guardToolCall" | "trackBackgroundShell"
+  >
   bypassAgentCheck: boolean
   messages: MessageV2.WithParts[]
   promptOps: TaskPromptOps
@@ -145,6 +148,7 @@ export const resolve = Effect.fn("SessionTools.resolve")(function* (input: {
     },
     agent: input.agent.name,
     messages: input.messages,
+    trackBackgroundShell: (exit) => input.processor.trackBackgroundShell?.(options.toolCallId, exit),
     metadata: (val) =>
       input.processor.updateToolCall(options.toolCallId, name, (match) => {
         if (!["running", "pending"].includes(match.state.status)) return match

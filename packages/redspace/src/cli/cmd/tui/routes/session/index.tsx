@@ -3104,12 +3104,19 @@ function Shell(props: ToolProps<typeof ShellTool>) {
     return pathFormatter.format(workdir)
   })
 
+  // 261128 Red 后台完成的 bash 由引擎在 metadata 补 backgroundExit（exit N / signal X /
+  // exit unknown），启动行标题直接带出结果；前台工具没有该字段，保持原样。
+  const backgroundExit = createMemo(() => {
+    const value = props.metadata.backgroundExit
+    return typeof value === "string" && value ? value : undefined
+  })
+
   const title = createMemo(() => {
     const desc = props.input.description ?? "Shell"
     const wd = workdirDisplay()
-    if (!wd) return desc
-    if (desc.includes(wd)) return desc
-    return `${desc} in ${wd}`
+    const base = !wd || desc.includes(wd) ? desc : `${desc} in ${wd}`
+    const exit = backgroundExit()
+    return exit ? `${base} · ${exit}` : base
   })
 
   return (

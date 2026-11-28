@@ -72,6 +72,8 @@ export class TimeoutError extends Schema.TaggedError<TimeoutError>()("ToolTimeou
   }
 }
 
+export type BackgroundShellExit = number | NodeJS.Signals | null
+
 export type Context<M extends Metadata = Metadata> = {
   sessionID: SessionID
   messageID: MessageID
@@ -81,6 +83,7 @@ export type Context<M extends Metadata = Metadata> = {
   extra?: { [key: string]: unknown }
   messages: MessageV2.WithParts[]
   metadata(input: { title?: string; metadata?: M }): Effect.Effect<void>
+  trackBackgroundShell?(exit: Promise<BackgroundShellExit>): void
   ask(input: Omit<Permission.Request, "id" | "sessionID" | "tool">): Effect.Effect<void>
 }
 

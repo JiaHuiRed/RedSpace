@@ -28,6 +28,7 @@ type Options = {
   env: NodeJS.ProcessEnv
   logPath: string
   statusPath: string
+  onExit?: (code: number | null) => void
   onError: (error: unknown) => void
 }
 
@@ -175,18 +176,22 @@ export async function spawnWindowsBackground(options: Options) {
         if (waited === WAIT_TIMEOUT) return
         clearInterval(timer)
         if (waited !== WAIT_OBJECT_0) {
+          options.onExit?.(null)
           options.onError(new Error(`WaitForSingleObject failed (${api.getLastError()})`))
           api.closeHandle(target)
           return
         }
         if (api.getExitCodeProcess(target, code) === 0) {
+          options.onExit?.(null)
           options.onError(new Error(`GetExitCodeProcess failed (${api.getLastError()})`))
           api.closeHandle(target)
           return
         }
+        const exitCode = code.readUInt32LE(0)
+        options.onExit?.(exitCode)
         try {
           const partial = `${options.statusPath}.tmp`
-          writeFileSync(partial, `exit ${code.readUInt32LE(0)}\n`)
+          writeFileSync(partial, `exit ${exitCode}\n`)
           renameSync(partial, options.statusPath)
         } catch (error) {
           options.onError(error)

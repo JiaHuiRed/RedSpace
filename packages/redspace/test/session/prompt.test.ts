@@ -4157,6 +4157,42 @@ it.instance("returns a non-zero shell exit code to the model as a completed tool
   }),
 )
 
+it.instance("keeps a late background shell exit on the original launch row", () =>
+  Effect.gen(function* () {
+    const { dir, llm } = yield* useServerConfig(providerCfg)
+    const sessions = yield* Session.Service
+    const chat = yield* sessions.create({ permission: [{ permission: "bash", pattern: "*", action: "allow" }] })
+    yield* writeText(path.join(dir, "wait.mjs"), `
+      const deadline = Date.now() + 10000
+      while (!await Bun.file("release").exists() && Date.now() < deadline) await Bun.sleep(25)
+      process.exit(await Bun.file("release").exists() ? 7 : 1)
+    `)
+    yield* llm.tool("bash", {
+      command: process.platform === "win32" ? "bun wait.mjs; exit $LASTEXITCODE" : "bun wait.mjs",
+      shell: process.platform === "win32" ? "powershell" : "bash",
+      background: true,
+      description: "Launch background check",
+    })
+    yield* llm.text("Started.")
+    yield* user(chat.id, "Run the check.")
+    yield* (yield* SessionPrompt.Service).loop({ sessionID: chat.id })
+    const launch = completedTool((yield* MessageV2.filterCompactedEffect(chat.id)).flatMap((msg) => msg.parts))!
+    expect(launch.state.metadata.exit).toBeNull()
+    yield* writeText(path.join(dir, "release"), "")
+    const finished = yield* pollWithTimeout(
+      sessions.getPart({ partID: launch.id, messageID: launch.messageID, sessionID: chat.id }).pipe(
+        Effect.map((p) =>
+          p?.type === "tool" && p.state.status === "completed" && p.state.metadata.backgroundExit ? p.state : undefined,
+        ),
+      ),
+      "background exit did not reach the launch row",
+      "10 seconds",
+    )
+    expect(finished.metadata).toMatchObject({ exit: 7, backgroundExit: "exit 7" })
+    expect(finished.output).toBe(launch.state.output)
+  }),
+)
+
 it.instance("returns field-level validation errors and accepts corrected Read ranges", () =>
   Effect.gen(function* () {
     const { dir, llm } = yield* useServerConfig(providerCfg)

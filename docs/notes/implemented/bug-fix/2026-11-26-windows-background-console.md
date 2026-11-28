@@ -12,6 +12,8 @@
 
 Windows 的 `background: true` 在创建 shell 时使用 `CREATE_NO_WINDOW`，并显式传入标准输入和日志输出句柄。保留原 shell 参数、工作目录和环境，不给用户的命令额外套一层解释器。宿主在进程退出后原子写入 `status.txt`；宿主先退出则状态仍可能是“未记录”，不能用空日志或缺少状态文件判成功。前台工具、交互式 PTY 和 Unix 后台作业不在这次改动之内。
 
+后台作业的退出事件也回到启动它的那条工具记录。先保存启动结果，再把实际退出码或信号写进同一条记录的 metadata：短命令先退出不会被“已启动”盖掉，长命令不必让会话等到退出。客户端显示这项旁注，不改模型已经收到的工具正文，也不因作业退出而再发起模型请求。宿主先退出时仍不猜结果。
+
 `STARTUPINFOEX` 只放行本作业的两个句柄：标准输入和日志文件。标准输出、标准错误使用同一个日志句柄；三个标准槽位要填满，但允许列表不能把同一句柄放两次（编译夹具曾因重复条目得到 Win32 错误 87）。独立 PTY 覆盖旧路径能串屏、新路径不能，以及宿主先退出后作业仍能完成；单文件编译夹具验证了两路日志和非零退出码 `7`。
 
 这条路径依赖 `bun:ffi`，只适用于 Bun（TUI/CLI）。GUI sidecar 是 Node bundle（`build-node.ts`），没有 `bun` 全局，也没有可被串写的宿主控制台：Windows 后台命令在那里退回 `node:child_process` 的 detached spawn（Node 没有 Bun 1.3.14 的 fd 丢失问题）。`bun:ffi` 必须在 server bundle 里标 external 并保持惰性 `import()`——顶层静态 import 会被内联到 `node.js` 顶部，Electron 的 ESM loader 不认 `bun:` 协议，sidecar 启动即死（261126 实证，见 CHANGELOG `[Unreleased]`）。

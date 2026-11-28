@@ -214,6 +214,7 @@ type Chunk = {
 type ShellMetadata = {
   output: string
   exit: number | null
+  backgroundExit?: string
   shell: string
   description: string
   truncated: boolean
@@ -987,12 +988,14 @@ export const ShellTool = Tool.define(
           cwd: string
           env: NodeJS.ProcessEnv
           description: string
+          trackExit: Tool.Context["trackBackgroundShell"]
         }) =>
           Effect.gen(function* () {
             const jobDir = mkdtempSync(path.join(tmpDir, "background-"))
             const logPath = path.join(jobDir, BACKGROUND_LOG)
             const statusPath = path.join(jobDir, BACKGROUND_STATUS)
             const argv = backgroundArgv(input.shell, input.command)
+            const exited = Promise.withResolvers<Tool.BackgroundShellExit>()
             // 261126 Red Windows 后台作业必须与宿主控制台断链：直接 spawn 会继承宿主
             // console，shell 的孙进程写 CONOUT$ 会刷进 TUI；Bun 下 detached 又会连
             // stdout/stderr fd 一起丢掉（实测日志 0 字节）。Windows 改走 CreateProcessW +
@@ -1012,6 +1015,7 @@ export const ShellTool = Tool.define(
                       env: input.env,
                       logPath,
                       statusPath,
+                      onExit: exited.resolve,
                       onError: (error) => log.warn("background.status.failed", { error }),
                     })
                     .catch((error) => {
@@ -1033,9 +1037,13 @@ export const ShellTool = Tool.define(
                     detached: true,
                   })
                   // spawn 失败是异步 error 事件；先挂监听，否则未捕获异常会掀翻宿主。
-                  handle.on("error", (error) => log.warn("background.spawn.failed", { error }))
+                  handle.on("error", (error) => {
+                    log.warn("background.spawn.failed", { error })
+                    exited.resolve(null)
+                  })
                   // 261124 Red Publish the terminal result atomically; host exit leaves it unknown.
                   handle.once("exit", (code, signal) => {
+                    exited.resolve(signal ?? code)
                     const partial = `${statusPath}.tmp`
                     try {
                       writeFileSync(partial, `${backgroundStatus(code, signal)}\n`)
@@ -1060,6 +1068,7 @@ export const ShellTool = Tool.define(
               child.unref()
               return child.pid
             })
+            input.trackExit?.(exited.promise)
             const poll = backgroundPoll(input.shell)
             const result: ShellResult = {
               title: input.description,
@@ -1140,6 +1149,7 @@ export const ShellTool = Tool.define(
                 return yield* runBackground({
                   shell: resolved,
                   selector: params.shell,
+                  trackExit: ctx.trackBackgroundShell,
                   command: params.command,
                   cwd,
                   env: yield* shellEnv(ctx, cwd),

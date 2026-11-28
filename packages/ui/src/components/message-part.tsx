@@ -2319,6 +2319,18 @@ ToolRegistry.register({
     const DISPLAY_CAP = 64 * 1024
     const [expanded, setExpanded] = createSignal(false)
     const cmd = () => props.input.command ?? props.metadata.command ?? ""
+    // 261128 Red 后台 bash 完成后由引擎补 backgroundExit，和 TUI 一样贴在原启动行描述后面；
+    // 前台工具没有该字段，普通工具保持原样。
+    const backgroundExit = createMemo(() => {
+      const value = props.metadata.backgroundExit
+      return typeof value === "string" && value ? value : undefined
+    })
+    const description = createMemo(() => {
+      const text = props.input.description
+      const exit = backgroundExit()
+      if (!exit) return text
+      return text ? `${text} · ${exit}` : exit
+    })
 
     const view = createMemo(() => {
       const raw = props.output || props.metadata.output || ""
@@ -2360,8 +2372,8 @@ ToolRegistry.register({
               <Show when={pending() && cmd()}>
                 <span data-slot="basic-tool-tool-subtitle">{cmd()}</span>
               </Show>
-              <Show when={!pending() && props.input.description}>
-                <ShellSubmessage text={props.input.description} animate={sawPending} />
+              <Show when={!pending() && description()}>
+                {(text) => <ShellSubmessage text={text()} animate={sawPending} />}
               </Show>
             </div>
           </div>

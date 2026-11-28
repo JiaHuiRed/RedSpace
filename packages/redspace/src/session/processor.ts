@@ -24,6 +24,7 @@ import { errorChain, errorMessage } from "@/util/error"
 import * as Log from "@redcode-ai/core/util/log"
 import { isRecord } from "@/util/record"
 import { Freeform } from "@/tool/freeform"
+import type { BackgroundShellExit } from "@/tool/tool"
 import { RuntimeFlags } from "@/effect/runtime-flags"
 import { LLMEvent, Usage } from "@redcode-ai/llm"
 import { NgramDetector } from "./text-loop-detection"
@@ -69,6 +70,7 @@ export interface Handle {
   // 停止原因落成消息 error（task 子代理回执与通知靠它判失败），processor 自己不写 error。
   readonly stoppedByRepeatLoop?: boolean
   readonly guardToolCall?: (name: string, input: unknown) => Effect.Effect<void>
+  readonly trackBackgroundShell?: (callID: string, exit: Promise<BackgroundShellExit>) => void
   readonly updateToolCall: (
     toolCallID: string,
     name: string,
@@ -237,6 +239,23 @@ export const layer = Layer.effect(
     const status = yield* SessionStatus.Service
     const image = yield* Image.Service
 
+    const recordShellExit = Effect.fn("SessionProcessor.recordShellExit")(function* (
+      address: Pick<ToolCall, "partID" | "messageID" | "sessionID">,
+      exited: Promise<BackgroundShellExit>,
+    ) {
+      const exit = yield* Effect.promise(() => exited)
+      const part = yield* session.getPart(address)
+      if (part?.type !== "tool" || part.state.status !== "completed") return
+      const backgroundExit = typeof exit === "string" ? `signal ${exit}` : `exit ${exit ?? "unknown"}`
+      yield* session.updatePart({
+        ...part,
+        state: {
+          ...part.state,
+          metadata: { ...part.state.metadata, exit: typeof exit === "number" ? exit : null, backgroundExit },
+        },
+      })
+    })
+
     const create = Effect.fn("SessionProcessor.create")(function* (input: Input) {
       // Pre-capture snapshot before the LLM stream starts. The AI SDK
       // may execute tools internally before emitting start-step events,
@@ -296,6 +315,7 @@ export const layer = Layer.effect(
         toolsStarted: false,
       }
       let aborted = false
+      const shellExits = new Map<string, Promise<BackgroundShellExit>>()
       // 261104 Red step-finish 已到的信号槽：process 每个 attempt 重建，handleEvent 收到
       //   step-finish 时完成——race 侧据此把「响应主体完成后的流静默」切到 idleAfterUsageMs 短窗。
       let stepFinishSeen: Deferred.Deferred<void> | undefined
@@ -309,6 +329,7 @@ export const layer = Layer.effect(
 
       const settleToolCall = Effect.fn("SessionProcessor.settleToolCall")(function* (toolCallID: string) {
         const done = ctx.toolcalls[toolCallID]?.done
+        shellExits.delete(toolCallID)
         delete ctx.toolcalls[toolCallID]
         if (done) yield* Deferred.succeed(done, undefined).pipe(Effect.ignore)
       })
@@ -436,6 +457,15 @@ export const layer = Layer.effect(
             attachments: output.attachments,
           },
         })
+        // 261128 Red 先提交启动记录再领取退出结果：即使进程先退出，也不会被迟到的启动行盖掉。
+        const exited = shellExits.get(toolCallID)
+        if (exited) {
+          const { partID, messageID, sessionID } = match.call
+          yield* recordShellExit({ partID, messageID, sessionID }, exited).pipe(
+            Effect.catchCause((cause) => Effect.sync(() => log.warn("background exit update failed", { partID, cause }))),
+            Effect.forkIn(scope),
+          )
+        }
         yield* settleToolCall(toolCallID)
       })
 
@@ -1748,6 +1778,9 @@ export const layer = Layer.effect(
         },
         updateToolCall,
         completeToolCall,
+        trackBackgroundShell: (callID, exit) => {
+          shellExits.set(callID, exit)
+        },
         process,
       } satisfies Handle
     })
