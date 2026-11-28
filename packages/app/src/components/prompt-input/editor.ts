@@ -118,6 +118,16 @@ export function createEditorController(config: EditorControllerConfig) {
     })
   }
 
+  const focusAt = (position: number, done?: () => void) => {
+    requestAnimationFrame(() => {
+      const editor = config.editor()
+      editor.focus()
+      setCursorPosition(editor, position)
+      done?.()
+      queueScroll()
+    })
+  }
+
   const isNormalizedEditor = () =>
     Array.from(config.editor().childNodes).every((node) => {
       if (node.nodeType === Node.TEXT_NODE) {
@@ -267,6 +277,7 @@ export function createEditorController(config: EditorControllerConfig) {
     focusEditorEnd,
     restoreFocus,
     reconcile,
+    focusAt,
     isImeComposing,
     handleCompositionStart,
     handleCompositionEnd,
@@ -277,3 +288,6 @@ export function createEditorController(config: EditorControllerConfig) {
     acceptGhost,
   }
 }
+
+
+export type EditorController = ReturnType<typeof createEditorController>
