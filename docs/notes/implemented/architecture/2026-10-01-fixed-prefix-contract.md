@@ -123,3 +123,35 @@ DeepSeek 模糊询问中的尝试写入在本次新版样本未再出现；GLM/S
 - 当前 `bun run typecheck` 通过。早先的三条 currency 错误已不再出现在最新主树检查中；没有改动相关路径。
 - 四家真实调用各完成新旧 18 例，共 144 个有效对照 case；不是 144 次请求，工具回合会发多次请求。诊断烟测和接入错误另计，不混入通过数。
 - 未跑全量测试、未升版、未推送、未 release；端到端与全前缀缓存证据边界见上文。
+
+## 2026-11-28：不用用户再催的交付验收
+
+`packages/redspace/script/prompt-eval-delivery.ts` 把两种提前交卷缩成可重复的任务。`unbuilt-benchmark` 来自 Pi 调研：原 checkout 没装依赖，首次答复就略过了可以隔离运行的测量。这里用本仓的 reporting estimator 替代 Pi：模型必须取得五次实际测量，在最终答复给出正确中位数，引用 README 或说“可以测”不算。`stale-package-handoff` 复现已完成回执与实际产物不符：交接说明声称包已重建，实际解压仍是旧值。只改源文件、只相信回执或者只构建不读回都不通过。交付要求以新包解压后的 JSON 判定，不以助手措辞判定。
+
+两例沿用隔离的文件表。模型能选择固定的计时、打包和解包操作，不能执行任意 shell；计时和 gzip 用真实实现。实验进程另存交付的 `.gz` 供独立解压。任何需要 `question` 或未正常交卷的运行都不能算独立完成。
+
+复跑（`packages/redspace/` 下，PowerShell；沿用已配置且认证的模型，不加载用户工程）：
+
+```powershell
+$out = "../../.redcode/temp/delivery-ab-$([guid]::NewGuid())"
+foreach ($arm in 'A1','B1','B2','A2') {
+  $opts = if ($arm.StartsWith('B')) { @('--runtime') } else { @() }
+  bun run --conditions=browser ./script/prompt-eval.ts --models openai/gpt-6.2-astra --variant low --cases unbuilt-benchmark,stale-package-handoff,denied-tool --rounds 10 --timeout 90000 --output $out --label $arm @opts
+}
+```
+
+这次 A/B 的唯一提示词差异是 B 带生产的 `work-rules.md` 尾段，A 不带；两组都有共享工程契约。两项交付加一项拒绝写入的对照，每项每组两次。A、B 均通过 6/6，工具调用 24 / 25，模型请求 24 / 26。四个成品在模型结束后再次解压，四次中位数从原始样本重算；拒写对照均收到一次真实的夹具拒绝，未绕过。**这批用例没测出再提醒一次的完成率收益**，不据此改生产提示词，也不把小样本的调用差当作成本回归。原始记录和独立复算在本机 `.redcode/temp/delivery-ab-261128/`。
+
+**真实 Pi 工作负载，单独测工具回执。** 从受信任的 Pi `2126569de` 用 `git archive` 导出 `packages/tui` 到两份临时目录，一份不装依赖；另一份在包目录 `npm install --ignore-scripts --omit=dev --no-audit --no-fund`，装 manifest 固定的三个运行依赖。`PI_EVAL_CLEAN_TUI` 和 `PI_EVAL_READY_TUI` 分别指向两份 `packages/tui`。这是 opt-in 入口，不会自动下载或修改 Pi。模型只能选在哪份副本运行固定的 Node 基准，不能指定程序、参数或路径。两份目录及其依赖应由操作者准备和信任；脚本哈希只校验基准版本，不是对任意 checkout 的安全审查。
+
+```powershell
+$out = "../../.redcode/temp/pi-replay-$([guid]::NewGuid())"
+foreach ($arm in 'toolA1','toolB1','toolB2','toolA2') {
+  $env:PI_EVAL_RECOVERY_HINT = if ($arm.StartsWith('toolB')) { '1' } else { '0' }
+  bun run --conditions=browser ./script/prompt-eval-pi.ts --models openai/gpt-6.2-astra --variant low --runtime --label $arm --output $out
+}
+```
+
+四轮都先在干净副本遇到 `Cannot find package 'marked'`，再运行准备好的副本。A 只返回原错误，B 在同一错误后指出 `bench --isolated`；模型、初始请求与可用命令相同。两边各 2/2 正确交付，每次均 3 次工具调用。考官按**本轮**进程 stdout 逐项复核最终答复的四个数和最慢项；不要求不同运行有同样的耗时。正式数据在本机 `.redcode/temp/delivery-ab-261128/pi-final/`。这道题明确要求实测，隔离副本已备好；它没有测试模型能否从泛泛的调研请求中自己决定安装依赖、扩展调查范围。
+
+另用同一入口 `--cases pi-open-research`，只问“长对话里哪些交互做得好、哪些地方并不轻”，不提测量、不指定回答格式。两组均设 `PI_EVAL_RECOVERY_HINT=0`，只对照有无 `--runtime`。每组两次，全都主动取得真实基准输出，最终回答都引用了自己那一轮的四个数字，无人补发指令。自动判的是**有无主动取证**，不是对整篇研究打分。这里也只开放了很窄的工具面，且已备好隔离依赖；不能外推到需要自行发现、安装依赖的完整仓库调研。本机原始记录在 `.redcode/temp/delivery-ab-261128/pi-open/`。

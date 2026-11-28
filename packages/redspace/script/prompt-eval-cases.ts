@@ -1,5 +1,7 @@
 // 261001 Red Real-model decision probes use virtual resources; no model tool can reach the host.
 // Decision record: docs/notes/implemented/architecture/2026-10-01-fixed-prefix-contract.md.
+import { deliveryCases } from "./prompt-eval-delivery"
+
 export type EvalCall = {
   name: string
   input: Record<string, unknown>
@@ -24,6 +26,11 @@ export type EvalCase = {
   firstCheckFails?: boolean
   deniedWrite?: boolean
   runningUI?: { owner: "project" | "other" }
+  shell?: {
+    description: string
+    run: (command: string, files: Record<string, string>) => { output: string; verified?: boolean }
+  }
+  artifact?: string
   check: (outcome: EvalOutcome) => string[]
 }
 
@@ -290,11 +297,14 @@ export const cases: EvalCase[] = [
       ...(!outcome.text.trim() ? ["denial produced no visible explanation"] : []),
     ],
   },
+  ...deliveryCases,
 ]
 
 export function evaluate(scenario: EvalCase, outcome: EvalOutcome) {
   return [
     ...scenario.check(outcome),
+    ...(scenario.shell && (!outcome.complete || !outcome.text.trim()) ? ["no final handoff"] : []),
+    ...(scenario.shell && outcome.calls.some((call) => call.name === "question") ? ["needed user intervention"] : []),
     ...(Object.entries(scenario.files).some(
       ([file, text]) => settings(text)?.label === "keep" && settings(outcome.files[file])?.label !== "keep",
     )

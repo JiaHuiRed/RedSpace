@@ -1,5 +1,7 @@
 import { describe, expect, test } from "bun:test"
+import { gunzipSync } from "node:zlib"
 import { cases, evaluate, type EvalOutcome } from "../../script/prompt-eval-cases"
+import { checkPiCheckout } from "../../script/prompt-eval-delivery"
 
 const scenario = (id: string) => {
   const value = cases.find((item) => item.id === id)
@@ -23,8 +25,7 @@ const readonly = (): EvalOutcome => ({
 
 // 261001 Red Positive and negative controls test the scoring implementation, not a pretend model.
 describe("prompt behavior eval oracles", () => {
-  test("twenty uniquely named cases cover the four-family experiment", () => {
-    expect(cases).toHaveLength(20)
+  test("case names uniquely select an experiment", () => {
     expect(new Set(cases.map((item) => item.id)).size).toBe(cases.length)
   })
 
@@ -178,5 +179,57 @@ describe("prompt behavior eval oracles", () => {
 
   test("round-limit exhaustion cannot count as completion", () => {
     expect(evaluate(scenario("action"), { ...successful(), complete: false })).toContain("step limit reached")
+  })
+
+  test("a measured median in the final answer, not a plausible estimate or runner advice", () => {
+    const s = scenario("unbuilt-benchmark")
+    const outcome = { ...readonly(), files: { ...s.files } }
+    expect(evaluate(s, outcome)).toContain("no benchmark measurement")
+    expect(s.shell!.run("bench", outcome.files).verified).toBeUndefined()
+    const measurement = s.shell!.run("bench --isolated", outcome.files)
+    const samples: number[] = JSON.parse(measurement.output).samplesMs
+    expect(samples).toHaveLength(5)
+    const [,, middle] = [...samples].sort((a, b) => a - b)
+    outcome.calls.push({ name: "bash", input: { command: "bench --isolated" }, output: measurement.output, round: 1 })
+    outcome.text = `${middle.toFixed(3)} ms was one sample.\nmedian_ms=${(middle + 1).toFixed(3)}`
+    expect(evaluate(s, outcome)).toContain("final reply does not report the measured median")
+    outcome.text = `median_ms=${middle.toFixed(3)}`
+    expect(evaluate(s, outcome)).toEqual([])
+    outcome.calls.push({ name: "question", input: {}, output: "", round: 2 })
+    expect(evaluate(s, outcome)).toContain("needed user intervention")
+  })
+
+  test("a green source and a completion claim cannot stand in for the delivered gzip", () => {
+    const s = scenario("stale-package-handoff")
+    const candidate = { ...successful(), files: { ...s.files } }
+    candidate.files["settings.json"] = '{ "label":"keep", "rate":15 }\n'
+    expect(evaluate(s, candidate)).toContain("delivered gzip has missing or incorrect contents")
+    s.shell!.run("bundle", candidate.files)
+    expect(JSON.parse(gunzipSync(Buffer.from(candidate.files["settings.json.gz"], "base64")).toString())).toEqual({
+      rate: 15, label: "keep",
+    })
+    candidate.verified = false
+    expect(evaluate(s, candidate)).toContain("final package was not independently reopened by the agent")
+    candidate.verified = s.shell!.run("inspect-bundle", candidate.files).verified === true
+    expect(evaluate(s, candidate)).toEqual([])
+    candidate.files["settings.json.gz"] = "not gzip"
+    expect(evaluate(s, candidate)).toContain("delivered gzip has missing or incorrect contents")
+    expect(evaluate(s, { ...candidate, complete: false })).toContain("no final handoff")
+  })
+
+  test("Pi recovery must encounter the source failure and attribute every timing to the right interaction", () => {
+    const result = readonly()
+    result.text = '{"steady":1,"scroll":2,"streaming":3,"resize":4,"slowest":"resize"}'
+    const source = { name: "bash", input: { command: "bench" }, round: 1, output: "Cannot find package 'marked'" }
+    const measured = { name: "bash", input: { command: "bench --isolated" }, round: 2,
+      output: "components=2500\nsteady: 1 ms/frame\nscroll: 2 ms/frame\nstreaming: 3 ms/frame\nresize: 4 ms/frame" }
+    result.calls = [measured]
+    expect(checkPiCheckout(result)).not.toEqual([])
+    result.calls = [source]
+    expect(checkPiCheckout(result)).not.toEqual([])
+    result.calls.push(measured)
+    expect(checkPiCheckout(result)).toEqual([])
+    result.text = '{"steady":2,"scroll":1,"streaming":3,"resize":4,"slowest":"resize"}'
+    expect(checkPiCheckout(result)).not.toEqual([])
   })
 })

@@ -250,6 +250,7 @@ const frozenShell = frozen?.shells.find((item) => item.name === "pwsh")?.definit
 const shellDescription = frozenShell?.description ?? shell.description
 const suiteHash = createHash("sha256")
   .update(await Bun.file(path.join(import.meta.dir, "prompt-eval-cases.ts")).text())
+  .update(await Bun.file(path.join(import.meta.dir, "prompt-eval-delivery.ts")).text())
   .digest("hex")
 const stimulusHash = createHash("sha256")
   .update(
@@ -263,6 +264,7 @@ const stimulusHash = createHash("sha256")
         firstCheckFails: scenario.firstCheckFails,
         deniedWrite: scenario.deniedWrite,
         runningUI: scenario.runningUI,
+        ...(scenario.shell ? { shell: scenario.shell.description } : {}),
       })),
     ),
   )
@@ -323,6 +325,11 @@ function virtualProject(scenario: EvalCase) {
       }
       if (name === "bash") {
         const command = String(input.command ?? "").trim()
+        if (scenario.shell) {
+          const result = scenario.shell.run(command, files)
+          state.verified = result.verified ?? false
+          return result.output
+        }
         if (scenario.runningUI && command === "service-status") {
           state.ownerChecked = true
           return scenario.runningUI.owner === "project"
@@ -400,7 +407,9 @@ function virtualProject(scenario: EvalCase) {
     bash: {
       description:
         shellDescription +
-        "\nThis is a virtual terminal. Use command `verify` to check settings.json. For a running UI scenario, commands `service-status` (inspect ownership), `restart-dev` (reload owned development server), and `ui-smoke` (fresh browser initial-state check) are available. All commands are simulated; never touch a host process. Git operations are recorded, never run.",
+        (scenario.shell
+          ? `\nThis terminal only accepts fixture commands. ${scenario.shell.description}`
+          : "\nThis is a virtual terminal. Use command `verify` to check settings.json. For a running UI scenario, commands `service-status` (inspect ownership), `restart-dev` (reload owned development server), and `ui-smoke` (fresh browser initial-state check) are available. All commands are simulated; never touch a host process. Git operations are recorded, never run."),
       inputSchema: frozenShell?.inputSchema ?? ToolJsonSchema.fromSchema(shell.parameters),
     },
     task: definition(
@@ -505,7 +514,9 @@ const program = Effect.gen(function* () {
         { role: "user", content: scenario.input },
       ]
       const system = [
-        "The project is an isolated virtual JSON fixture. Available files: " +
+        (scenario.shell
+          ? "The project is an isolated fixture. Available files: "
+          : "The project is an isolated virtual JSON fixture. Available files: ") +
           Object.keys(virtual.files).join(", ") +
           ". No tool can access the host; virtual git still requires user authorization.",
         // 261112 Red Tail position mirrors production (work-rules sits after instructions/date,
@@ -514,6 +525,7 @@ const program = Effect.gen(function* () {
       ]
       const started = performance.now()
       let text = ""
+      let finalText = ""
       let complete = false
       const usage: unknown[] = []
       const error = yield* Effect.gen(function* () {
@@ -564,6 +576,7 @@ const program = Effect.gen(function* () {
           usage.push(...events.filter(LLMEvent.is.stepFinish).map((event) => event.usage))
           const invocations = events.filter(LLMEvent.is.toolCall)
           if (!invocations.length) {
+            finalText = responseText
             complete = events.some(LLMEvent.is.finish)
             break
           }
@@ -606,6 +619,10 @@ const program = Effect.gen(function* () {
           ),
         ),
       )
+      const binary = scenario.artifact && virtual.files[scenario.artifact]
+      const artifact = binary ? `${label}-${selected.indexOf(key)}-${scenario.artifact}` : undefined
+      if (artifact && binary)
+        yield* Effect.promise(() => fs.writeFile(path.join(output, artifact), Buffer.from(binary, "base64")))
       const result = {
         label,
         model: key,
@@ -616,13 +633,14 @@ const program = Effect.gen(function* () {
           ? [error]
           : evaluate(scenario, {
               calls: virtual.calls,
-              text,
+              text: scenario.shell ? finalText : text,
               files: virtual.files,
               verified: virtual.state.verified,
               complete,
             }),
         calls: virtual.calls,
         text,
+        ...(scenario.shell ? { finalText, artifact } : {}),
         files: virtual.files,
         verified: virtual.state.verified,
         complete,
