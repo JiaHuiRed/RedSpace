@@ -60,12 +60,5 @@ rem repo stopped tracking these scripts, pulling deletes them with nothing to pu
 call "%~dp0sync-home-scripts.bat"
 if errorlevel 1 exit /b 1
 
-rem global plugin: only memory.ts (CORE per-turn injector). Engine scans ~/.redcode/plugin for every project.
-rem Selective copy on purpose: do NOT mirror the whole seed\plugins (smoke/stub files stay repo-local).
-if not exist "%USERPROFILE%\.redcode\plugin" mkdir "%USERPROFILE%\.redcode\plugin" >nul 2>&1
-if errorlevel 1 exit /b 1
-if exist "seed\plugins\memory.ts" copy /y "seed\plugins\memory.ts" "%USERPROFILE%\.redcode\plugin\memory.ts" >nul
-if errorlevel 1 exit /b 1
-
 echo [sync] done
 exit /b 0
