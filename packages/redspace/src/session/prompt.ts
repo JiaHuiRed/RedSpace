@@ -2415,8 +2415,10 @@ export const layer = Layer.effect(
           // A/B（prompt-eval --runtime，基线/候选各一轮）实证后统一收敛，结果见台账。
           // 261120 Red Chat 最小前缀：工程工作规则不进伙伴主 Chat（V3.0 §5）。
           // docs/notes/implemented/architecture/2026-11-20-companion-prefix-v3.md
+          // 261128 Red 主 Code 也不再注入：default.md 已覆盖继续完成/尊重取消/处理阻塞，
+          // 尾段是同义重复；子任务走独立提示路线，保留这条护栏。
           // injection-registry: work-rules
-          if (!personalChat) system.push(WORK_RULES)
+          if (!personalChat && stepSettings.session.parentID) system.push(WORK_RULES)
           // 260929 Red 收窄到 step-3.x：铁律本是 step-3.7-flash 实测坑（无视 compress nudge
           // 不调用 compress）；step-5-preview 指令遵循已跟上，1M 窗口 + DCP 新线
           // （min 140k / max 220k）下不需要 MUST 级压迫，absoluteNudge 16k 收益档兜底。

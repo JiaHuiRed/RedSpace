@@ -519,8 +519,8 @@ const program = Effect.gen(function* () {
           : "The project is an isolated virtual JSON fixture. Available files: ") +
           Object.keys(virtual.files).join(", ") +
           ". No tool can access the host; virtual git still requires user authorization.",
-        // 261112 Red Tail position mirrors production (work-rules sits after instructions/date,
-        // before anchors/memory/goal). ACTIVE GOAL is not sampled: the harness has no goal state.
+        // 261128 Red 生产主 Code 已不再注入 work-rules（default.md 覆盖同义尾段），这里保留
+        // 为 legacy 对照臂便于 A/B 复测；子任务仍注入。ACTIVE GOAL 未采样：harness 无 goal 态。
         ...(args.runtime ? [WORK_RULES] : []),
       ]
       const started = performance.now()
