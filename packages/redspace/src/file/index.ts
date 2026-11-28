@@ -449,13 +449,24 @@ export const layer = Layer.effect(
       const changed: Info[] = []
 
       if (diffOutput.trim()) {
+        const deletedOutput = yield* gitText([
+          "-c",
+          "core.fsmonitor=false",
+          "-c",
+          "core.quotepath=false",
+          "diff",
+          "--name-only",
+          "--diff-filter=D",
+          "HEAD",
+        ])
+        const deleted = new Set(deletedOutput.trimEnd().split("\n"))
         for (const line of diffOutput.trim().split("\n")) {
           const [added, removed, file] = line.split("\t")
           changed.push({
             path: file,
             added: added === "-" ? 0 : parseInt(added, 10),
             removed: removed === "-" ? 0 : parseInt(removed, 10),
-            status: "modified",
+            status: deleted.has(file) ? "deleted" : "modified",
           })
         }
       }
@@ -481,28 +492,6 @@ export const layer = Layer.effect(
             added: content.split("\n").length,
             removed: 0,
             status: "added",
-          })
-        }
-      }
-
-      const deletedOutput = yield* gitText([
-        "-c",
-        "core.fsmonitor=false",
-        "-c",
-        "core.quotepath=false",
-        "diff",
-        "--name-only",
-        "--diff-filter=D",
-        "HEAD",
-      ])
-
-      if (deletedOutput.trim()) {
-        for (const file of deletedOutput.trim().split("\n")) {
-          changed.push({
-            path: file,
-            added: 0,
-            removed: 0,
-            status: "deleted",
           })
         }
       }

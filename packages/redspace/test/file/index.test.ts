@@ -397,64 +397,6 @@ describe("file/index Filesystem patterns", () => {
 
   describe("status()", () => {
     it.instance(
-      "detects modified file",
-      () =>
-        Effect.gen(function* () {
-          const test = yield* TestInstance
-          const filepath = path.join(test.directory, "file.txt")
-          yield* Effect.promise(() => fs.writeFile(filepath, "original\n", "utf-8"))
-          yield* gitAddAll(test.directory)
-          yield* gitCommit(test.directory, "add file")
-          yield* Effect.promise(() => fs.writeFile(filepath, "modified\nextra line\n", "utf-8"))
-
-          const result = yield* status()
-          const entry = result.find((file) => file.path === "file.txt")
-          expect(entry).toBeDefined()
-          expect(entry!.status).toBe("modified")
-          expect(entry!.added).toBeGreaterThan(0)
-          expect(entry!.removed).toBeGreaterThan(0)
-        }),
-      { git: true },
-    )
-
-    it.instance(
-      "detects untracked file as added",
-      () =>
-        Effect.gen(function* () {
-          const test = yield* TestInstance
-          yield* Effect.promise(() =>
-            fs.writeFile(path.join(test.directory, "new.txt"), "line1\nline2\nline3\n", "utf-8"),
-          )
-
-          const result = yield* status()
-          const entry = result.find((file) => file.path === "new.txt")
-          expect(entry).toBeDefined()
-          expect(entry!.status).toBe("added")
-          expect(entry!.added).toBe(4)
-          expect(entry!.removed).toBe(0)
-        }),
-      { git: true },
-    )
-
-    it.instance(
-      "detects deleted file",
-      () =>
-        Effect.gen(function* () {
-          const test = yield* TestInstance
-          const filepath = path.join(test.directory, "gone.txt")
-          yield* Effect.promise(() => fs.writeFile(filepath, "content\n", "utf-8"))
-          yield* gitAddAll(test.directory)
-          yield* gitCommit(test.directory, "add file")
-          yield* Effect.promise(() => fs.rm(filepath))
-
-          const result = yield* status()
-          const entries = result.filter((file) => file.path === "gone.txt")
-          expect(entries.some((entry) => entry.status === "deleted")).toBe(true)
-        }),
-      { git: true },
-    )
-
-    it.instance(
       "detects mixed changes",
       () =>
         Effect.gen(function* () {
@@ -466,12 +408,20 @@ describe("file/index Filesystem patterns", () => {
 
           yield* Effect.promise(() => fs.writeFile(path.join(test.directory, "keep.txt"), "changed\n", "utf-8"))
           yield* Effect.promise(() => fs.rm(path.join(test.directory, "remove.txt")))
-          yield* Effect.promise(() => fs.writeFile(path.join(test.directory, "brand-new.txt"), "hello\n", "utf-8"))
+          yield* Effect.promise(() =>
+            fs.writeFile(path.join(test.directory, "brand-new.txt"), "one\ntwo\nthree\n", "utf-8"),
+          )
 
           const result = yield* status()
-          expect(result.some((file) => file.path === "keep.txt" && file.status === "modified")).toBe(true)
-          expect(result.some((file) => file.path === "remove.txt" && file.status === "deleted")).toBe(true)
-          expect(result.some((file) => file.path === "brand-new.txt" && file.status === "added")).toBe(true)
+          expect(result.find((file) => file.path === "keep.txt")).toMatchObject({
+            status: "modified", added: 1, removed: 1,
+          })
+          expect(result.filter((file) => file.path === "remove.txt")).toEqual([
+            { path: "remove.txt", status: "deleted", added: 0, removed: 1 },
+          ])
+          expect(result.find((file) => file.path === "brand-new.txt")).toMatchObject({
+            status: "added", added: 4, removed: 0,
+          })
         }),
       { git: true },
     )
