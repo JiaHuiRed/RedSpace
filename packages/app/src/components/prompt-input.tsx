@@ -65,6 +65,7 @@ import {
   setRangeEdge,
   parseFromDOM,
 } from "./prompt-input/editor-dom"
+import { createEditorController } from "./prompt-input/editor"
 import { findHistorySuggestion } from "./prompt-input/suggestion"
 import { createPromptAttachments } from "./prompt-input/attachments"
 import { ACCEPTED_FILE_TYPES } from "./prompt-input/files"
@@ -167,52 +168,11 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   let scrollRef!: HTMLDivElement
   let slashPopoverRef!: HTMLDivElement
 
-  const mirror = { input: false }
-  const inset = 56
 
   // 261122 Red 第二批：新会话页与发送入口共用同一条身份口径——显式选择优先，
   // 其次本地保存，最后交给解析规则。confirmedSoul 命中缓存时提交不再发身份查询。
   const savedSoul = () => props.newSessionSoul?.() ?? settings.personalization.lastSoul()
 
-  const scrollCursorIntoView = () => {
-    const container = scrollRef
-    const selection = window.getSelection()
-    if (!container || !selection || selection.rangeCount === 0) return
-
-    const range = selection.getRangeAt(0)
-    if (!editorRef.contains(range.startContainer)) return
-
-    const cursor = getCursorPosition(editorRef)
-    const length = promptLength(prompt.current().filter((part) => part.type !== "image"))
-    if (cursor >= length) {
-      container.scrollTop = container.scrollHeight
-      return
-    }
-
-    const rect = range.getClientRects().item(0) ?? range.getBoundingClientRect()
-    if (!rect.height) return
-
-    const containerRect = container.getBoundingClientRect()
-    const top = rect.top - containerRect.top + container.scrollTop
-    const bottom = rect.bottom - containerRect.top + container.scrollTop
-    const padding = 12
-
-    if (top < container.scrollTop + padding) {
-      container.scrollTop = Math.max(0, top - padding)
-      return
-    }
-
-    if (bottom > container.scrollTop + container.clientHeight - inset) {
-      container.scrollTop = bottom - container.clientHeight + inset
-    }
-  }
-
-  const queueScroll = (count = 2) => {
-    requestAnimationFrame(() => {
-      scrollCursorIntoView()
-      if (count > 1) queueScroll(count - 1)
-    })
-  }
 
   const activeFileTab = createSessionTabs({
     tabs,
@@ -507,26 +467,10 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       editorRef.focus()
       setCursorPosition(editorRef, length)
       setStore("applyingHistory", false)
-      queueScroll()
+      editor.queueScroll()
     })
   }
 
-  const getCaretState = () => {
-    const selection = window.getSelection()
-    const textLength = promptLength(prompt.current())
-    if (!selection || selection.rangeCount === 0) {
-      return { collapsed: false, cursorPosition: 0, textLength }
-    }
-    const anchorNode = selection.anchorNode
-    if (!anchorNode || !editorRef.contains(anchorNode)) {
-      return { collapsed: false, cursorPosition: 0, textLength }
-    }
-    return {
-      collapsed: selection.isCollapsed,
-      cursorPosition: getCursorPosition(editorRef),
-      textLength,
-    }
-  }
 
   const escBlur = () => platform.platform === "desktop" && platform.os === "macos"
 
@@ -577,51 +521,11 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     setStore("savedPrompt", null)
   }
 
-  const clearEditor = () => {
-    editorRef.innerHTML = ""
-  }
-
-  const setEditorText = (text: string) => {
-    clearEditor()
-    editorRef.textContent = text
-  }
 
   // 261106 Red 删除 ghost.ts 的死调用：createGhostSystem 返回值从未被使用，
   // 实际运行的 ghost 实现是下方 651-697 的本地闭包（与 ghost.ts 逐字相同）。
   // 保留双份会让"改抽取件不生效"成为现成陷阱，抽走 ghost.ts 留本地实现。
 
-  const focusEditorEnd = () => {
-    requestAnimationFrame(() => {
-      editorRef.focus()
-      const range = document.createRange()
-      const selection = window.getSelection()
-      range.selectNodeContents(editorRef)
-      range.collapse(false)
-      selection?.removeAllRanges()
-      selection?.addRange(range)
-    })
-  }
-
-  const currentCursor = () => {
-    const selection = window.getSelection()
-    if (!selection || selection.rangeCount === 0 || !editorRef.contains(selection.anchorNode)) return null
-    return getCursorPosition(editorRef)
-  }
-
-  const restoreFocus = () => {
-    requestAnimationFrame(() => {
-      const cursor = prompt.cursor() ?? promptLength(prompt.current())
-      editorRef.focus()
-      setCursorPosition(editorRef, cursor)
-      queueScroll()
-    })
-  }
-
-  const renderEditorWithCursor = (parts: Prompt) => {
-    const cursor = currentCursor()
-    renderEditor(parts)
-    if (cursor !== null) setCursorPosition(editorRef, cursor)
-  }
 
   createEffect(() => {
     params.id
@@ -649,7 +553,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     setComposing(false)
     requestAnimationFrame(() => {
       if (composing()) return
-      reconcile(prompt.current().filter((part) => part.type !== "image"))
+      editor.reconcile(prompt.current().filter((part) => part.type !== "image"))
     })
   }
 
@@ -679,7 +583,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     if (parts.some((part) => part.type !== "text")) return
     const text = parts.map((part) => ("content" in part ? part.content : "")).join("")
     if (!text || text.includes("\n")) return
-    const { collapsed, cursorPosition } = getCaretState()
+    const { collapsed, cursorPosition } = editor.getCaretState()
     if (!collapsed || cursorPosition !== text.length) return
     const suffix = findHistorySuggestion(history.entries, text)
     if (suffix) applyGhost(suffix)
@@ -695,9 +599,9 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       .map((part) => ("content" in part ? part.content : ""))
       .join("")
     const full = text + suffix
-    mirror.input = true
+    editor.markInput()
     prompt.set([{ type: "text", content: full, start: 0, end: full.length }], full.length)
-    setEditorText(full)
+    editor.setEditorText(full)
     setCursorPosition(editorRef, full.length)
     resetHistoryNavigation()
     return true
@@ -816,13 +720,13 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
 
     if (cmd.type === "custom") {
       const text = `/${cmd.trigger} `
-      setEditorText(text)
+      editor.setEditorText(text)
       prompt.set([{ type: "text", content: text, start: 0, end: text.length }, ...images], text.length)
-      focusEditorEnd()
+      editor.focusEditorEnd()
       return
     }
 
-    clearEditor()
+    editor.clearEditor()
     prompt.set([...DEFAULT_PROMPT, ...images], 0)
     command.trigger(cmd.id, "slash")
   }
@@ -883,51 +787,25 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       if (!next) return
       closePopover()
       prompt.set(next.prompt.length ? next.prompt : DEFAULT_PROMPT, next.cursor)
-      restoreFocus()
+      editor.restoreFocus()
     }
     pill.append(preview, remove)
     return pill
   }
 
-  const isNormalizedEditor = () =>
-    Array.from(editorRef.childNodes).every((node) => {
-      if (node.nodeType === Node.TEXT_NODE) {
-        const text = node.textContent ?? ""
-        if (!text.includes("\u200B")) return true
-        if (text !== "\u200B") return false
-
-        const prev = node.previousSibling
-        const next = node.nextSibling
-        const prevIsBr = prev?.nodeType === Node.ELEMENT_NODE && (prev as HTMLElement).tagName === "BR"
-        return !!prevIsBr && !next
-      }
-      if (node.nodeType !== Node.ELEMENT_NODE) return false
-      const el = node as HTMLElement
-      if (el.dataset.ghost === "true") return true
-      if (el.dataset.type === "file") return true
-      if (el.dataset.type === "agent") return true
-      if (el.dataset.type === "quote") return true
-      return el.tagName === "BR"
-    })
-
-  const renderEditor = (parts: Prompt) => {
-    clearEditor()
-    for (const part of parts) {
-      if (part.type === "text") {
-        editorRef.appendChild(createTextFragment(part.content))
-        continue
-      }
-      if (part.type === "file" || part.type === "agent") {
-        editorRef.appendChild(createPill(part))
-      }
-      if (part.type === "quote") editorRef.appendChild(createQuotePill(part))
-    }
-
-    const last = editorRef.lastChild
-    if (last?.nodeType === Node.ELEMENT_NODE && (last as HTMLElement).tagName === "BR") {
-      editorRef.appendChild(document.createTextNode("\u200B"))
-    }
-  }
+  const editor = createEditorController({
+    editor: () => editorRef,
+    scroll: () => scrollRef,
+    current: () => prompt.current(),
+    cursor: () => prompt.cursor(),
+    composing,
+    renderPart: (part) => {
+      if (part.type === "file" || part.type === "agent") return createPill(part)
+      if (part.type === "quote") return createQuotePill(part)
+      return undefined
+    },
+    onExternalChange: closePopover,
+  })
 
   // Auto-scroll active command into view when navigating with keyboard
   createEffect(() => {
@@ -962,31 +840,6 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     }
   }
 
-  const reconcile = (input: Prompt) => {
-    if (mirror.input) {
-      mirror.input = false
-      if (isNormalizedEditor()) return
-
-      renderEditorWithCursor(input)
-      return
-    }
-
-    const dom = parseFromDOM(editorRef)
-    if (isNormalizedEditor() && isPromptEqual(input, dom)) return
-
-    closePopover()
-    renderEditorWithCursor(input)
-  }
-
-  createEffect(
-    on(
-      () => prompt.current(),
-      (parts) => {
-        if (composing()) return
-        reconcile(parts.filter((part) => part.type !== "image"))
-      },
-    ),
-  )
 
   const handleInput = () => {
     // 261115 Red RX-01：打字不再自动清错误横幅——A 失败后继续写 B 正是要支持的场景，
@@ -1008,10 +861,10 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       closePopover()
       resetHistoryNavigation()
       if (prompt.dirty()) {
-        mirror.input = true
+        editor.markInput()
         prompt.set(DEFAULT_PROMPT, 0)
       }
-      queueScroll()
+      editor.queueScroll()
       return
     }
 
@@ -1036,10 +889,10 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
 
     resetHistoryNavigation()
 
-    mirror.input = true
+    editor.markInput()
     prompt.set([...rawParts, ...images], cursorPosition)
     updateGhost()
-    queueScroll()
+    editor.queueScroll()
   }
 
   const addPart = (part: ContentPart) => {
@@ -1162,7 +1015,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
         requestAnimationFrame(() => {
           editorRef.focus()
           setCursorPosition(editorRef, promptLength(edit.prompt))
-          queueScroll()
+          editor.queueScroll()
         })
         props.onEditLoaded?.()
       },
@@ -1234,7 +1087,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       mode: () => store.mode,
       working,
       editor: () => editorRef,
-      queueScroll,
+      queueScroll: editor.queueScroll,
       promptLength,
       addToHistory,
       resetHistoryNavigation: () => {
@@ -1337,7 +1190,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     }
 
     if (store.mode === "shell") {
-      const { collapsed, cursorPosition, textLength } = getCaretState()
+      const { collapsed, cursorPosition, textLength } = editor.getCaretState()
       if (event.key === "Backspace" && collapsed && cursorPosition === 0 && textLength === 0) {
         setStore("mode", "normal")
         event.preventDefault()
@@ -1418,7 +1271,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) {
         // fall through
       } else if (ghostSuffix()) {
-        const { collapsed, cursorPosition, textLength } = getCaretState()
+        const { collapsed, cursorPosition, textLength } = editor.getCaretState()
         if (collapsed && cursorPosition === textLength) {
           if (acceptGhost()) {
             event.preventDefault()
@@ -1430,7 +1283,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
 
     if (event.key === "ArrowUp" || event.key === "ArrowDown") {
       if (event.altKey || event.ctrlKey || event.metaKey) return
-      const { collapsed } = getCaretState()
+      const { collapsed } = editor.getCaretState()
       if (!collapsed) return
 
       const cursorPosition = getCursorPosition(editorRef)
@@ -1551,7 +1404,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
 
   const selectAgent = (name: string, keepModel = false) => {
     local.agent.set(name, { keepModel })
-    restoreFocus()
+    editor.restoreFocus()
   }
 
   const agentControl = () => (
@@ -1701,7 +1554,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                 "min-w-0 max-w-[280px] justify-start text-sm font-medium leading-4 text-v2-text-text-faint group @max-[520px]:max-w-[200px] @max-[380px]:max-w-[150px]",
               "data-action": "prompt-model",
             }}
-            onClose={restoreFocus}
+            onClose={editor.restoreFocus}
           >
             <Show when={local.model.current()?.provider?.id}>
               <ProviderIcon
@@ -1911,7 +1764,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
                   label={worktreeLabel}
                   onSelect={(value) => {
                     if (value) props.onNewSessionWorktreeChange?.(value)
-                    restoreFocus()
+                    editor.restoreFocus()
                   }}
                   class="max-w-[175px] justify-start text-text-base [&_[data-component=icon]]:text-v2-icon-icon-muted @max-[460px]:max-w-[120px]"
                   valueClass="truncate pl-5 [font-size:var(--font-size-base)] font-[440] leading-[1.3] text-v2-text-text-faint"
