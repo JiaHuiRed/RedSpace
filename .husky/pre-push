@@ -17,25 +17,36 @@ if (process.versions.bun !== expectedBunVersion) {
   console.warn(`Warning: Bun version ${process.versions.bun} differs from expected ${expectedBunVersion}`);
 }
 '
+
+# 261128 Red 两条门禁按实际推送范围收紧：只有相关面变化才付两次独立进程与模块加载。
+# 拿不到 upstream（新分支/首次推送）时保守全跑，不漏检。
+push_base=$(git rev-parse -q --verify '@{u}^{commit}' || true)
+if [ -n "$push_base" ]; then
+  push_files=$(git diff --name-only "$push_base" HEAD)
+else
+  push_files=''
+fi
+api_scope='^(packages/redspace/src/config/|packages/redspace/src/session/status\.ts|packages/sdk/|script/check-openapi-drift\.ts|script/httpapi-exercise\.ts|script/generate\.ts|package\.json)'
+coverage_scope='^(packages/redspace/src/server/routes/instance/httpapi/|script/httpapi-exercise\.ts|script/check-openapi-drift\.ts)'
 # 子进程超时不变量：秒级文本扫描，放在 typecheck 前面，坏了立刻知道
 bun run script/check-subprocess-timeout.ts
 # 261013 Red 工具描述源码预算：递归计 UTF-8 字节，超 32KiB 失败，不做运行时截断。
 bun run check:tool-description-budget
 # 裸控制字节不变量：全仓字节扫描。裸 NUL 会让文件对 grep/ripgrep 整个隐身（见 7dec94a7）
 bun run script/check-control-bytes.ts
-# OpenAPI 生成物不变量（约 6s）：改了 config schema 却忘记重跑生成物，本地全绿、推上去
-# 才在 CI 红。260828 一上午撞两次（webfetch.allow_private_hosts、image 的 max_pixels/
-# max_dimension），两次都是别的会话合并时才发现。脚本自己无副作用（见其头注释）。
-bun run check:openapi-drift
-# 261111 Red seed 漂移门禁：jsonc 与 seed 必须同步（key 集合 + 值，未登记即失败）。
-# 没有 ~/.redcode/redcode.jsonc 时自动跳过（全新 clone 不因此拦下 push）；本机定制
-# 登记在脚本的 LOCAL_OVERRIDES 里并写清理由。
-bun run check:config-shadowing
+# OpenAPI 生成物不变量：改了 config schema 却忘记重跑生成物，本地全绿、推上去才在 CI 红。
+# 脚本自己无副作用（见其头注释）。261128 只在 schema/SDK/检查器面变化时跑。
+if [ -z "$push_files" ] || printf '%s\n' "$push_files" | grep -qE "$api_scope"; then
+  bun run check:openapi-drift
+fi
+# 261128 Red 个人配置对齐从通用 pre-push 移出：纯文档/UI 推送不该受本机 jsonc 影响。
+# 脚本保留，配置同步或排查时显式跑 bun run check:config-shadowing。
 # 261116 Red httpapi 路由覆盖门禁：新增端点忘了写 exercise 场景，原来只能等 nightly
-# coverage 模式报 missing——同型事故已五次（0.17.0 instructions，261115 UX-15 query /
-# UX-17 result，e2e mock 兜底 {} 崩页面还有三次）。coverage 只做路由↔场景对账、不执行
-# 场景，实测 ~6s、内存近零，与 openapi-drift 同档。
-(cd packages/redspace && bun run script/httpapi-exercise.ts --mode coverage --fail-on-missing --fail-on-skip)
+# coverage 模式报 missing。coverage 只做路由↔场景对账、不执行场景；但启动前已加载
+# 服务器、会话、项目、数据库和测试夹具等模块。261128 只在 API/检查器面变化时跑。
+if [ -z "$push_files" ] || printf '%s\n' "$push_files" | grep -qE "$coverage_scope"; then
+  (cd packages/redspace && bun run script/httpapi-exercise.ts --mode coverage --fail-on-missing --fail-on-skip)
+fi
 # 261013 Red 全仓 typecheck 移出 pre-push：tsgo 崩溃回退 tsc 时是分钟级，每次 push 都付
 # 不划算；CI typecheck.yml 同一条全量兜底（防本地跳过钩子与并行会话合并）。留在 pre-push
 # 的是秒级扫描（超时不变量/工具描述预算/控制字节/openapi-drift/httpapi coverage 对账），
