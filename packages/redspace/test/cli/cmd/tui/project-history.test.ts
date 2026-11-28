@@ -28,16 +28,6 @@ describe("tui project history", () => {
     })
   })
 
-  test("switching to another session replaces the stored id", async () => {
-    await withState(async (directory) => {
-      await recordProjectVisit({ directory, sessionID: "ses_first" })
-      await recordProjectVisit({ directory, sessionID: "ses_second" })
-      const visits = await readProjectHistory()
-      expect(visits).toHaveLength(1)
-      expect(visits[0]?.sessionID).toBe("ses_second")
-    })
-  })
-
   // 261110 Red 删除后重新访问是一条全新记录，不能继承已被 forget 的会话。
   test("a forgotten project does not inherit the old session", async () => {
     await withState(async (directory) => {

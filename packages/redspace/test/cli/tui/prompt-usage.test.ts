@@ -53,6 +53,7 @@ function usage(input: Parameters<typeof fakeSync>[0]) {
 
 describe("usePromptUsage 命中率三档", () => {
   test("没有消息、或一次 read 都没有时不出数", () => {
+    expect(usePromptUsage(() => undefined, fakeSync({ sessionID: "ses_a", turns: [] }))()).toBeUndefined()
     expect(usage({ sessionID: "ses_a", turns: [] })).toBeUndefined()
     expect(usage({ sessionID: "ses_a", turns: [{ read: 0, miss: 5000 }] })).toBeUndefined()
   })
@@ -86,11 +87,11 @@ describe("usePromptUsage 命中率三档", () => {
     const result = usage({
       sessionID: "ses_a",
       turns: [{ read: 1000, miss: 0 }],
-      record: { input: 300, cacheRead: 700, cacheWrite: 0 },
+      record: { input: 500, cacheRead: 400, cacheWrite: 100 },
     })
-    expect(result!.lifeHitPct).toBe(70)
+    expect(result!.lifeHitPct).toBe(40)
     // 累计未命中按 token 数给，不给百分比 —— 百分比恒等于 100−hit，是冗余
-    expect(result!.lifeMiss).toBe(300)
+    expect(result!.lifeMiss).toBe(600)
   })
 
   test("没有会话记录时全历史两项为空/零，不伪造", () => {

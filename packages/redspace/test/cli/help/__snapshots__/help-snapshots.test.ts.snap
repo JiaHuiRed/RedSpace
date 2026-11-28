@@ -431,32 +431,6 @@ Options:
                     cost)                                                                  [boolean]"
 `;
 
-exports[`redcode CLI help-text snapshots every documented command emits stable help text: redcode mcp list --help 1`] = `
-"redcode mcp list
-
-list MCP servers and their status
-
-Options:
-  -h, --help        show help                                                              [boolean]
-  -v, --version     show version number                                                    [boolean]
-      --print-logs  print logs to stderr                                                   [boolean]
-      --log-level   log level                   [string] [choices: "DEBUG", "INFO", "WARN", "ERROR"]
-      --pure        run without external plugins                                           [boolean]"
-`;
-
-exports[`redcode CLI help-text snapshots every documented command emits stable help text: redcode mcp add --help 1`] = `
-"redcode mcp add
-
-add an MCP server
-
-Options:
-  -h, --help        show help                                                              [boolean]
-  -v, --version     show version number                                                    [boolean]
-      --print-logs  print logs to stderr                                                   [boolean]
-      --log-level   log level                   [string] [choices: "DEBUG", "INFO", "WARN", "ERROR"]
-      --pure        run without external plugins                                           [boolean]"
-`;
-
 exports[`redcode CLI help-text snapshots every documented command emits stable help text: redcode mcp auth --help 1`] = `
 "redcode mcp auth [name]
 
@@ -492,19 +466,6 @@ Options:
       --pure        run without external plugins                                           [boolean]"
 `;
 
-exports[`redcode CLI help-text snapshots every documented command emits stable help text: redcode providers list --help 1`] = `
-"redcode providers list
-
-list providers and credentials
-
-Options:
-  -h, --help        show help                                                              [boolean]
-  -v, --version     show version number                                                    [boolean]
-      --print-logs  print logs to stderr                                                   [boolean]
-      --log-level   log level                   [string] [choices: "DEBUG", "INFO", "WARN", "ERROR"]
-      --pure        run without external plugins                                           [boolean]"
-`;
-
 exports[`redcode CLI help-text snapshots every documented command emits stable help text: redcode providers login --help 1`] = `
 "redcode providers login [url]
 
@@ -521,19 +482,6 @@ Options:
       --pure        run without external plugins                                           [boolean]
   -p, --provider    provider id or name to log in to (skips provider selection)             [string]
   -m, --method      login method label (skips method selection)                             [string]"
-`;
-
-exports[`redcode CLI help-text snapshots every documented command emits stable help text: redcode providers logout --help 1`] = `
-"redcode providers logout
-
-log out from a configured provider
-
-Options:
-  -h, --help        show help                                                              [boolean]
-  -v, --version     show version number                                                    [boolean]
-      --print-logs  print logs to stderr                                                   [boolean]
-      --log-level   log level                   [string] [choices: "DEBUG", "INFO", "WARN", "ERROR"]
-      --pure        run without external plugins                                           [boolean]"
 `;
 
 exports[`redcode CLI help-text snapshots every documented command emits stable help text: redcode agent create --help 1`] = `
@@ -554,19 +502,6 @@ Options:
                               Available: "bash, read, edit, glob, grep, webfetch, task, todowrite,
                               websearch, lsp, skill"                                        [string]
   -m, --model                 model to use in the format of provider/model                  [string]"
-`;
-
-exports[`redcode CLI help-text snapshots every documented command emits stable help text: redcode agent list --help 1`] = `
-"redcode agent list
-
-list all available agents
-
-Options:
-  -h, --help        show help                                                              [boolean]
-  -v, --version     show version number                                                    [boolean]
-      --print-logs  print logs to stderr                                                   [boolean]
-      --log-level   log level                   [string] [choices: "DEBUG", "INFO", "WARN", "ERROR"]
-      --pure        run without external plugins                                           [boolean]"
 `;
 
 exports[`redcode CLI help-text snapshots every documented command emits stable help text: redcode session list --help 1`] = `
@@ -600,19 +535,6 @@ Options:
       --pure        run without external plugins                                           [boolean]"
 `;
 
-exports[`redcode CLI help-text snapshots every documented command emits stable help text: redcode github install --help 1`] = `
-"redcode github install
-
-install the GitHub agent
-
-Options:
-  -h, --help        show help                                                              [boolean]
-  -v, --version     show version number                                                    [boolean]
-      --print-logs  print logs to stderr                                                   [boolean]
-      --log-level   log level                   [string] [choices: "DEBUG", "INFO", "WARN", "ERROR"]
-      --pure        run without external plugins                                           [boolean]"
-`;
-
 exports[`redcode CLI help-text snapshots every documented command emits stable help text: redcode github run --help 1`] = `
 "redcode github run
 
@@ -626,17 +548,4 @@ Options:
       --pure        run without external plugins                                           [boolean]
       --event       GitHub mock event to run the agent for                                  [string]
       --token       GitHub personal access token (github_pat_********)                      [string]"
-`;
-
-exports[`redcode CLI help-text snapshots every documented command emits stable help text: redcode db path --help 1`] = `
-"redcode db path
-
-print the database path
-
-Options:
-  -h, --help        show help                                                              [boolean]
-  -v, --version     show version number                                                    [boolean]
-      --print-logs  print logs to stderr                                                   [boolean]
-      --log-level   log level                   [string] [choices: "DEBUG", "INFO", "WARN", "ERROR"]
-      --pure        run without external plugins                                           [boolean]"
 `;

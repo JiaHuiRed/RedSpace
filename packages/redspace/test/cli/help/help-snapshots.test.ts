@@ -68,24 +68,15 @@ const TOP_LEVEL = [
   "doctor",
 ] as const
 
-// Subcommands worth pinning. Not exhaustive — the goal is one snapshot per
-// distinct argv shape, not every leaf. Add new entries when a subcommand
-// gains user-visible flags that we want to lock in.
+// Leaves with only global flags are already listed by the parent's help.
 const SUBCOMMANDS = [
-  ["mcp", "list"],
-  ["mcp", "add"],
   ["mcp", "auth"],
   ["mcp", "logout"],
-  ["providers", "list"],
   ["providers", "login"],
-  ["providers", "logout"],
   ["agent", "create"],
-  ["agent", "list"],
   ["session", "list"],
   ["session", "delete"],
-  ["github", "install"],
   ["github", "run"],
-  ["db", "path"],
 ] as const
 
 // Fixed wrap width so a developer's terminal doesn't affect snapshots.
@@ -94,9 +85,6 @@ const SUBCOMMANDS = [
 const SNAPSHOT_ENV = { COLUMNS: "120" }
 
 describe("redcode CLI help-text snapshots", () => {
-  // Single test, parallel spawns. Each command's help fires under
-  // `concurrency: 8` — wall-clock stays under ~10s even for ~35 commands,
-  // versus ~1 minute if we serialized.
   cliIt.live(
     "every documented command emits stable help text",
     ({ redcode }) =>

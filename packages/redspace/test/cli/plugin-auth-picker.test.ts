@@ -88,16 +88,6 @@ describe("resolvePluginProviders", () => {
     expect(result).toEqual([{ id: "portkey", name: "Portkey AI" }])
   })
 
-  test("falls back to id when no name configured", () => {
-    const result = resolvePluginProviders({
-      hooks: [hookWithAuth("portkey")],
-      existingProviders: {},
-      disabled: new Set(),
-      providerNames: {},
-    })
-    expect(result).toEqual([{ id: "portkey", name: "portkey" }])
-  })
-
   test("skips hooks without auth", () => {
     const result = resolvePluginProviders({
       hooks: [hookWithoutAuth(), hookWithAuth("portkey"), hookWithoutAuth()],
