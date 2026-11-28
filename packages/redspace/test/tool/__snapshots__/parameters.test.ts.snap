@@ -533,6 +533,15 @@ exports[`tool parameters JSON Schema (wire shape) image 1`] = `
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "properties": {
+    "background": {
+      "description": "Requested background. Transparent requires PNG or WebP; alpha is checked before delivery.",
+      "enum": [
+        "auto",
+        "opaque",
+        "transparent",
+      ],
+      "type": "string",
+    },
     "image": {
       "description": "Local source image to edit. Omit to generate.",
       "maxLength": 4096,
@@ -549,6 +558,15 @@ exports[`tool parameters JSON Schema (wire shape) image 1`] = `
       "description": "Optional new output file; defaults to .redcode/temp/.",
       "maxLength": 4096,
       "minLength": 1,
+      "type": "string",
+    },
+    "output_format": {
+      "description": "Final image format. If output is set, its extension must match.",
+      "enum": [
+        "png",
+        "jpeg",
+        "webp",
+      ],
       "type": "string",
     },
     "prompt": {
