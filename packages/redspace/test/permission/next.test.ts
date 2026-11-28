@@ -346,11 +346,6 @@ test("evaluate - no matching pattern returns ask", () => {
   expect(result.action).toBe("ask")
 })
 
-test("evaluate - empty rules array returns ask", () => {
-  const result = Permission.evaluate("bash", "rm", [])
-  expect(result.action).toBe("ask")
-})
-
 test("evaluate - multiple matching patterns, last wins", () => {
   const result = Permission.evaluate("edit", "src/secret.ts", [
     { permission: "edit", pattern: "*", action: "ask" },

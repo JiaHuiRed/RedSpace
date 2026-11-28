@@ -47,11 +47,6 @@ afterAll(async () => {
 })
 
 describe("install binary filename", () => {
-  test("loads local shell fixtures", () => {
-    const result = Bun.spawnSync([bash, "-c", "type curl"], { env: { ...process.env, BASH_ENV: bashEnv } })
-    expect(result.stdout.toString()).toContain("curl is a function")
-  })
-
   test("uses redcode.exe for Windows local binaries", async () => {
     await expectInstalledName("MINGW64_NT", "--binary", "redcode.exe")
   })

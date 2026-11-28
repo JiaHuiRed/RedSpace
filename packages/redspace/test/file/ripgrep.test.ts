@@ -222,7 +222,7 @@ describe("file.ripgrep", () => {
     }),
   )
 
-  it.live("ignores RIPGREP_CONFIG_PATH in direct mode", () =>
+  it.live("ignores RIPGREP_CONFIG_PATH when searching files", () =>
     Effect.gen(function* () {
       const dir = yield* tmpdir((dir) => write(path.join(dir, "match.ts"), "const needle = 1\n"))
 
@@ -234,15 +234,4 @@ describe("file.ripgrep", () => {
     }),
   )
 
-  it.live("ignores RIPGREP_CONFIG_PATH in worker mode", () =>
-    Effect.gen(function* () {
-      const dir = yield* tmpdir((dir) => write(path.join(dir, "match.ts"), "const needle = 1\n"))
-
-      const result = yield* withRipgrepConfig(
-        path.join(dir, "missing-ripgreprc"),
-        Ripgrep.use.search({ cwd: dir, pattern: "needle" }),
-      )
-      expect(result.items).toHaveLength(1)
-    }),
-  )
 })

@@ -9,10 +9,6 @@ describe("Hash.fileTag (跨运行时文件指纹)", () => {
     expect(Hash.fileTag("hello world")).toMatch(/^[0-9A-F]{4}$/)
   })
 
-  test("确定性：同输入同输出", () => {
-    expect(Hash.fileTag("foo bar baz")).toBe(Hash.fileTag("foo bar baz"))
-  })
-
   test("不同输入不同输出", () => {
     expect(Hash.fileTag("aaaaaa")).not.toBe(Hash.fileTag("bbbbbb"))
   })

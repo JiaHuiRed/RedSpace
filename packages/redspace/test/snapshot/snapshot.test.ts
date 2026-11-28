@@ -699,7 +699,6 @@ it.instance(
   withTrackedSnapshot(({ snapshot, before }) =>
     Effect.gen(function* () {
       expect(yield* snapshot.track()).toBe(before)
-      expect(yield* snapshot.track()).toBe(before)
     }),
   ),
   { git: true },

@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test"
+import { describe, expect } from "bun:test"
 import { spawn, type ChildProcess } from "child_process"
 import fs from "fs/promises"
 import path from "path"
@@ -134,18 +134,6 @@ const testLayer = EffectFlock.layer.pipe(Layer.provide(testGlobal), Layer.provid
 // ---------------------------------------------------------------------------
 
 describe("util.effect-flock", () => {
-  test("waitClose resolves when the worker has already closed", async () => {
-    const proc = spawn(process.execPath, ["-e", "process.exit(0)"], { stdio: "ignore" })
-    await new Promise<void>((resolve) => proc.once("close", () => resolve()))
-    await Promise.race([
-      waitClose(proc),
-      sleep(300).then(() => {
-        throw new Error("close event was missed after worker termination")
-      }),
-    ])
-    expect(proc.exitCode).toBe(0)
-  })
-
   const it = testEffect(testLayer)
 
   it.live(

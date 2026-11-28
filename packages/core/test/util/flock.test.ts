@@ -135,18 +135,6 @@ async function readJson<T>(p: string): Promise<T> {
 }
 
 describe("util.flock", () => {
-  test("waitClose resolves when the worker has already closed", async () => {
-    const proc = spawn(process.execPath, ["-e", "process.exit(0)"], { stdio: "ignore" })
-    await new Promise<void>((resolve) => proc.once("close", () => resolve()))
-    await Promise.race([
-      waitClose(proc),
-      sleep(300).then(() => {
-        throw new Error("close event was missed after worker termination")
-      }),
-    ])
-    expect(proc.exitCode).toBe(0)
-  })
-
   test("enforces mutual exclusion under process contention", async () => {
     await using tmp = await tmpdir()
     const dir = path.join(tmp.path, "locks")

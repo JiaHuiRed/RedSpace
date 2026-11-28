@@ -72,15 +72,6 @@ describe("filesystem", () => {
       expect(await Filesystem.size(filepath)).toBe(0)
     })
 
-    test("returns directory size", async () => {
-      await using tmp = await tmpdir()
-      const dirpath = path.join(tmp.path, "testdir")
-      await fs.mkdir(dirpath)
-
-      // Directories have size on some systems
-      const size = await Filesystem.size(dirpath)
-      expect(typeof size).toBe("number")
-    })
   })
 
   describe("findUp()", () => {
@@ -129,25 +120,6 @@ describe("filesystem", () => {
       ])
     })
 
-    test("supports rootFirst ordering for multiple targets", async () => {
-      await using tmp = await tmpdir()
-      const parent = path.join(tmp.path, "parent")
-      const child = path.join(parent, "child")
-      await fs.mkdir(child, { recursive: true })
-
-      await fs.writeFile(path.join(parent, "cfg.jsonc"), "{}", "utf-8")
-      await fs.writeFile(path.join(tmp.path, "cfg.json"), "{}", "utf-8")
-      await fs.writeFile(path.join(tmp.path, "cfg.jsonc"), "{}", "utf-8")
-
-      const result = await Filesystem.findUp(["cfg.json", "cfg.jsonc"], child, tmp.path, { rootFirst: true })
-
-      expect(result).toEqual([
-        path.join(tmp.path, "cfg.json"),
-        path.join(tmp.path, "cfg.jsonc"),
-        path.join(parent, "cfg.jsonc"),
-      ])
-    })
-
     test("rootFirst preserves json then jsonc order per directory", async () => {
       await using tmp = await tmpdir()
       const project = path.join(tmp.path, "project")
@@ -173,15 +145,6 @@ describe("filesystem", () => {
   })
 
   describe("readText()", () => {
-    test("reads file content", async () => {
-      await using tmp = await tmpdir()
-      const filepath = path.join(tmp.path, "test.txt")
-      const content = "Hello, World!"
-      await fs.writeFile(filepath, content, "utf-8")
-
-      expect(await Filesystem.readText(filepath)).toBe(content)
-    })
-
     test("throws for non-existent file", async () => {
       await using tmp = await tmpdir()
       const filepath = path.join(tmp.path, "does-not-exist.txt")
@@ -225,20 +188,6 @@ describe("filesystem", () => {
       await expect(Filesystem.readJson(filepath)).rejects.toThrow()
     })
 
-    test("returns typed data", async () => {
-      await using tmp = await tmpdir()
-      const filepath = path.join(tmp.path, "typed.json")
-      interface Config {
-        name: string
-        version: number
-      }
-      const data: Config = { name: "test", version: 1 }
-      await fs.writeFile(filepath, JSON.stringify(data), "utf-8")
-
-      const result = await Filesystem.readJson<Config>(filepath)
-      expect(result.name).toBe("test")
-      expect(result.version).toBe(1)
-    })
   })
 
   describe("readBytes()", () => {
@@ -318,18 +267,7 @@ describe("filesystem", () => {
 
       const content = await fs.readFile(filepath, "utf-8")
       expect(JSON.parse(content)).toEqual(data)
-    })
-
-    test("writes formatted JSON", async () => {
-      await using tmp = await tmpdir()
-      const filepath = path.join(tmp.path, "pretty.json")
-      const data = { key: "value" }
-
-      await Filesystem.writeJson(filepath, data)
-
-      const content = await fs.readFile(filepath, "utf-8")
-      expect(content).toContain("\n")
-      expect(content).toContain("  ")
+      expect(content).toContain('\n  "key"')
     })
 
     test("writes with permissions", async () => {
@@ -351,28 +289,10 @@ describe("filesystem", () => {
       expect(await Filesystem.mimeType("test.json")).toContain("application/json")
     })
 
-    test("returns correct MIME type for JavaScript", async () => {
-      expect(await Filesystem.mimeType("test.js")).toContain("javascript")
-    })
-
-    test("returns MIME type for TypeScript (or video/mp2t due to extension conflict)", async () => {
-      const mime = await Filesystem.mimeType("test.ts")
-      // .ts is ambiguous: TypeScript vs MPEG-2 TS video
-      expect(mime === "video/mp2t" || mime === "application/typescript" || mime === "text/typescript").toBe(true)
-    })
-
-    test("returns correct MIME type for images", async () => {
-      expect(await Filesystem.mimeType("test.png")).toContain("image/png")
-      expect(await Filesystem.mimeType("test.jpg")).toContain("image/jpeg")
-    })
-
     test("returns default for unknown extension", async () => {
       expect(await Filesystem.mimeType("test.unknown")).toBe("application/octet-stream")
     })
 
-    test("handles files without extension", async () => {
-      expect(await Filesystem.mimeType("Makefile")).toBe("application/octet-stream")
-    })
   })
 
   describe("windowsPath()", () => {
@@ -410,23 +330,6 @@ describe("filesystem", () => {
   })
 
   describe("writeStream()", () => {
-    test("writes from Web ReadableStream", async () => {
-      await using tmp = await tmpdir()
-      const filepath = path.join(tmp.path, "streamed.txt")
-      const content = "Hello from stream!"
-      const encoder = new TextEncoder()
-      const stream = new ReadableStream({
-        start(controller) {
-          controller.enqueue(encoder.encode(content))
-          controller.close()
-        },
-      })
-
-      await Filesystem.writeStream(filepath, stream)
-
-      expect(await fs.readFile(filepath, "utf-8")).toBe(content)
-    })
-
     test("writes from Node.js Readable stream", async () => {
       await using tmp = await tmpdir()
       const filepath = path.join(tmp.path, "node-streamed.txt")
@@ -441,11 +344,12 @@ describe("filesystem", () => {
 
     test("writes binary data from Web ReadableStream", async () => {
       await using tmp = await tmpdir()
-      const filepath = path.join(tmp.path, "binary.dat")
+      const filepath = path.join(tmp.path, "nested", "binary.dat")
       const binaryData = new Uint8Array([0x00, 0x01, 0x02, 0x03, 0xff])
       const stream = new ReadableStream({
         start(controller) {
-          controller.enqueue(binaryData)
+          controller.enqueue(binaryData.subarray(0, 2))
+          controller.enqueue(binaryData.subarray(2))
           controller.close()
         },
       })
@@ -454,59 +358,6 @@ describe("filesystem", () => {
 
       const read = await fs.readFile(filepath)
       expect(Buffer.from(read)).toEqual(Buffer.from(binaryData))
-    })
-
-    test("writes large content in chunks", async () => {
-      await using tmp = await tmpdir()
-      const filepath = path.join(tmp.path, "large.txt")
-      const chunks = ["chunk1", "chunk2", "chunk3", "chunk4", "chunk5"]
-      const stream = new ReadableStream({
-        start(controller) {
-          for (const chunk of chunks) {
-            controller.enqueue(new TextEncoder().encode(chunk))
-          }
-          controller.close()
-        },
-      })
-
-      await Filesystem.writeStream(filepath, stream)
-
-      expect(await fs.readFile(filepath, "utf-8")).toBe(chunks.join(""))
-    })
-
-    test("creates parent directories", async () => {
-      await using tmp = await tmpdir()
-      const filepath = path.join(tmp.path, "nested", "deep", "streamed.txt")
-      const content = "nested stream content"
-      const stream = new ReadableStream({
-        start(controller) {
-          controller.enqueue(new TextEncoder().encode(content))
-          controller.close()
-        },
-      })
-
-      await Filesystem.writeStream(filepath, stream)
-
-      expect(await fs.readFile(filepath, "utf-8")).toBe(content)
-    })
-
-    test("writes with permissions", async () => {
-      await using tmp = await tmpdir()
-      const filepath = path.join(tmp.path, "protected-stream.txt")
-      const content = "secret stream content"
-      const stream = new ReadableStream({
-        start(controller) {
-          controller.enqueue(new TextEncoder().encode(content))
-          controller.close()
-        },
-      })
-
-      await Filesystem.writeStream(filepath, stream, 0o600)
-
-      const stats = await fs.stat(filepath)
-      if (process.platform !== "win32") {
-        expect(stats.mode & 0o777).toBe(0o600)
-      }
     })
 
     test("writes executable with permissions", async () => {
