@@ -39,8 +39,12 @@ bun run script/check-control-bytes.ts
 if [ -z "$push_files" ] || printf '%s\n' "$push_files" | grep -qE "$api_scope"; then
   bun run check:openapi-drift
 fi
-# 261128 Red 个人配置对齐从通用 pre-push 移出：纯文档/UI 推送不该受本机 jsonc 影响。
-# 脚本保留，配置同步或排查时显式跑 bun run check:config-shadowing。
+# 261111 Red seed 漂移门禁：jsonc 与 seed 必须同步（key 集合 + 值，未登记即失败）。
+# 261128 Red 保留无条件执行：本机配置残留遮蔽曾整轮拦下工作区，这道闸拦的就是
+# "本地层多出/改了没登记的键"，与推送内容无关，按范围跳过等于放它过去。
+# 没有 ~/.redcode/redcode.jsonc 时自动跳过（全新 clone 不因此拦下 push）；本机定制
+# 登记在脚本的 LOCAL_OVERRIDES 里并写清理由。
+bun run check:config-shadowing
 # 261116 Red httpapi 路由覆盖门禁：新增端点忘了写 exercise 场景，原来只能等 nightly
 # coverage 模式报 missing。coverage 只做路由↔场景对账、不执行场景；但启动前已加载
 # 服务器、会话、项目、数据库和测试夹具等模块。261128 只在 API/检查器面变化时跑。
