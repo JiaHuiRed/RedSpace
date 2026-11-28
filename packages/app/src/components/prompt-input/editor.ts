@@ -1,6 +1,7 @@
-import { createEffect, on } from "solid-js"
+import { createEffect, createSignal, on } from "solid-js"
 import { type ContentPart, isPromptEqual, type Prompt } from "@/context/prompt"
-import { promptLength } from "./history"
+import { promptLength, type PromptHistoryStoredEntry } from "./history"
+import { findHistorySuggestion } from "./suggestion"
 import {
   createTextFragment,
   getCaretState as readCaretState,
@@ -14,7 +15,12 @@ export interface EditorControllerConfig {
   readonly scroll: () => HTMLDivElement | undefined
   readonly current: () => Prompt
   readonly cursor: () => number | undefined
-  readonly composing: () => boolean
+  readonly mode: () => "normal" | "shell"
+  readonly popover: () => "at" | "slash" | null
+  readonly historyIndex: () => number
+  readonly suggestions: () => PromptHistoryStoredEntry[]
+  readonly setPrompt: (parts: Prompt, cursor: number) => void
+  readonly resetHistoryNavigation: () => void
   readonly renderPart: (part: ContentPart) => HTMLElement | undefined
   readonly onExternalChange: () => void
 }
@@ -25,6 +31,10 @@ export interface EditorControllerConfig {
 export function createEditorController(config: EditorControllerConfig) {
   const mirror = { input: false }
   const inset = 56
+  const [composing, setComposing] = createSignal(false)
+  const markInput = () => {
+    mirror.input = true
+  }
 
   const scrollCursorIntoView = () => {
     const container = config.scroll()
@@ -173,16 +183,83 @@ export function createEditorController(config: EditorControllerConfig) {
     on(
       config.current,
       (parts) => {
-        if (config.composing()) return
+        if (composing()) return
         reconcile(parts.filter((part) => part.type !== "image"))
       },
     ),
   )
 
+  const isImeComposing = (event: KeyboardEvent) => event.isComposing || composing() || event.keyCode === 229
+
+  // 260707 Red ghost 补全（历史前缀 inline 建议）：文末光标之后的不可编辑灰字节点，
+  // →/End/Tab 接受，任意输入清除。不计入文本长度与光标偏移。
+  const clearGhost = () => {
+    config.editor()?.querySelectorAll("[data-ghost]").forEach((el) => el.remove())
+  }
+
+  const ghostSuffix = () => config.editor()?.querySelector("[data-ghost]")?.textContent ?? ""
+
+  const applyGhost = (suffix: string) => {
+    clearGhost()
+    if (!suffix) return
+    const span = document.createElement("span")
+    span.dataset.ghost = "true"
+    span.setAttribute("contenteditable", "false")
+    span.className = "opacity-40 pointer-events-none select-none"
+    span.textContent = suffix
+    config.editor().appendChild(span)
+  }
+
+  const updateGhost = () => {
+    clearGhost()
+    if (config.mode() !== "normal" || config.popover() || config.historyIndex() >= 0 || composing()) return
+    const parts = config.current().filter((part) => part.type !== "image")
+    if (parts.some((part) => part.type !== "text")) return
+    const text = parts.map((part) => ("content" in part ? part.content : "")).join("")
+    if (!text || text.includes("\n")) return
+    const { collapsed, cursorPosition } = getCaretState()
+    if (!collapsed || cursorPosition !== text.length) return
+    const suffix = findHistorySuggestion(config.suggestions(), text)
+    if (suffix) applyGhost(suffix)
+  }
+
+  const acceptGhost = () => {
+    const suffix = ghostSuffix()
+    if (!suffix) return false
+    clearGhost()
+    const text = config
+      .current()
+      .filter((part) => part.type !== "image")
+      .map((part) => ("content" in part ? part.content : ""))
+      .join("")
+    const full = text + suffix
+    markInput()
+    config.setPrompt([{ type: "text", content: full, start: 0, end: full.length }], full.length)
+    setEditorText(full)
+    setCursorPosition(config.editor(), full.length)
+    config.resetHistoryNavigation()
+    return true
+  }
+
+  const handleCompositionStart = () => {
+    setComposing(true)
+  }
+
+  const handleCompositionEnd = () => {
+    setComposing(false)
+    requestAnimationFrame(() => {
+      if (composing()) return
+      reconcile(config.current().filter((part) => part.type !== "image"))
+    })
+  }
+
+  const endComposition = () => {
+    setComposing(false)
+    clearGhost()
+  }
+
   return {
-    markInput: () => {
-      mirror.input = true
-    },
+    markInput,
     queueScroll,
     getCaretState,
     clearEditor,
@@ -190,5 +267,13 @@ export function createEditorController(config: EditorControllerConfig) {
     focusEditorEnd,
     restoreFocus,
     reconcile,
+    isImeComposing,
+    handleCompositionStart,
+    handleCompositionEnd,
+    endComposition,
+    clearGhost,
+    ghostSuffix,
+    updateGhost,
+    acceptGhost,
   }
 }

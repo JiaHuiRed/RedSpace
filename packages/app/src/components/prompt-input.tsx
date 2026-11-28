@@ -66,7 +66,6 @@ import {
   parseFromDOM,
 } from "./prompt-input/editor-dom"
 import { createEditorController } from "./prompt-input/editor"
-import { findHistorySuggestion } from "./prompt-input/suggestion"
 import { createPromptAttachments } from "./prompt-input/attachments"
 import { ACCEPTED_FILE_TYPES } from "./prompt-input/files"
 import {
@@ -513,7 +512,6 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   ])
   const closePopover = () => setStore("popover", null)
 
-  const [composing, setComposing] = createSignal(false)
 
   const resetHistoryNavigation = (force = false) => {
     if (!force && (store.historyIndex < 0 || store.applyingHistory)) return
@@ -522,9 +520,6 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   }
 
 
-  // 261106 Red 删除 ghost.ts 的死调用：createGhostSystem 返回值从未被使用，
-  // 实际运行的 ghost 实现是下方 651-697 的本地闭包（与 ghost.ts 逐字相同）。
-  // 保留双份会让"改抽取件不生效"成为现成陷阱，抽走 ghost.ts 留本地实现。
 
 
   createEffect(() => {
@@ -537,75 +532,13 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     onCleanup(() => clearInterval(interval))
   })
 
-  const isImeComposing = (event: KeyboardEvent) => event.isComposing || composing() || event.keyCode === 229
 
   const handleBlur = () => {
     closePopover()
-    setComposing(false)
-    clearGhost()
+    editor.endComposition()
   }
 
-  const handleCompositionStart = () => {
-    setComposing(true)
-  }
 
-  const handleCompositionEnd = () => {
-    setComposing(false)
-    requestAnimationFrame(() => {
-      if (composing()) return
-      editor.reconcile(prompt.current().filter((part) => part.type !== "image"))
-    })
-  }
-
-  // 260707 Red ghost 补全（历史前缀 inline 建议，fish/zsh-autosuggestions 风格）：
-  // 在文末光标之后插入不可编辑、不计长度的灰字节点；→/End/Tab 接受，任意输入清除。
-  const clearGhost = () => {
-    editorRef?.querySelectorAll("[data-ghost]").forEach((el) => el.remove())
-  }
-
-  const ghostSuffix = () => editorRef?.querySelector("[data-ghost]")?.textContent ?? ""
-
-  const applyGhost = (suffix: string) => {
-    clearGhost()
-    if (!suffix) return
-    const span = document.createElement("span")
-    span.dataset.ghost = "true"
-    span.setAttribute("contenteditable", "false")
-    span.className = "opacity-40 pointer-events-none select-none"
-    span.textContent = suffix
-    editorRef.appendChild(span)
-  }
-
-  const updateGhost = () => {
-    clearGhost()
-    if (store.mode !== "normal" || store.popover || store.historyIndex >= 0 || composing()) return
-    const parts = prompt.current().filter((part) => part.type !== "image")
-    if (parts.some((part) => part.type !== "text")) return
-    const text = parts.map((part) => ("content" in part ? part.content : "")).join("")
-    if (!text || text.includes("\n")) return
-    const { collapsed, cursorPosition } = editor.getCaretState()
-    if (!collapsed || cursorPosition !== text.length) return
-    const suffix = findHistorySuggestion(history.entries, text)
-    if (suffix) applyGhost(suffix)
-  }
-
-  const acceptGhost = () => {
-    const suffix = ghostSuffix()
-    if (!suffix) return false
-    clearGhost()
-    const text = prompt
-      .current()
-      .filter((part) => part.type !== "image")
-      .map((part) => ("content" in part ? part.content : ""))
-      .join("")
-    const full = text + suffix
-    editor.markInput()
-    prompt.set([{ type: "text", content: full, start: 0, end: full.length }], full.length)
-    editor.setEditorText(full)
-    setCursorPosition(editorRef, full.length)
-    resetHistoryNavigation()
-    return true
-  }
 
   const agentList = createMemo(() =>
     sync.data.agent
@@ -798,7 +731,12 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     scroll: () => scrollRef,
     current: () => prompt.current(),
     cursor: () => prompt.cursor(),
-    composing,
+    mode: () => store.mode,
+    popover: () => store.popover,
+    historyIndex: () => store.historyIndex,
+    suggestions: () => history.entries,
+    setPrompt: (parts, cursor) => prompt.set(parts, cursor),
+    resetHistoryNavigation,
     renderPart: (part) => {
       if (part.type === "file" || part.type === "agent") return createPill(part)
       if (part.type === "quote") return createQuotePill(part)
@@ -844,7 +782,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
   const handleInput = () => {
     // 261115 Red RX-01：打字不再自动清错误横幅——A 失败后继续写 B 正是要支持的场景，
     // 横幅（含 Retry 入口）必须存活到用户显式 dismiss / 重试成功 / 新提交成功。
-    clearGhost()
+    editor.clearGhost()
     const rawParts = parseFromDOM(editorRef)
     const images = imageAttachments()
     const cursorPosition = getCursorPosition(editorRef)
@@ -891,7 +829,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
 
     editor.markInput()
     prompt.set([...rawParts, ...images], cursorPosition)
-    updateGhost()
+    editor.updateGhost()
     editor.queueScroll()
   }
 
@@ -1174,7 +1112,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       // canInterruptSend（261031 AUD-04）的收窄方向对齐：输入框有字时 Esc 不再误杀
       // 运行中的轮次；显式打断走清空后 Esc/Enter 或 Ctrl+G。
       // 261106 Red IME 组合期间 Esc 属于输入法（取消候选词），不得顺带 abort 模型执行。
-      if (working() && blank() && !isImeComposing(event)) {
+      if (working() && blank() && !editor.isImeComposing(event)) {
         void abort()
         event.preventDefault()
         event.stopPropagation()
@@ -1208,7 +1146,7 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
       return
     }
 
-    if (event.key === "Enter" && isImeComposing(event)) {
+    if (event.key === "Enter" && editor.isImeComposing(event)) {
       return
     }
 
@@ -1270,10 +1208,10 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
     if (!store.popover && (event.key === "ArrowRight" || event.key === "End" || event.key === "Tab")) {
       if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) {
         // fall through
-      } else if (ghostSuffix()) {
+      } else if (editor.ghostSuffix()) {
         const { collapsed, cursorPosition, textLength } = editor.getCaretState()
         if (collapsed && cursorPosition === textLength) {
-          if (acceptGhost()) {
+          if (editor.acceptGhost()) {
             event.preventDefault()
             return
           }
@@ -1696,8 +1634,8 @@ export const PromptInput: Component<PromptInputProps> = (props) => {
               autocomplete="off"
               onInput={handleInput}
               onPaste={handlePaste}
-              onCompositionStart={handleCompositionStart}
-              onCompositionEnd={handleCompositionEnd}
+              onCompositionStart={editor.handleCompositionStart}
+              onCompositionEnd={editor.handleCompositionEnd}
               onBlur={handleBlur}
               onKeyDown={handleKeyDown}
               classList={{
