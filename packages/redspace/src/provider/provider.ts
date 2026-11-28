@@ -1304,6 +1304,8 @@ export const layer = Layer.effect(
             "deepseek-v4.1-flash-expires-on-0910": DS_V4_COST_FLASH,
             // 260910 Red: 官方正式模型名；旧 flash 名已下线但服务端仍路由到 V4.1 Flash。
             "deepseek-flash": DS_V4_COST_FLASH,
+            // 261128 Red 与 opencode-go 键同步补正式名（models.dev 目录里按此 id 暴露）。
+            "deepseek-v4.1-flash": DS_V4_COST_FLASH,
             "deepseek-v4-pro": DS_V4_COST_PRO,
           },
           "opencode-go": {
@@ -1312,6 +1314,10 @@ export const layer = Layer.effect(
             // 官方 deepseek 键有（76a15bfb），opencode-go 键缺失导致走 models.dev
             // USD 价（0.22/0.66），费用按美元显示。
             "deepseek-v4-flash-vision-exp": DS_V4_COST_FLASH,
+            // 261128 Red 同型补漏（实测会话侧栏 US$0.09 而飞行记录仪「币种未采集」）：
+            // 正式模型名换成 deepseek-v4.1-flash 后两张表都没跟，标记缺失 → 归桶按 USD、
+            // FR 按未采集，同一会话三个显示面各说各话。与官方键 deepseek-flash 同价。
+            "deepseek-v4.1-flash": DS_V4_COST_FLASH,
             "deepseek-v4-pro": DS_V4_COST_PRO,
             "hy4-preview": HY4_COST,
           },

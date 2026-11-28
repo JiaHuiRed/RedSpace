@@ -109,12 +109,17 @@ export const TIERED_PRICING: Record<string, Record<string, TieredPricingSegment[
     // 260910 Red 官方正式模型名。旧名 deepseek-v4-flash / -vision-exp 已下线，
     // 服务端仍接受但一律由 V4.1 Flash 提供服务，价格同此表。
     "deepseek-flash": DS_V4_FLASH_SEGMENTS,
+    // 261128 Red 与 opencode-go 键同步补正式名。
+    "deepseek-v4.1-flash": DS_V4_FLASH_SEGMENTS,
     "deepseek-v4-pro": DS_V4_PRO_SEGMENTS,
   },
   "opencode-go": {
     "deepseek-v4-flash": DS_V4_FLASH_SEGMENTS,
     // 260822 Red: 同上，opencode-go 网关键亦缺 vision-exp 峰谷分段
     "deepseek-v4-flash-vision-exp": DS_V4_FLASH_SEGMENTS,
+    // 261128 Red 同型补漏：正式名 deepseek-v4.1-flash 此前无峰谷分段，费用按静态高峰价
+    // 记（保守上限，空闲时段不会被下修）。补上与 deepseek 键相同的分段。
+    "deepseek-v4.1-flash": DS_V4_FLASH_SEGMENTS,
     "deepseek-v4-pro": DS_V4_PRO_SEGMENTS,
   },
 }
